@@ -10,8 +10,8 @@ ocamlPackages.buildDunePackage {
   src = fetchFromGitHub {
     owner = "andersfugmann";
     repo = "ppx_protocol_conv";
-    rev = "master";
-    sha256 = "gFYg0251NOPPkc01BiSU3NEj3JWGKg1fu6UgQ67BBZM=";
+    rev = "34021602bc537f2bf43e343db1e5316f242c9e20";
+    sha256 = "/E0NPTx/enpwXTClAQgWhj9MrMgFY02Z0JT1DRspHNo=";
   };
 
   buildInputs = [ppx_protocol_conv ocamlPackages.xml-light ocamlPackages.ppx_sexp_conv ocamlPackages.sexplib ocamlPackages.alcotest ];
