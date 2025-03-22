@@ -80,8 +80,8 @@ module FileSystem (C : Configuration) : FileSystem = struct
 end
 
 module Executor = struct
-  module StringMap = Map.Make (String)
-  module IntMap = Map.Make (Int64)
+  module StringMap = Map.Make (String) [@@deriving show]
+  module IntMap = Map.Make (Int64) [@@deriving show]
   module FS = FileSystem (DevelopmentConfiguration)
 
   module Location = struct
@@ -388,17 +388,16 @@ module Command = struct
                 commit.references
             in
             Ok
-              ( (commit, locations, references),
+              ( ({ commit with references }, locations),
                 ComputedHash computed_hash_handle )
         | Some _, None ->
             Error "Cannot write an entity without its referential."
-        | None, _ -> Ok ((commit, locations, commit.references), Nothing))
+        | None, _ -> Ok ((commit, locations), Nothing))
     | READ ->
         let relation_name =
           List.hd @@ String.split_on_char '/' command.filename
         in
-        print_endline "READ";
-        print_endline relation_name;
+        print_endline @@ "READ: " ^ relation_name;
         let entities : string list Executor.IntMap.t =
           print_endline command.filename;
           Executor.StringMap.find_opt command.filename commit.references
@@ -413,6 +412,8 @@ module Command = struct
         let content =
           Executor.IntMap.fold
             (fun key hashes acc ->
+              print_string "KEY: ";
+              print_endline @@ Int64.to_string key;
               ( key,
                 List.map
                   (fun location ->
@@ -423,6 +424,7 @@ module Command = struct
         in
         (* print_string "CONTENT: "; *)
         (* print_endline @@ Bytes.to_string content; *)
-        Ok ((commit, locations, commit.references), Read content)
+        print_endline "------------------";
+        Ok ((commit, locations), Read content)
     | _ -> Error "Unimplemented method"
 end
