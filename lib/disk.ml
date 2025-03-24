@@ -285,9 +285,7 @@ module Command = struct
   module FS = FileSystem (DevelopmentConfiguration)
   open Data_encoding
 
-  type command_kind = OPEN | WRITE | READ
-  (* | CREATE_RELATION *)
-
+  (*
   let command_kind_encoding =
     union
       [
@@ -305,9 +303,9 @@ module Command = struct
         (* (function CREATE_RELATION -> Some () | _ -> None) *)
         (* (function () -> CREATE_RELATION); *)
       ]
-
-  type t = {
-    kind : command_kind;
+   *)
+  type transaction = {
+    (* kind : command_kind; *)
     timestamp : float;
     hash : string;
     filename : string;
@@ -316,24 +314,23 @@ module Command = struct
     content : string;
   }
 
+  type t = SequentialRead of { relation_name : string }
+
   let command_encoding =
     conv
-      (fun { kind; timestamp; hash; filename; entity_id; content } ->
-        (kind, timestamp, hash, filename, entity_id, content))
-      (fun (kind, timestamp, hash, filename, entity_id, content) ->
-        { kind; timestamp; hash; filename; entity_id; content })
-      Data_encoding.(
-        tup6 command_kind_encoding float string string (option int64) string)
+      (fun { timestamp; hash; filename; entity_id; content } ->
+        (timestamp, hash, filename, entity_id, content))
+      (fun (timestamp, hash, filename, entity_id, content) ->
+        { timestamp; hash; filename; entity_id; content })
+      Data_encoding.(tup5 float string string (option int64) string)
 
   let parse_command ~data =
     let contract_encoding =
-      Data_encoding.(
-        tup5 command_kind_encoding string string (option int64) string)
+      Data_encoding.(tup4 string string (option int64) string)
     in
     match Binary.of_bytes_opt contract_encoding data with
-    | Some (kind, hash, filename, entity_id, content) ->
-        Ok
-          { kind; timestamp = Unix.time (); hash; filename; entity_id; content }
+    | Some (hash, filename, entity_id, content) ->
+        Ok { timestamp = Unix.time (); hash; filename; entity_id; content }
     | None -> Error "Failed to parse command"
 
   type return =
@@ -345,8 +342,8 @@ module Command = struct
   (** TODO: This does not write atomically. If the system crashes while it
       attempts to write, it will corrupt. Solve this with a temporary file and
       move later. *)
-  let commit_and_perform (commit : Executor.commit)
-      (locations : Executor.locations) command =
+  let transact (commit : Executor.commit) (locations : Executor.locations)
+      (command : transaction) =
     let open Extensions.Result in
     let+ serialized_command =
       Result.map_error (fun _ ->
@@ -354,66 +351,54 @@ module Command = struct
       @@ Binary.to_bytes command_encoding command
     in
     let+ _ = FS.append FS.Transaction serialized_command in
-    match command.kind with
-    | WRITE -> (
-        let open Extensions.Result in
-        let+ (commit, locations), computed_hash_handle =
-          Executor.write commit locations ~filename:command.filename
-          @@ Bytes.of_string command.content
+    let open Extensions.Result in
+    let+ (commit, locations), computed_hash_handle =
+      Executor.write commit locations ~filename:command.filename
+      @@ Bytes.of_string command.content
+    in
+    match (computed_hash_handle, command.entity_id) with
+    | Some computed_hash_handle, Some entity_id ->
+        let references =
+          let relation_name =
+            List.hd @@ String.split_on_char '/' command.filename
+          in
+          Executor.StringMap.update relation_name
+            (function
+              | Some entity ->
+                  Some
+                    (Executor.IntMap.update entity_id
+                       (function
+                         | Some locations ->
+                             Some (computed_hash_handle :: locations)
+                         | None -> Some [ computed_hash_handle ])
+                       entity)
+              | None ->
+                  Some
+                    (Executor.IntMap.empty
+                    |> Executor.IntMap.add entity_id [ computed_hash_handle ]))
+            commit.references
         in
-        match (computed_hash_handle, command.entity_id) with
-        | Some computed_hash_handle, Some entity_id ->
-            print_endline "WRITE A";
-            let references =
-              let relation_name =
-                List.hd @@ String.split_on_char '/' command.filename
-              in
-              Executor.StringMap.update relation_name
-                (function
-                  | Some entity ->
-                      print_endline "WRITE SOME 1";
-                      Some
-                        (Executor.IntMap.update entity_id
-                           (function
-                             | Some locations ->
-                                 print_endline "WRITE SOME 2";
-                                 Some (computed_hash_handle :: locations)
-                             | None -> Some [ computed_hash_handle ])
-                           entity)
-                  | None ->
-                      Some
-                        (Executor.IntMap.empty
-                        |> Executor.IntMap.add entity_id
-                             [ computed_hash_handle ]))
-                commit.references
-            in
-            Ok
-              ( ({ commit with references }, locations),
-                ComputedHash computed_hash_handle )
-        | Some _, None ->
-            Error "Cannot write an entity without its referential."
-        | None, _ -> Ok ((commit, locations), Nothing))
-    | READ ->
-        let relation_name =
-          List.hd @@ String.split_on_char '/' command.filename
-        in
-        print_endline @@ "READ: " ^ relation_name;
+        Ok
+          ( ({ commit with references }, locations),
+            ComputedHash computed_hash_handle )
+    | Some _, None -> Error "Cannot write an entity without its referential."
+    | None, _ -> Ok ((commit, locations), Nothing)
+
+  let perform (commit : Executor.commit) (locations : Executor.locations)
+      (command : t) =
+    match command with
+    | SequentialRead { relation_name } ->
+        let relation_name = List.hd @@ String.split_on_char '/' relation_name in
         let entities : string list Executor.IntMap.t =
-          print_endline command.filename;
-          Executor.StringMap.find_opt command.filename commit.references
+          print_endline relation_name;
+          Executor.StringMap.find_opt relation_name commit.references
           |> function
-          | Some entities ->
-              print_endline "-----> A";
-              entities
-          | None ->
-              print_endline "-----> B";
-              Executor.IntMap.empty
+          | Some entities -> entities
+          | None -> Executor.IntMap.empty
         in
         let content =
           Executor.IntMap.fold
             (fun key hashes acc ->
-              print_string "KEY: ";
-              print_endline @@ Int64.to_string key;
               ( key,
                 List.map
                   (fun location ->
@@ -422,9 +407,5 @@ module Command = struct
               :: acc)
             entities []
         in
-        (* print_string "CONTENT: "; *)
-        (* print_endline @@ Bytes.to_string content; *)
-        print_endline "------------------";
         Ok ((commit, locations), Read content)
-    | _ -> Error "Unimplemented method"
 end

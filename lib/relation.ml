@@ -41,9 +41,8 @@ let write_and_retrieve () =
                                        |> Executor.StringMap.add "entity_1" [handle21; handle22]
                                        |> Executor.StringMap.add "entity_2" [handle31; handle32]) in *)
   let open Extensions.Result in
-  let command_write1 : Command.t =
+  let command_write1 : Command.transaction =
     {
-      kind = Command.WRITE;
       timestamp = 10.0;
       hash = "";
       content = "Daisy";
@@ -52,12 +51,11 @@ let write_and_retrieve () =
     }
   in
   let+ (commit, locations), Command.ComputedHash handle11 =
-    Command.commit_and_perform commit locations command_write1
+    Command.transact commit locations command_write1
   in
   print_references commit.references;
-  let command_write2 : Command.t =
+  let command_write2 : Command.transaction =
     {
-      kind = Command.WRITE;
       timestamp = 10.0;
       hash = "";
       content = "Blossom";
@@ -66,12 +64,11 @@ let write_and_retrieve () =
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.commit_and_perform commit locations command_write2
+    Command.transact commit locations command_write2
   in
   print_references commit.references;
-  let command_write1_address : Command.t =
+  let command_write1_address : Command.transaction =
     {
-      kind = Command.WRITE;
       timestamp = 10.0;
       hash = "";
       content = "Saint James St.";
@@ -80,12 +77,11 @@ let write_and_retrieve () =
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.commit_and_perform commit locations command_write1_address
+    Command.transact commit locations command_write1_address
   in
   print_references commit.references;
-  let command_write2_address : Command.t =
+  let command_write2_address : Command.transaction =
     {
-      kind = Command.WRITE;
       timestamp = 10.0;
       hash = "";
       content = "41";
@@ -94,12 +90,11 @@ let write_and_retrieve () =
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.commit_and_perform commit locations command_write2_address
+    Command.transact commit locations command_write2_address
   in
   print_references commit.references;
-  let command_write2_5 : Command.t =
+  let command_write2_5 : Command.transaction =
     {
-      kind = Command.WRITE;
       timestamp = 10.0;
       hash = "";
       content = "0";
@@ -108,7 +103,7 @@ let write_and_retrieve () =
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.commit_and_perform commit locations command_write2_5
+    Command.transact commit locations command_write2_5
   in
   print_references commit.references;
   (* let entity_id = 1L in *)
@@ -165,18 +160,8 @@ let write_and_retrieve () =
   (* let+ (commit, locations, references), Command.ComputedHash handle32 = *)
   (*   Command.commit_and_perform commit locations command_write6 *)
   (* in *)
-  let command_read : Command.t =
-    {
-      kind = Command.READ;
-      timestamp = 0.0;
-      hash = "";
-      content = "";
-      entity_id = None;
-      filename = "user";
-    }
-  in
   let+ _, (Command.Read content as response) =
-    Command.commit_and_perform commit locations command_read
+    Command.perform commit locations (SequentialRead { relation_name = "user" })
   in
   print_endline (Command.show_return response);
   Ok (commit, locations)
