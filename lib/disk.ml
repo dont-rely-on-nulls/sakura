@@ -101,6 +101,13 @@ module Executor = struct
     | DiscriminatedUnion of (string * relational_type option) list * string
       (* [("MemberA", None); ("MemberB", Some Integer32)], "NameOfDU" *)
     | Relation of string
+  [@@deriving show]
+
+  type relational_literal =
+    | LText of string
+    | LInteger32 of int32
+    | LRelation of int64
+  [@@deriving show]
 
   type schema = (string * relational_type) list StringMap.t
   type references = string list IntMap.t StringMap.t
@@ -145,6 +152,7 @@ module Executor = struct
     let computed_hash : string = Interop.Sha256.compute_hash content in
     match StringMap.find_opt computed_hash locations with
     | None -> (
+        print_endline "-----------NOT EXISTS-----------";
         match hash_to_replace with
         | None ->
             (* This instead should store a list of list to keep the history *)
@@ -211,6 +219,7 @@ module Executor = struct
             in
             Ok ((commit, locations), Some computed_hash))
     | Some _ -> (
+        print_endline "-----------EXISTS-----------";
         match hash_to_replace with
         | Some hash_to_replace ->
             let update_fun = function
@@ -267,12 +276,20 @@ module Executor = struct
     (*Bytes.concat Bytes.empty @@*)
     Some (List.rev content)
 
-  let read_location ~hash (locations : locations) =
+  let cast_to_type (type': relational_type) (content: bytes): relational_literal =
+    match type' with
+    | Text -> LText (Bytes.to_string content)
+    | Integer32 -> LInteger32 (Bytes.get_int32_be content 0)
+    | Relation _ -> LRelation (Bytes.get_int64_be content 0)
+    | _ -> failwith "Not implemented"
+
+  let read_location ~hash (locations: locations) (cast_type: relational_type): relational_literal =
     match StringMap.find_opt hash locations with
-    | Some ({ offset; size; _ } : Location.t) -> (
-        match FS.read FS.Storage offset size with
-        | Ok x -> x
-        | Error err -> failwith err)
+    | Some ({ offset; size; _ } : Location.t) ->
+        begin match FS.read FS.Storage offset size with
+        | Ok x -> cast_to_type cast_type x
+        | Error err -> failwith err
+        end
     | None -> failwith "Location could not be found."
 end
 
@@ -335,7 +352,7 @@ module Command = struct
 
   type return =
     | ComputedHash of string
-    | Read of (int64 * bytes list) list
+    | Read of (int64 * Executor.relational_literal list) list
     | Nothing
   [@@deriving show]
 
@@ -383,7 +400,7 @@ module Command = struct
             ComputedHash computed_hash_handle )
     | Some _, None -> Error "Cannot write an entity without its referential."
     | None, _ -> Ok ((commit, locations), Nothing)
-
+  
   let perform (commit : Executor.commit) (locations : Executor.locations)
       (command : t) =
     match command with
@@ -396,16 +413,19 @@ module Command = struct
           | Some entities -> entities
           | None -> Executor.IntMap.empty
         in
+
         let content =
           Executor.IntMap.fold
             (fun key hashes acc ->
-              ( key,
-                List.map
-                  (fun location ->
-                    Executor.read_location ~hash:location locations)
-                  hashes )
+              (key,
+                List.mapi
+                  (fun i location ->
+                    print_endline ("INDEX: " ^ (string_of_int i));
+                    Executor.read_location ~hash:location locations Text)
+                  hashes)
               :: acc)
             entities []
         in
+        
         Ok ((commit, locations), Read content)
 end

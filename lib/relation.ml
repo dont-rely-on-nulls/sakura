@@ -12,16 +12,17 @@ let print_references references =
 
 let write_and_retrieve () =
   let open Disk in
+  let open Executor in
   let schema =
     Executor.StringMap.empty
     |> Executor.StringMap.add "user"
          [
-           ("first_name", Executor.Text);
-           ("last_name", Executor.Text);
-           ("address", Executor.Relation "address");
+           ("address", Relation "address");
+           ("last_name", Text);
+           ("first_name", Text);
          ]
     |> Executor.StringMap.add "address"
-         [ ("street", Executor.Text); ("number", Executor.Integer32) ]
+         [ ("street", Text); ("number", Integer32) ]
   in
   let commit : Executor.commit =
     {
