@@ -1,11 +1,11 @@
-let print_references references =
+let print_references (references: (string * Disk.Executor.relational_type) list Disk.Executor.IntMap.t Disk.Executor.StringMap.t) =
   Disk.Executor.StringMap.iter
     (fun k v ->
       print_endline ("→ " ^ k ^ ": ");
       Disk.Executor.IntMap.iter
         (fun k v ->
           print_endline ("  ↳ " ^ Int64.to_string k);
-          List.iter (fun v -> print_endline ("    → " ^ v)) v)
+          List.iter (fun (v, type') -> print_endline ("    → " ^ v ^ "[" ^ Disk.Executor.show_relational_type type' ^ "]")) v)
         v;
       print_newline ())
     references
@@ -49,6 +49,7 @@ let write_and_retrieve () =
       content = "Daisy";
       entity_id = Some 0L;
       filename = "user/first-name";
+      type' = Executor.Text;
     }
   in
   let+ (commit, locations), Command.ComputedHash handle11 =
@@ -62,6 +63,7 @@ let write_and_retrieve () =
       content = "Blossom";
       entity_id = Some 0L;
       filename = "user/last-name";
+      type' = Executor.Text;
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
@@ -75,6 +77,7 @@ let write_and_retrieve () =
       content = "Saint James St.";
       entity_id = Some 0L;
       filename = "address/street";
+      type' = Executor.Text;
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
@@ -88,6 +91,7 @@ let write_and_retrieve () =
       content = "41";
       entity_id = Some 0L;
       filename = "address/number";
+      type' = Executor.Text;
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =
@@ -101,6 +105,7 @@ let write_and_retrieve () =
       content = "0";
       entity_id = Some 0L;
       filename = "user/address";
+      type' = Executor.Relation "address";
     }
   in
   let+ (commit, locations), Command.ComputedHash handle12 =

@@ -98,7 +98,7 @@ module Executor = struct
     | Integer32
     | Integer64
     | Boolean
-    | DiscriminatedUnion of (string * relational_type option) list * string
+    (* | DiscriminatedUnion of (string * relational_type option) list * string *)
       (* [("MemberA", None); ("MemberB", Some Integer32)], "NameOfDU" *)
     | Relation of string
   [@@deriving show]
@@ -110,7 +110,7 @@ module Executor = struct
   [@@deriving show]
 
   type schema = (string * relational_type) list StringMap.t
-  type references = string list IntMap.t StringMap.t
+  type references = (string * relational_type) list IntMap.t StringMap.t
 
   type commit = {
     state : string;
@@ -329,25 +329,55 @@ module Command = struct
     entity_id : int64 option;
     (* branch must be added here later *)
     content : string;
+    type': Executor.relational_type;
   }
 
   type t = SequentialRead of { relation_name : string }
-
+                             (*
+                                   | Text
+    | Integer32
+    | Integer64
+    | Boolean
+    (* | DiscriminatedUnion of (string * relational_type option) list * string *)
+      (* [("MemberA", None); ("MemberB", Some Integer32)], "NameOfDU" *)
+    | Relation of string
+                              *)
+  
+  let relational_type_encoding =
+    union
+      [
+        case ~title:"text" (Tag 0) Data_encoding.empty
+          (function Executor.Text -> Some () | _ -> None)
+          (function () -> Executor.Text);
+        case ~title:"integer32" (Tag 1) Data_encoding.empty
+          (function Executor.Integer32 -> Some () | _ -> None)
+          (function () -> Executor.Integer32);
+        case ~title:"integer64" (Tag 2) Data_encoding.empty
+          (function Executor.Integer64 -> Some () | _ -> None)
+          (function () -> Executor.Integer64);
+        case ~title:"boolean" (Tag 3) Data_encoding.empty
+          (function Executor.Boolean -> Some () | _ -> None)
+          (function () -> Executor.Boolean);
+        case ~title:"relation" (Tag 4) Data_encoding.string
+          (function Executor.Relation reference -> Some reference | _ -> None)
+          (function reference -> Executor.Relation reference);
+      ]
+  
   let command_encoding =
     conv
-      (fun { timestamp; hash; filename; entity_id; content } ->
-        (timestamp, hash, filename, entity_id, content))
-      (fun (timestamp, hash, filename, entity_id, content) ->
-        { timestamp; hash; filename; entity_id; content })
-      Data_encoding.(tup5 float string string (option int64) string)
+      (fun { timestamp; hash; filename; entity_id; content; type' } ->
+        (timestamp, hash, filename, entity_id, content, type'))
+      (fun (timestamp, hash, filename, entity_id, content, type') ->
+        { timestamp; hash; filename; entity_id; content; type' })
+      Data_encoding.(tup6 float string string (option int64) string relational_type_encoding)
 
   let parse_command ~data =
     let contract_encoding =
-      Data_encoding.(tup4 string string (option int64) string)
+      Data_encoding.(tup5 string string (option int64) string relational_type_encoding)
     in
     match Binary.of_bytes_opt contract_encoding data with
-    | Some (hash, filename, entity_id, content) ->
-        Ok { timestamp = Unix.time (); hash; filename; entity_id; content }
+    | Some (hash, filename, entity_id, content, type') ->
+        Ok { timestamp = Unix.time (); hash; filename; entity_id; content; type' }
     | None -> Error "Failed to parse command"
 
   type return =
@@ -373,9 +403,9 @@ module Command = struct
       Executor.write commit locations ~filename:command.filename
       @@ Bytes.of_string command.content
     in
-    match (computed_hash_handle, command.entity_id) with
+    match (computed_hash_handle, command.entity_id) with 
     | Some computed_hash_handle, Some entity_id ->
-        let references =
+        let references: Executor.references =
           let relation_name =
             List.hd @@ String.split_on_char '/' command.filename
           in
@@ -386,13 +416,13 @@ module Command = struct
                     (Executor.IntMap.update entity_id
                        (function
                          | Some locations ->
-                             Some (computed_hash_handle :: locations)
-                         | None -> Some [ computed_hash_handle ])
+                             Some ((computed_hash_handle, command.type') :: locations)
+                         | None -> Some [ (computed_hash_handle, command.type') ])
                        entity)
               | None ->
                   Some
                     (Executor.IntMap.empty
-                    |> Executor.IntMap.add entity_id [ computed_hash_handle ]))
+                    |> Executor.IntMap.add entity_id [ (computed_hash_handle, command.type') ]))
             commit.references
         in
         Ok
@@ -406,7 +436,7 @@ module Command = struct
     match command with
     | SequentialRead { relation_name } ->
         let relation_name = List.hd @@ String.split_on_char '/' relation_name in
-        let entities : string list Executor.IntMap.t =
+        let entities : (string * Executor.relational_type) list Executor.IntMap.t =
           print_endline relation_name;
           Executor.StringMap.find_opt relation_name commit.references
           |> function
@@ -416,13 +446,13 @@ module Command = struct
 
         let content =
           Executor.IntMap.fold
-            (fun key hashes acc ->
+            (fun key elems acc ->
               (key,
                 List.mapi
-                  (fun i location ->
+                  (fun i (location, type') ->
                     print_endline ("INDEX: " ^ (string_of_int i));
-                    Executor.read_location ~hash:location locations Text)
-                  hashes)
+                    Executor.read_location ~hash:location locations type')
+                  elems)
               :: acc)
             entities []
         in
