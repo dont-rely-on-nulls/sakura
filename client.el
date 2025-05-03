@@ -21,4 +21,4 @@
 (setq msg "Hello Relational Engine! :)")
 
 (relational-client msg)
-*mailbox*
+(print *mailbox*)

@@ -97,7 +97,7 @@ let write_and_retrieve () =
   let command_write2_5 : Command.transaction =
     {
       timestamp = 10.0;
-      content = Executor.LRelation 0L;
+      content = Executor.LRelation (0L, "address");
       entity_id = Some 0L;
       attribute = "user/address";
       type' = Executor.Relation "address";

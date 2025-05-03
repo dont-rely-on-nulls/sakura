@@ -108,7 +108,7 @@ module Executor = struct
     | LInteger32 of int32
     | LInteger64 of int64
     | LBoolean of bool
-    | LRelation of int64
+    | LRelation of int64*string
   [@@deriving show]
 
   type schema = (string * relational_type) list StringMap.t
@@ -282,7 +282,11 @@ module Executor = struct
     match type' with
     | Text -> LText (Bytes.to_string content)
     | Integer32 -> LInteger32 (Data_encoding.Binary.of_bytes_exn Data_encoding.int32 content)
-    | Relation _ -> LRelation (Data_encoding.Binary.of_bytes_exn Data_encoding.int64 content)
+    | Relation _ ->
+       begin
+         let (reference, name) = (Data_encoding.Binary.of_bytes_exn (Data_encoding.tup2 Data_encoding.int64 Data_encoding.string) content) in
+         LRelation (reference, name)
+       end
     | _ -> failwith "Not implemented"
 
   let relational_literal_to_bytes (literal: relational_literal): bytes =
@@ -290,14 +294,29 @@ module Executor = struct
     | LText x -> Bytes.of_string x
     | LInteger32 x -> Data_encoding.Binary.to_bytes_exn Data_encoding.int32 x
     | LInteger64 x -> Data_encoding.Binary.to_bytes_exn Data_encoding.int64 x
-    | LRelation x -> Data_encoding.Binary.to_bytes_exn Data_encoding.int64 x
+    | LRelation (x,y) ->
+       begin match Data_encoding.Binary.to_bytes (Data_encoding.tup2 Data_encoding.int64 Data_encoding.string) (x, y) with
+       | Error x -> let open Data_encoding.Binary in
+                    begin match x with
+                    | Size_limit_exceeded -> print_endline "A"; Bytes.empty;
+                    | No_case_matched -> print_endline "B"; Bytes.empty;
+                    | Invalid_int _ -> print_endline "C"; Bytes.empty;
+                    | Invalid_float _ -> print_endline "D"; Bytes.empty;
+                    | Invalid_bytes_length _ -> print_endline "E"; Bytes.empty;
+                    | Invalid_string_length _ -> print_endline "F"; Bytes.empty;
+                    | Invalid_natural -> print_endline "G"; Bytes.empty;
+                    | List_invalid_length -> print_endline "H"; Bytes.empty;
+                    | Array_invalid_length -> print_endline "I"; Bytes.empty;
+                    | Exception_raised_in_user_function _x -> print_endline "J"; Bytes.empty;
+                    end
+       | Ok x -> x
+       end
     | LBoolean x -> Data_encoding.Binary.to_bytes_exn Data_encoding.bool x
 
   let read_location ~hash (locations: locations) (cast_type: relational_type): relational_literal =
     match StringMap.find_opt hash locations with
     | Some ({ offset; size; _ } : Location.t) ->
        begin
-         print_endline ("TRASH: " ^ Int.to_string size);
          match FS.read FS.Storage offset size with
          | Ok x -> cast_to_type cast_type x
          | Error err -> failwith err
@@ -390,9 +409,9 @@ module Command = struct
         case ~title:"boolean" (Tag 3) Data_encoding.bool
           (function Executor.LBoolean x -> Some x | _ -> None)
           (function x -> Executor.LBoolean x);
-        case ~title:"relation" (Tag 4) Data_encoding.int64
-          (function Executor.LRelation reference -> Some reference | _ -> None)
-          (function reference -> Executor.LRelation reference);
+        case ~title:"relation" (Tag 4) (Data_encoding.tup2 Data_encoding.int64 Data_encoding.string)
+          (function Executor.LRelation (reference, name) -> Some (reference, name) | _ -> None)
+          (function (reference, name) -> Executor.LRelation (reference, name));
       ]
   
   let command_encoding =
