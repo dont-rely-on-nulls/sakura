@@ -112,7 +112,8 @@ module Executor = struct
   [@@deriving show]
 
   type schema = (string * relational_type) list StringMap.t
-  type references = (string * relational_type) list IntMap.t StringMap.t
+  (* entity * type * attribute_name *)
+  type references = (string * relational_type * string) list IntMap.t StringMap.t
 
   type commit = {
     state : string;
@@ -333,25 +334,6 @@ module Command = struct
   module FS = FileSystem (DevelopmentConfiguration)
   open Data_encoding
 
-  (*
-  let command_kind_encoding =
-    union
-      [
-        case ~title:"open" (Tag 0) Data_encoding.empty
-          (function OPEN -> Some () | _ -> None)
-          (function () -> OPEN);
-        case ~title:"write" (Tag 1) Data_encoding.empty
-          (function WRITE -> Some () | _ -> None)
-          (function () -> WRITE);
-        case ~title:"read" (Tag 2) Data_encoding.empty
-          (function READ -> Some () | _ -> None)
-          (function () -> READ);
-        (* case ~title:"create_relation" (Tag 3) *)
-        (* Data_encoding.empty *)
-        (* (function CREATE_RELATION -> Some () | _ -> None) *)
-        (* (function () -> CREATE_RELATION); *)
-      ]
-   *)
   type transaction = {
     (* kind : command_kind; *)
     timestamp : float;
@@ -364,15 +346,6 @@ module Command = struct
   }
 
   type t = SequentialRead of { relation_name : string }
-                             (*
-                                   | Text
-    | Integer32
-    | Integer64
-    | Boolean
-    (* | DiscriminatedUnion of (string * relational_type option) list * string *)
-      (* [("MemberA", None); ("MemberB", Some Integer32)], "NameOfDU" *)
-    | Relation of string
-                              *)
   
   let relational_type_encoding =
     union
@@ -457,8 +430,8 @@ module Command = struct
     match (computed_hash_handle, command.entity_id) with 
     | Some computed_hash_handle, Some entity_id ->
         let references: Executor.references =
-          let relation_name =
-            List.hd @@ String.split_on_char '/' command.attribute
+          let relation_name::[attribute_name] =
+            String.split_on_char '/' command.attribute
           in
           Executor.StringMap.update relation_name
             (function
@@ -467,13 +440,13 @@ module Command = struct
                     (Executor.IntMap.update entity_id
                        (function
                          | Some locations ->
-                             Some ((computed_hash_handle, command.type') :: locations)
-                         | None -> Some [ (computed_hash_handle, command.type') ])
+                             Some ((computed_hash_handle, command.type', attribute_name) :: locations)
+                         | None -> Some [ (computed_hash_handle, command.type', attribute_name) ])
                        entity)
               | None ->
                   Some
                     (Executor.IntMap.empty
-                    |> Executor.IntMap.add entity_id [ (computed_hash_handle, command.type') ]))
+                    |> Executor.IntMap.add entity_id [ (computed_hash_handle, command.type', attribute_name) ]))
             commit.references
         in
         Ok
@@ -487,7 +460,7 @@ module Command = struct
     match command with
     | SequentialRead { relation_name } ->
         let relation_name = List.hd @@ String.split_on_char '/' relation_name in
-        let entities : (string * Executor.relational_type) list Executor.IntMap.t =
+        let entities : (string * Executor.relational_type * string) list Executor.IntMap.t =
           print_endline relation_name;
           Executor.StringMap.find_opt relation_name commit.references
           |> function
@@ -499,9 +472,8 @@ module Command = struct
           Executor.IntMap.fold
             (fun key elems acc ->
               (key,
-                List.mapi
-                  (fun i (location, type') ->
-                    print_endline ("INDEX: " ^ (string_of_int i));
+                List.map
+                  (fun (location, type', attribute_name) ->
                     Executor.read_location ~hash:location locations type')
                   elems)
               :: acc)
