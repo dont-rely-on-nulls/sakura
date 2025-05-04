@@ -91,6 +91,13 @@ module Executor = struct
   module Hashes = struct
     type t = { values : string list; hash : string } [@@deriving show]
     type history = t list [@@deriving show]
+
+    let encoder: t Data_encoding.t =
+      let open Data_encoding in
+      conv
+        (fun {values; hash} -> (values, hash))
+        (fun (values, hash) -> {values; hash})
+        (tup2 (list string) string)
   end
 
   type relational_type =
@@ -125,6 +132,60 @@ module Executor = struct
   type history = commit list
   type locations = Location.t StringMap.t
 
+  let relational_type_encoding =
+    let open Data_encoding in
+    union
+      [
+        case ~title:"text" (Tag 0) Data_encoding.empty
+          (function Text -> Some () | _ -> None)
+          (function () -> Text);
+        case ~title:"integer32" (Tag 1) Data_encoding.empty
+          (function Integer32 -> Some () | _ -> None)
+          (function () -> Integer32);
+        case ~title:"integer64" (Tag 2) Data_encoding.empty
+          (function Integer64 -> Some () | _ -> None)
+          (function () -> Integer64);
+        case ~title:"boolean" (Tag 3) Data_encoding.empty
+          (function Boolean -> Some () | _ -> None)
+          (function () -> Boolean);
+        case ~title:"relation" (Tag 4) Data_encoding.string
+          (function Relation reference -> Some reference | _ -> None)
+          (function reference -> Relation reference);
+      ]
+
+  let relational_literal_encoding =
+    let open Data_encoding in
+    union
+      [
+        case ~title:"text" (Tag 0) Data_encoding.string
+          (function LText x -> Some x | _ -> None)
+          (function x -> LText x);
+        case ~title:"integer32" (Tag 1) Data_encoding.int32
+          (function LInteger32 x -> Some x | _ -> None)
+          (function x -> LInteger32 x);
+        case ~title:"integer64" (Tag 2) Data_encoding.int64
+          (function LInteger64 x -> Some x | _ -> None)
+          (function x -> LInteger64 x);
+        case ~title:"boolean" (Tag 3) Data_encoding.bool
+          (function LBoolean x -> Some x | _ -> None)
+          (function x -> LBoolean x);
+        case ~title:"relation" (Tag 4) (Data_encoding.tup2 Data_encoding.int64 Data_encoding.string)
+          (function LRelation (reference, name) -> Some (reference, name) | _ -> None)
+          (function (reference, name) -> LRelation (reference, name));
+      ]
+  
+  let encode_commit =
+    let open Data_encoding in
+    (* let references_encoder = (list (list (tup2 string (list (tup2 int64 (tup3 string relational_type_encoding string)))))) in *)
+    let references_encoder = list (tup2 string (list (tup2 int64 (list (tup3 string relational_type_encoding string))))) in
+    let schema_encoder = list (tup2 string (list (tup2 string relational_type_encoding))) in
+    (* let schema_encoder = list (tup2 string (list (tup2 string relational_type_encoding))) in *)
+    let files_encoder = (list (tup2 string (list Hashes.encoder))) in
+    conv
+      (fun {state; files; references; schema} -> (state, StringMap.to_list files, (let x = List.map (fun (k, v) -> k, IntMap.to_list v) (StringMap.to_list references) in x), StringMap.to_list schema))
+      (fun (state, files, references, schema) -> {state; files = StringMap.of_list files; references = StringMap.of_list (List.map (fun (k, v) -> k, IntMap.of_list v) references); schema = StringMap.of_list schema})
+      (tup4 string files_encoder references_encoder schema_encoder)
+  
   let _EMPTY_SHA_HASH_ =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -347,57 +408,17 @@ module Command = struct
 
   type t = SequentialRead of { relation_name : string }
   
-  let relational_type_encoding =
-    union
-      [
-        case ~title:"text" (Tag 0) Data_encoding.empty
-          (function Executor.Text -> Some () | _ -> None)
-          (function () -> Executor.Text);
-        case ~title:"integer32" (Tag 1) Data_encoding.empty
-          (function Executor.Integer32 -> Some () | _ -> None)
-          (function () -> Executor.Integer32);
-        case ~title:"integer64" (Tag 2) Data_encoding.empty
-          (function Executor.Integer64 -> Some () | _ -> None)
-          (function () -> Executor.Integer64);
-        case ~title:"boolean" (Tag 3) Data_encoding.empty
-          (function Executor.Boolean -> Some () | _ -> None)
-          (function () -> Executor.Boolean);
-        case ~title:"relation" (Tag 4) Data_encoding.string
-          (function Executor.Relation reference -> Some reference | _ -> None)
-          (function reference -> Executor.Relation reference);
-      ]
-
-  let relational_literal_encoding =
-    union
-      [
-        case ~title:"text" (Tag 0) Data_encoding.string
-          (function Executor.LText x -> Some x | _ -> None)
-          (function x -> Executor.LText x);
-        case ~title:"integer32" (Tag 1) Data_encoding.int32
-          (function Executor.LInteger32 x -> Some x | _ -> None)
-          (function x -> Executor.LInteger32 x);
-        case ~title:"integer64" (Tag 2) Data_encoding.int64
-          (function Executor.LInteger64 x -> Some x | _ -> None)
-          (function x -> Executor.LInteger64 x);
-        case ~title:"boolean" (Tag 3) Data_encoding.bool
-          (function Executor.LBoolean x -> Some x | _ -> None)
-          (function x -> Executor.LBoolean x);
-        case ~title:"relation" (Tag 4) (Data_encoding.tup2 Data_encoding.int64 Data_encoding.string)
-          (function Executor.LRelation (reference, name) -> Some (reference, name) | _ -> None)
-          (function (reference, name) -> Executor.LRelation (reference, name));
-      ]
-  
   let command_encoding =
     conv
       (fun { timestamp; attribute; entity_id; content; type' } ->
         (timestamp, attribute, entity_id, content, type'))
       (fun (timestamp, attribute, entity_id, content, type') ->
         { timestamp; attribute; entity_id; content; type' })
-      Data_encoding.(tup5 float string (option int64) relational_literal_encoding relational_type_encoding)
+      Data_encoding.(tup5 float string (option int64) Executor.relational_literal_encoding Executor.relational_type_encoding)
 
   let parse_command ~data =
     let contract_encoding =
-      Data_encoding.(tup4 string (option int64) relational_literal_encoding relational_type_encoding)
+      Data_encoding.(tup4 string (option int64) Executor.relational_literal_encoding Executor.relational_type_encoding)
     in
     match Binary.of_bytes_opt contract_encoding data with
     | Some (attribute, entity_id, content, type') ->
