@@ -42,7 +42,7 @@ let write_and_retrieve () =
                                        |> Executor.StringMap.add "entity_1" [handle21; handle22]
                                        |> Executor.StringMap.add "entity_2" [handle31; handle32]) in *)
   let open Extensions.Result in
-  let command_write1 : Command.transaction =
+  let+ (commit, locations), _ =
     {
       timestamp = 10.0;
       content = Executor.LText "Daisy";
@@ -50,25 +50,21 @@ let write_and_retrieve () =
       attribute = "user/first-name";
       type' = Executor.Text;
     }
-  in
-  let+ (commit, locations), Command.ComputedHash handle11 =
-    Command.transact commit locations command_write1
+    |> Command.transact commit locations
   in
   print_references commit.references;
-  let command_write2 : Command.transaction =
+  let+ (commit, locations), _ =
     {
       timestamp = 10.0;
-      content = Executor.LText "Blossom";
+      content = Executor.LText "Duck";
       entity_id = Some 0L;
       attribute = "user/last-name";
       type' = Executor.Text;
     }
-  in
-  let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.transact commit locations command_write2
+    |> Command.transact commit locations
   in
   print_references commit.references;
-  let command_write1_address : Command.transaction =
+  let+ (commit, locations), _ =
     {
       timestamp = 10.0;
       content = Executor.LText "Saint James St.";
@@ -76,12 +72,10 @@ let write_and_retrieve () =
       attribute = "address/street";
       type' = Executor.Text;
     }
-  in
-  let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.transact commit locations command_write1_address
+    |> Command.transact commit locations
   in
   print_references commit.references;
-  let command_write2_address : Command.transaction =
+  let+ (commit, locations), _ =
     {
       timestamp = 10.0;
       content = Executor.LInteger32 41l;
@@ -89,12 +83,10 @@ let write_and_retrieve () =
       attribute = "address/number";
       type' = Executor.Text;
     }
-  in
-  let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.transact commit locations command_write2_address
+    |> Command.transact commit locations
   in
   print_references commit.references;
-  let command_write2_5 : Command.transaction =
+  let+ (commit, locations), _ =
     {
       timestamp = 10.0;
       content = Executor.LRelation (0L, "address");
@@ -102,65 +94,92 @@ let write_and_retrieve () =
       attribute = "user/address";
       type' = Executor.Relation "address";
     }
-  in
-  let+ (commit, locations), Command.ComputedHash handle12 =
-    Command.transact commit locations command_write2_5
+    |> Command.transact commit locations
   in
   print_references commit.references;
-  (* let entity_id = 1L in *)
-  (* let command_write3 : Command.t = *)
-  (*   { *)
-  (*     kind = Command.WRITE; *)
-  (*     timestamp = 10.0; *)
-  (*     hash = ""; *)
-  (*     content = "Minnie"; *)
-  (*     entity_id = Some 1L; *)
-  (*     filename = "user/first-name"; *)
-  (*   } *)
-  (* in *)
-  (* let+ (commit, locations, references), Command.ComputedHash handle21 = *)
-  (*   Command.commit_and_perform commit locations command_write3 *)
-  (* in *)
-  (* let command_write4 : Command.t = *)
-  (*   { *)
-  (*     kind = Command.WRITE; *)
-  (*     timestamp = 10.0; *)
-  (*     hash = ""; *)
-  (*     content = "Mouse"; *)
-  (*     entity_id = Some 1L; *)
-  (*     filename = "user/last-name"; *)
-  (*   } *)
-  (* in *)
-  (* let+ (commit, locations, references), Command.ComputedHash handle22 = *)
-  (*   Command.commit_and_perform commit locations command_write4 *)
-  (* in *)
-  (* let entity_id = 2L in *)
-  (* let command_write5 : Command.t = *)
-  (*   { *)
-  (*     kind = Command.WRITE; *)
-  (*     timestamp = 10.0; *)
-  (*     hash = ""; *)
-  (*     content = "Billie"; *)
-  (*     entity_id = Some 2L; *)
-  (*     filename = "user/first-name"; *)
-  (*   } *)
-  (* in *)
-  (* let+ (commit, locations, references), Command.ComputedHash handle31 = *)
-  (*   Command.commit_and_perform commit locations command_write5 *)
-  (* in *)
-  (* let command_write6 : Command.t = *)
-  (*   { *)
-  (*     kind = Command.WRITE; *)
-  (*     timestamp = 10.0; *)
-  (*     hash = ""; *)
-  (*     content = "Beans"; *)
-  (*     entity_id = Some 2L; *)
-  (*     filename = "user/last-name"; *)
-  (*   } *)
-  (* in *)
-  (* let+ (commit, locations, references), Command.ComputedHash handle32 = *)
-  (*   Command.commit_and_perform commit locations command_write6 *)
-  (* in *)
+  let entity_id = 1L in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LText "Minnie";
+      entity_id = Some 1L;
+      attribute = "user/first-name";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LText "Mouse";
+      entity_id = Some 1L;
+      attribute = "user/last-name";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LRelation (0L, "address");
+      entity_id = Some 1L;
+      attribute = "user/address";
+      type' = Executor.Relation "address";
+    }
+    |> Command.transact commit locations
+  in
+  let entity_id = 2L in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LText "Scrooge";
+      entity_id = Some 2L;
+      attribute = "user/first-name";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LText "McDuck";
+      entity_id = Some 2L;
+      attribute = "user/last-name";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LText "President Julian St.";
+      entity_id = Some 1L;
+      attribute = "address/street";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  print_references commit.references;
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LInteger32 768l;
+      entity_id = Some 1L;
+      attribute = "address/number";
+      type' = Executor.Text;
+    }
+    |> Command.transact commit locations
+  in
+  let+ (commit, locations), _ =
+    {
+      timestamp = 10.0;
+      content = Executor.LRelation (1L, "address");
+      entity_id = Some 2L;
+      attribute = "user/address";
+      type' = Executor.Relation "address";
+    }
+    |> Command.transact commit locations
+  in
   let+ _, (Command.Read content as response) =
     Command.perform commit locations (SequentialRead { relation_name = "user" })
   in
