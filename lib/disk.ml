@@ -21,6 +21,7 @@ module type FileSystem = sig
   type target = Storage | Transaction
 
   val append : target -> bytes -> (int * int64, string) result
+  val wipe_and_write : string -> bytes -> (int * int64, string) result
   val read : target -> int64 -> int -> (bytes, string) result
 end
 
@@ -57,6 +58,28 @@ module FileSystem (C : Configuration) : FileSystem = struct
         (Printf.sprintf "Error on appending to target '%s': %s"
            (target_to_string target) (Printexc.to_string e))
 
+  let wipe_and_write path content =
+    let offset_written =
+      try
+        let stats = Unix.stat path in
+        Int64.of_int stats.Unix.st_size
+      with _ -> 0L
+    in
+    let register channel =
+      Out_channel.output_bytes channel content;
+      Out_channel.flush channel;
+      Ok (Bytes.length content, offset_written)
+    in
+    try
+      Out_channel.with_open_gen
+        [ Open_trunc; Open_binary; Open_creat; Open_wronly ]
+        0o666 path register
+    with e ->
+      Error (
+          Printf.sprintf "Error on appending to path '%s': %s"
+            path (Printexc.to_string e)
+        )
+
   let read target (offset : int64) size =
     print_endline ("READ_OFFSET: " ^ Int64.to_string offset);
     print_endline ("READ_SIZE: " ^ string_of_int (Int64.to_int offset + size));
@@ -86,6 +109,12 @@ module Executor = struct
 
   module Location = struct
     type t = { offset : int64; size : int; hash : string } [@@deriving show]
+    let encoding =
+      let open Data_encoding in
+      conv
+        (fun { offset; size; hash } -> (offset, size, hash))
+        (fun (offset, size, hash) -> { offset; size; hash })
+        (tup3 int64 int31 string)
   end
 
   module Hashes = struct
@@ -185,6 +214,14 @@ module Executor = struct
       (fun {state; files; references; schema} -> (state, StringMap.to_list files, (let x = List.map (fun (k, v) -> k, IntMap.to_list v) (StringMap.to_list references) in x), StringMap.to_list schema))
       (fun (state, files, references, schema) -> {state; files = StringMap.of_list files; references = StringMap.of_list (List.map (fun (k, v) -> k, IntMap.of_list v) references); schema = StringMap.of_list schema})
       (tup4 string files_encoder references_encoder schema_encoder)
+
+
+  let encode_locations =
+    let open Data_encoding in
+    conv
+      StringMap.to_list
+      StringMap.of_list
+      (list (tup2 string Location.encoding))
   
   let _EMPTY_SHA_HASH_ =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -431,6 +468,18 @@ module Command = struct
     | Nothing
   [@@deriving show]
 
+  (** Writes the commit and location to the disk, but cleans it before.
+      Needless to say this is absolutely just a dirty trick to test persistency of the structures.
+      To implement this properly, we need to mark the new appended objects, flush the dirty ones to
+      the disk without touching the rest, and do it atomically with unix file swaps (for example). **)
+  let write_context commit locations =
+    let open Extensions.Result in
+    let+ commit = Result.map_error (fun _ -> "Failed to serialize 'commit'") @@ Data_encoding.Binary.to_bytes Executor.encode_commit commit in
+    let+ locations = Result.map_error (fun _ -> "Failed to serialize 'locations'") @@ Data_encoding.Binary.to_bytes Executor.encode_locations locations in
+    let+ _ = Result.map_error (fun msg -> Printf.sprintf "Failed to write 'commit' to the disk: %s" msg) @@ FS.wipe_and_write "/tmp/relational-engine/commit" commit in
+    let+ _ = Result.map_error (fun msg -> Printf.sprintf "Failed to write 'locations' to the disk: %s" msg) @@ FS.wipe_and_write "/tmp/relational-engine/locations" locations in
+    Ok ()
+  
   (** TODO: This does not write atomically. If the system crashes while it
       attempts to write, it will corrupt. Solve this with a temporary file and
       move later. *)
@@ -444,6 +493,7 @@ module Command = struct
     in
     let+ _ = FS.append FS.Transaction serialized_command in
     let open Extensions.Result in
+    let+ () = write_context commit locations in
     let+ (commit, locations), computed_hash_handle =
       Executor.write commit locations ~filename:command.attribute
       @@ Executor.relational_literal_to_bytes command.content
