@@ -129,6 +129,8 @@ module Executor = struct
         (tup2 (list string) string)
   end
 
+  open Sexplib0.Sexp_conv
+
   type relational_type =
     | Text
     | Integer32
@@ -137,7 +139,7 @@ module Executor = struct
     (* | DiscriminatedUnion of (string * relational_type option) list * string *)
       (* [("MemberA", None); ("MemberB", Some Integer32)], "NameOfDU" *)
     | Relation of string
-  [@@deriving show]
+  [@@deriving show, sexp]
 
   type relational_literal =
     | LText of string
@@ -443,7 +445,13 @@ module Command = struct
     type': Executor.relational_type;
   }
 
-  type t = SequentialRead of { relation_name : string }
+  open Sexplib0.Sexp_conv
+
+  type t =
+    | SequentialRead of { relation_name : string }
+    | SpecifyRelation of { relation_name: string;
+                           attributes: (string*Executor.relational_type) list }
+  [@@deriving sexp]
   
   let command_encoding =
     conv
@@ -526,9 +534,13 @@ module Command = struct
     | Some _, None -> Error "Cannot write an entity without its referential."
     | None, _ -> Ok ((commit, locations), Nothing)
   
-  let perform (commit : Executor.commit) (locations : Executor.locations)
-      (command : t) =
+  let perform (commit : Executor.commit) (locations : Executor.locations) (command : t) =
     match command with
+    | SpecifyRelation {relation_name; attributes} ->
+       (* If it already exists under the relation name key, it will be replaced *)
+       Ok (({ commit with
+              schema = commit.schema
+                       |> Executor.StringMap.add relation_name attributes}, locations), Nothing)
     | SequentialRead { relation_name } ->
         let relation_name = List.hd @@ String.split_on_char '/' relation_name in
         let entities : (string * Executor.relational_type * string) list Executor.IntMap.t =

@@ -3,6 +3,8 @@ open Sexplib0.Sexp_conv
 
 type tuple = string list [@@deriving sexp, protocol ~driver:(module Xml_light)]
 
+type command = Disk.Command.t [@@deriving sexp]
+
 type relation = {
   attribute_name : string;
   attribute_type : string;

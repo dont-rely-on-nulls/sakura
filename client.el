@@ -8,7 +8,7 @@
     (message "Received: %s" response)    
     (delete-process process)))
 
-(setq relational-engine-address "localhost")
+(setq relational-engine-address "/tmp/relational_engine.socket")
 (setq relational-engine-port 7524)
 
 (defun relational-client (content)

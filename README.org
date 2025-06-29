@@ -4,6 +4,9 @@
 This is a relational engine.
 
 * Roadmap
+- [ ] State
+  - [ ] Add the schema modifications to the commit state hash
+  - [ ] Save a history of the schema
 - [ ] Filesystem [0/6]
   - [ ] Durability
   - [ ] Immutable storage

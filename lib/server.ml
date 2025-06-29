@@ -25,9 +25,16 @@ let client_read sock maxlen =
     let acc = acc ^ Bytes.to_string (Bytes.sub str 0 recvlen) in
     if recvlen <= maxlen then Lwt.return acc else _read sock acc
   in
-  _read sock String.empty >>= fun _ ->
-  match Relation.write_and_retrieve () with
-  | Ok (last_commit, locations) ->
+  _read sock String.empty >>= fun x ->
+  print_string "RECEIVED: ";
+  print_endline x;
+  let command = Protocol.command_of_sexp (Sexplib0.Sexp_conv.sexp_of_string x) in
+  match
+    (* Relation.write_and_retrieve () *)
+    command
+  with
+  | Disk.Command.SequentialRead {relation}
+  (* | Ok (last_commit, locations) -> *)
       (* let (first_names, last_names) = (Planner.Scan.execute last_commit locations "user/first-name", Planner.Scan.execute last_commit locations "user/last-name") in *)
       (* let tuples = Planner.Join.execute first_names last_names locations in *)
       let fname, lname = List.split [] in
