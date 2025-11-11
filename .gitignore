@@ -1,5 +1,2 @@
-result
 _build
-cmake-build-debug/
-*CMakeFiles
-*CMakeCache.txt
+Mnesia.*

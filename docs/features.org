@@ -1,0 +1,96 @@
+* Relational Algebra Engine
+  :PROPERTIES:
+  :CATEGORY: relational-algebra
+  :END:
+  A pure Erlang implementation of E. F. Codd’s relational algebra.
+  Relations are treated as mathematical sets of tuples; operations are defined exactly
+  as in relational theory, with optional aleph₀ (infinite) relations.
+
+** Core Specification
+   The theoretical backbone of the system.
+
+*** TODO Define relation as a strict mathematical set
+    - [ ] Each tuple is a set of attributes (no duplicates, no ordering)
+    - [ ] Each attribute = (name, value) pair
+    - [ ] Attribute domains are strongly typed
+
+*** TODO Enforce "Codd's axioms" in implementation
+    - [ ] No duplicate tuples in any relation
+    - [ ] No implicit ordering of tuples or attributes
+    - [ ] All operations closed over the relation type
+    - [ ] Proper domain checking in all operations
+
+** Data Model Layer (`relation.erl`)
+   Fundamental constructs of the relational model.
+
+*** TODO Implement attributes, tuples, relations, and schemas
+*** TODO Add schema validation for domain and arity
+*** TODO Add conversion helpers:
+    - [ ] tuple <-> map
+    - [ ] schema validation checks
+
+** Algebraic Operations (`operations.erl`)
+   The complete set of classical relational algebra operators.
+
+*** TODO Selection (σ)
+*** TODO Projection (π)
+*** TODO Cartesian Product (×)
+*** TODO Natural Join (⋈)
+*** TODO Theta Join (⋈θ)
+*** TODO Union (∪)
+*** TODO Intersection (∩)
+*** TODO Difference (−)
+*** TODO Rename (ρ)
+*** TODO Set semantics enforcement (remove duplicates after each op)
+
+** Infinite Relations (`aleph0.erl`)
+   Representation of aleph₀-relations (countably infinite generators).
+
+*** TODO Implement integer() generator
+*** TODO Implement plus(), minus(), multiply(), neg() relations
+*** TODO Add constraints and modes for partially bound arguments
+*** TODO Implement lazy generation using streams or coroutines
+*** TODO Support user-defined infinite relations
+
+** Unified Relation Abstraction (`unified_relation.erl`)
+   A bridge between finite and infinite relations.
+
+*** TODO Implement unified type for finite and aleph₀
+*** TODO Implement unified select, project, join, union, etc.
+*** TODO Support type checking between finite and infinite relations
+*** TODO Add automatic materialization with configurable limits
+*** TODO Implement caching/memoization for aleph₀ evaluations
+
+** Backend Integration (Mnesia)
+   Persistent storage and retrieval of finite relations.
+
+*** TODO Map finite relations to Mnesia tables
+*** TODO Support schema registration and domain enforcement
+*** TODO Add persistence for partially materialized aleph₀ relations
+*** TODO Add atomic transactional updates
+*** TODO Add indexing support for joins
+
+** Correctness and Validation
+   Ensuring theoretical fidelity.
+
+*** TODO Implement relational algebra test suite
+*** TODO Verify closure and idempotence of all operations
+*** TODO Add property-based tests with PropEr or QuickCheck
+*** TODO Compare semantics with formal definitions (e.g., Date & Darwen)
+
+** Developer Tools
+   Optional but desirable tools for exploration and testing.
+
+*** TODO Add REPL-like console for interactive relational queries
+*** TODO Add pretty-printer for relations and schemas
+*** TODO Add visualization of join graphs and operation pipelines
+*** TODO Add Org Babel integration for relational queries
+
+** Documentation
+   Literate and theoretical exposition.
+
+*** TODO Write README with theoretical introduction
+*** TODO Add module-level comments summarizing relational definitions
+*** TODO Include examples of finite and aleph₀ joins
+*** TODO Provide link to E. F. Codd’s original papers
+

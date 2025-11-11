@@ -1,24 +1,20 @@
-#+TITLE: Relational Engine
+#+TITLE: Domino
 
 * About
-This is a relational engine.
 
-* Roadmap
-- [ ] Filesystem [0/6]
-  - [ ] Durability
-  - [ ] Immutable storage
-  - [ ] ARIES
-  - [ ] Merkle construction per virtual file
-  - [ ] Branching
-  - [ ] Branch merge strategies [0/3]
-    - [ ] Selected merge
-    - [ ] Union merge
-    - [ ] Biased union merge
-- [ ] Language [0/4]
-  - [ ] Lexer
-  - [ ] Parser
-  - [ ] AST
-  - [ ] Unification and query terms
-- [ ] Server [0/2]
-  - [ ] Authentication
-  - [ ] Multi-client coordination
+Domino is a **Relational Algebra Engine** implements relational
+algebra in its strict, theoretical form, adhering rigorously to the
+principles of relational theory as articulated by E. F. Codd.
+
+A relation is modeled as a set of tuples, each tuple being a set of
+attributes. Each attribute is a pairing of a name with a value drawn
+from a domain. All operations are defined on entire relations as sets,
+with no recourse to the compromises typical of SQL or other practical
+implementations.
+
+The engine is intended as a study in correctness: each operation, from
+projection to join, is executed in a manner consistent with the
+classical definition of relational algebra. It is a platform for
+exploring the consequences of relational theory in a low-level
+programming context, providing both a tool for experimentation and a
+concrete realization of the abstract model.

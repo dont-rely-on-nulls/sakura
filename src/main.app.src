@@ -1,0 +1,15 @@
+{application, main, [
+    {description, "A relational algebra engine"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {main_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        mnesia
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+ ]}.
