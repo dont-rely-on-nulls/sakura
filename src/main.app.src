@@ -2,7 +2,7 @@
     {description, "A relational algebra engine"},
     {vsn, "0.1.0"},
     {registered, []},
-    {mod, {main_app, []}},
+    {mod, {main, []}},
     {applications, [
         kernel,
         stdlib,
