@@ -187,6 +187,8 @@ resolve_tuple(TupleHash) ->
     {atomic, ResolvedTuple} = mnesia:transaction(F),
     ResolvedTuple.
 
+%% All reads can be dirty as it is all immutable
+%% Writes need to be transactional
 hashes_from_tuple(RelationHash) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     case Relation#relation.tree of
