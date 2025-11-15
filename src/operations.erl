@@ -71,6 +71,9 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
         [RelationRecord] = mnesia:read(relation, CurrentRelationHash),
         
         %% Step 5: Insert tuple hash into relation merkle tree
+        %% We don't need to store the content of a tuple hash, just the key
+        %% merklet can spot the difference in both keys and values
+        %% sets:set follows the same strategy of an empty value
         NewRelationTree = merklet:insert({TupleHash, <<>>}, RelationRecord#relation.tree),
         
         %% Step 6: Compute new relation hash as the root of the new merkle tree and store
@@ -106,6 +109,34 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     
     {atomic, Result} = mnesia:transaction(F),
     Result.
+
+retract_tuple(Database, RelationHash, TupleHashes) 
+  when is_record(Database, database_state) andalso is_list(TupleHashes) ->
+    todo;
+retract_tuple(Database, RelationHash, TupleHash) when is_record(Database, database_state) ->
+    [Relation] = mnesia:dirty_read(relation, RelationHash),
+    RelationTreeWithoutTuple = merklet:delete(TupleHash, Relation#relation.tree),
+    {_,NewRelationHash,_,_} = RelationTreeWithoutTuple,
+    DatabaseTreeWithoutTuple = merklet:delete(RelationHash, Database#database_state.tree),
+    {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuple,
+    UpdatedDatabase =
+	Database#database_state{timestamp = erlang:timestamp(),
+				hash = NewDatabaseHash,
+			        tree = DatabaseTreeWithoutTuple},
+    UpdatedRelation =
+	Relation#relation{hash = NewRelationHash,
+			  tree = RelationTreeWithoutTuple},
+    TX = fun () ->
+		 mnesia:write(relation, UpdatedRelation, write),
+		 mnesia:write(database_state, UpdatedDatabase, write)
+	 end,
+    case mnesia:is_transaction() of
+	true -> TX();
+	false -> mnesia:transaction(TX)
+    end.
+
+retract_relation(Database, Name) ->
+    todo.
 
 create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
     F = fun() ->
@@ -174,18 +205,11 @@ get_relation_hash(Database, RelationName) ->
 %% @doc Resolve a tuple hash to actual values
 %% Returns map with attribute names and actual values
 resolve_tuple(TupleHash) ->
-    F = fun() ->
-        %% Read tuple record
-        [#tuple{attribute_map = AttributeMap}] = mnesia:read(tuple, TupleHash),
-        
-        %% Resolve each attribute value
-        maps:map(fun(_AttrName, ValueHash) ->
-            [#attribute{value = Value}] = mnesia:read(attribute, ValueHash),
-            Value
-        end, AttributeMap)
-    end,
-    {atomic, ResolvedTuple} = mnesia:transaction(F),
-    ResolvedTuple.
+    [#tuple{attribute_map = AttributeMap}] = mnesia:dirty_read(tuple, TupleHash),
+    maps:map(fun(_AttrName, ValueHash) ->
+        [#attribute{value = Value}] = mnesia:dirty_read(attribute, ValueHash),
+        Value
+    end, AttributeMap).
 
 %% All reads can be dirty as it is all immutable
 %% Writes need to be transactional
@@ -258,12 +282,4 @@ collect_all(IteratorPid, Acc) ->
             close_iterator(IteratorPid),
             {error, Reason, Acc}
     end.
-
-%% @doc Infer type of a value
-type_of(Value) when is_binary(Value) -> binary;
-type_of(Value) when is_list(Value) -> list;
-type_of(Value) when is_integer(Value) -> integer;
-type_of(Value) when is_float(Value) -> float;
-type_of(Value) when is_atom(Value) -> atom;
-type_of(_) -> term.
 
