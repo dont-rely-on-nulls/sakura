@@ -6,8 +6,8 @@
 	 create_tuple/3, 
 	 get_relations/1, 
 	 get_relation_hash/2,
-         get_tuple_hashes/1,
-	 get_tuples_iterator/1,
+         hashes_from_tuple/1,
+	 get_tuples_iterator/2,
 	 next_tuple/1,
 	 close_iterator/1, 
 	 collect_all/1]).
@@ -110,6 +110,10 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
 create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
     F = fun() ->
         %% Create relation with empty tree
+	%% The meaning of a relation needs to be attached to its name
+        %% It may sound nominalistic but that is a physical concern.
+        %% Two relations might share definitions but their name gives another interpretation
+        %% and therefore different tuples
         RelationHash = hash({Name, Definition}),
         NewRelation = #relation{
             hash = RelationHash, 
@@ -120,11 +124,14 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
         mnesia:write(relation, NewRelation, write),
         
         %% Update database relations map
+        %% TODO: maybe we can purge this later after including the name on the merkle trees
         NewRelations = maps:put(Name, RelationHash, Database#database_state.relations),
         
         %% Update database tree (for diffing)
-        NewTree = merklet:insert(RelationHash, Database#database_state.tree),
-        NewHash = hash(NewTree),
+	%% Note that the name here is important as a key because
+        %% we gotta go from a name to a hash within a database state
+        NewTree = merklet:insert({atom_to_binary(Name), RelationHash}, Database#database_state.tree),
+        {_,NewHash,_,_} = NewTree,
         
         UpdatedDatabase = #database_state{
             name = Database#database_state.name,
@@ -164,25 +171,6 @@ get_relation_hash(Database, RelationName) ->
         X -> X
     end.
 
-%% @doc Get all tuple hashes in a relation
-get_tuple_hashes(Relation) when is_record(Relation, relation) ->
-    case Relation#relation.tree of
-        undefined -> [];
-        Tree -> merklet:keys(Tree)
-    end.
-
-%% %% @doc Get all tuples from a relation (resolved with actual values)
-%% %% Returns list of maps with actual attribute values
-%% get_tuples(Relation) when is_record(Relation, relation) ->
-%%     TupleHashes = get_tuple_hashes(Relation),
-%%     F = fun() ->
-%%         lists:map(fun(TupleHash) ->
-%%             resolve_tuple(TupleHash)
-%%         end, TupleHashes)
-%%     end,
-%%     {atomic, Tuples} = mnesia:transaction(F),
-%%     Tuples.
-
 %% @doc Resolve a tuple hash to actual values
 %% Returns map with attribute names and actual values
 resolve_tuple(TupleHash) ->
@@ -199,11 +187,25 @@ resolve_tuple(TupleHash) ->
     {atomic, ResolvedTuple} = mnesia:transaction(F),
     ResolvedTuple.
 
+hashes_from_tuple(RelationHash) ->
+    [Relation] = mnesia:dirty_read(relation, RelationHash),
+    case Relation#relation.tree of
+        undefined -> [];
+        Tree -> merklet:keys(Tree)
+    end.
+
 %% @doc Create an iterator for streaming tuples from a relation
 %% Returns: Pid of iterator process
-get_tuples_iterator(Relation) when is_record(Relation, relation) ->
-    TupleHashes = get_tuple_hashes(Relation),
-    spawn(fun() -> tuple_iterator_loop(TupleHashes) end).
+get_tuples_iterator(Database, RelationName) when is_record(Database, database_state) ->
+    case maps:get(RelationName, Database#database_state.relations, error) of
+	error -> erlang:error({error_tuple_iterator_init, RelationName});
+	RelationHash -> TupleHashes = hashes_from_tuple(RelationHash),
+			spawn(fun() -> tuple_iterator_loop(TupleHashes) end)
+    end.
+
+%% X = (a, b, c, d)
+%% Y = (a, x, y)
+%% Z = project (a, c, y, natural_join(X, Y))
 
 %% @doc Get next tuple from iterator1
 %% Returns: {ok, Tuple} | done | {error, timeout}
@@ -249,10 +251,10 @@ collect_all(IteratorPid, Acc) ->
         {ok, Tuple} -> collect_all(IteratorPid, [Tuple | Acc]);
         done -> 
             close_iterator(IteratorPid),
-            lists:reverse(Acc);
+            Acc;
         {error, Reason} -> 
             close_iterator(IteratorPid),
-            {error, Reason, lists:reverse(Acc)}
+            {error, Reason, Acc}
     end.
 
 %% @doc Infer type of a value
