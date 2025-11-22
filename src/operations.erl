@@ -634,7 +634,7 @@ hashes_from_tuple(RelationHash) ->
 %% relations are sets (unordered), the specific elements returned are
 %% determined by the enumeration order.
 %%
-%% For finite relations smaller than N, returns all elements.
+%% For finite relations with |R| < N, returns all elements.
 %% For infinite relations, returns first N elements by generator order.
 %%
 %% == Example ==
@@ -786,8 +786,7 @@ next_tuple(IteratorPid) ->
     IteratorPid ! {next, self()},
     receive
         {tuple, Tuple} -> {ok, Tuple};
-        done -> done;
-        {error, Reason} -> {error, Reason}
+        done -> done
     after 5000 ->
         {error, timeout}
     end.
@@ -1133,14 +1132,6 @@ instantiate_generator({primitive, integers}, Constraints) ->
     generators:integers(Constraints);
 instantiate_generator({primitive, rationals}, Constraints) ->
     generators:rationals(Constraints);
-instantiate_generator({primitive, plus}, Constraints) ->
-    generators:plus(Constraints);
-instantiate_generator({primitive, times}, Constraints) ->
-    generators:times(Constraints);
-instantiate_generator({primitive, minus}, Constraints) ->
-    generators:minus(Constraints);
-instantiate_generator({primitive, divide}, Constraints) ->
-    generators:divide(Constraints);
 instantiate_generator({custom, GeneratorFun}, Constraints) ->
     GeneratorFun(Constraints);
 instantiate_generator({take, RelationName, N}, Constraints) ->
