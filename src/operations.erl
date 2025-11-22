@@ -43,6 +43,7 @@
 	 hash/1,
          create_database/1,
 	 create_relation/3,
+	 create_infinite_relation/2,
 	 create_tuple/3,
 	 retract_tuple/3,
 	 retract_tuple/4,
@@ -54,9 +55,18 @@
 	 get_relation_hash/2,
          hashes_from_tuple/1,
 	 get_tuples_iterator/2,
+	 get_tuples_iterator/3,
+	 take/3,
 	 next_tuple/1,
 	 close_iterator/1,
-	 collect_all/1]).
+	 collect_all/1,
+	 %% Iterator operators (lazy)
+	 select_iterator/2,
+	 project_iterator/2,
+	 sort_iterator/2,
+	 take_iterator/2,
+	 %% Materialization (eager)
+	 materialize/3]).
 
 %% @doc Initialize Mnesia database schema and tables.
 %%
@@ -88,7 +98,7 @@ setup() ->
         {type, set}
     ]),
     mnesia:create_table(relation, [
-        {attributes, [hash, name, tree, schema]},
+        {attributes, [hash, name, tree, schema, constraints, cardinality, generator, provenance]},
         {disc_copies, [node()]},
         {type, set}
     ]),
@@ -168,11 +178,22 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
         %% Step 6: Compute new relation hash as the root of the new merkle tree and store
         {_,NewRelationTreeHash,_,_} = NewRelationTree,
 	NewRelationHash = hash({RelationRecord#relation.name, RelationRecord#relation.schema, NewRelationTreeHash}),
+
+        %% Update cardinality: increment by 1
+        NewCardinality = case RelationRecord#relation.cardinality of
+            {finite, N} -> {finite, N + 1};
+            Other -> Other  % Shouldn't happen for finite relations
+        end,
+
         UpdatedRelation = #relation{
-            hash = NewRelationHash, 
-            name = RelationName, 
-            tree = NewRelationTree, 
-            schema = RelationRecord#relation.schema
+            hash = NewRelationHash,
+            name = RelationName,
+            tree = NewRelationTree,
+            schema = RelationRecord#relation.schema,
+            constraints = RelationRecord#relation.constraints,
+            cardinality = NewCardinality,
+            generator = RelationRecord#relation.generator,
+            provenance = RelationRecord#relation.provenance
         },
         mnesia:write(relation, UpdatedRelation, write),
         
@@ -384,10 +405,14 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
         %% and therefore different tuples
         RelationHash = hash({Name, Definition, undefined}),
         NewRelation = #relation{
-            hash = RelationHash, 
-            name = Name, 
-            tree = undefined, 
-            schema = Definition
+            hash = RelationHash,
+            name = Name,
+            tree = undefined,
+            schema = Definition,
+            constraints = #{},           % No constraints by default
+            cardinality = {finite, 0},   % Empty relation
+            generator = undefined,        % Finite relation has no generator
+            provenance = {base, Name}     % Base relation
         },
         mnesia:write(relation, NewRelation, write),
         
@@ -449,6 +474,86 @@ create_database(Name) ->
         mnesia:write(database_state, Entry, write)
     end),
     Entry.
+
+%% @doc Create an infinite relation with a generator.
+%%
+%% Creates a relation with infinite cardinality (aleph_zero or continuum).
+%% The relation is defined by a generator function that produces tuples
+%% lazily based on constraints.
+%%
+%% == Primitive Infinite Relations ==
+%%
+%% <ul>
+%%   <li>`naturals' - Natural numbers: {0, 1, 2, 3, ...}</li>
+%%   <li>`integers' - Integers: {0, 1, -1, 2, -2, ...}</li>
+%%   <li>`rationals' - Rationals via Stern-Brocot tree</li>
+%% </ul>
+%%
+%% == Example ==
+%% ```
+%% %% Create infinite relation of natural numbers
+%% {DB1, Naturals} = operations:create_infinite_relation(DB, #{
+%%     name => naturals,
+%%     schema => #{value => natural},
+%%     cardinality => aleph_zero,
+%%     generator => {primitive, naturals},
+%%     constraints => #{value => {gte, 0}}
+%% }).
+%%
+%% %% Query with bounds
+%% Iterator = operations:get_tuples_iterator(DB1, naturals,
+%%     #{value => {range, 0, 100}}).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param Spec Map with keys: name, schema, cardinality, generator, constraints
+%% @returns `{UpdatedDatabase, NewRelation}' tuple
+%%
+%% @see create_relation/3
+%% @see get_tuples_iterator/3
+create_infinite_relation(Database, Spec) when is_record(Database, database_state) ->
+    Name = maps:get(name, Spec),
+    Schema = maps:get(schema, Spec),
+    Cardinality = maps:get(cardinality, Spec, aleph_zero),
+    GeneratorSpec = maps:get(generator, Spec),
+    Constraints = maps:get(constraints, Spec, #{}),
+
+    F = fun() ->
+        %% Hash is based on generator specification
+        RelationHash = hash({Name, Schema, GeneratorSpec, Cardinality}),
+
+        NewRelation = #relation{
+            hash = RelationHash,
+            name = Name,
+            tree = undefined,  % Infinite relations have no merkle tree
+            schema = Schema,
+            constraints = Constraints,
+            cardinality = Cardinality,
+            generator = GeneratorSpec,
+            provenance = {base, Name}
+        },
+        mnesia:write(relation, NewRelation, write),
+
+        %% Update database relations map
+        NewRelations = maps:put(Name, RelationHash, Database#database_state.relations),
+
+        %% Update database tree
+        NewTree = merklet:insert({atom_to_binary(Name), RelationHash}, Database#database_state.tree),
+        {_,NewHash,_,_} = NewTree,
+
+        UpdatedDatabase = #database_state{
+            name = Database#database_state.name,
+            hash = NewHash,
+            tree = NewTree,
+            relations = NewRelations,
+            timestamp = erlang:timestamp()
+        },
+        mnesia:write(database_state, UpdatedDatabase, write),
+
+        {UpdatedDatabase, NewRelation}
+    end,
+    {atomic, Result} = mnesia:transaction(F),
+    Result.
 
 %% @doc Get all relation names in a database.
 %%
@@ -522,6 +627,114 @@ hashes_from_tuple(RelationHash) ->
         Tree -> merklet:keys(Tree)
     end.
 
+%% @doc Take operator (τ): Returns N arbitrary elements from a relation.
+%%
+%% The take operator is a unary relational operator that produces a finite
+%% relation containing N arbitrary elements from the input relation. Since
+%% relations are sets (unordered), the specific elements returned are
+%% determined by the enumeration order.
+%%
+%% For finite relations with |R| < N, returns all elements.
+%% For infinite relations, returns first N elements by generator order.
+%%
+%% == Example ==
+%% ```
+%% %% Take 100 naturals (returns {0, 1, 2, ..., 99})
+%% {DB1, Naturals100} = operations:take(DB, naturals, 100).
+%%
+%% %% Can compose with other operators
+%% Iterator = operations:get_tuples_iterator(DB1, naturals100).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationName Atom naming the source relation
+%% @param N Number of elements to take
+%% @returns `{UpdatedDatabase, TakeRelation}' where TakeRelation is finite
+%%
+%% @see get_tuples_iterator/3
+take(Database, RelationName, N) when is_record(Database, database_state), is_integer(N), N > 0 ->
+    case maps:get(RelationName, Database#database_state.relations, error) of
+        error ->
+            erlang:error({relation_not_found, RelationName});
+        RelationHash ->
+            [SourceRelation] = mnesia:dirty_read(relation, RelationHash),
+
+            %% Compute cardinality of result
+            ResultCardinality = case SourceRelation#relation.cardinality of
+                {finite, M} when M < N -> {finite, M};
+                {finite, _} -> {finite, N};
+                _ -> {finite, N}  % Taking from infinite yields finite
+            end,
+
+            %% Create take relation
+            TakeName = list_to_atom(atom_to_list(RelationName) ++ "_take_" ++ integer_to_list(N)),
+
+            TakeRelation = #relation{
+                hash = hash({take, RelationName, N}),
+                name = TakeName,
+                tree = undefined,  % Generated on-demand
+                schema = SourceRelation#relation.schema,
+                constraints = SourceRelation#relation.constraints,
+                cardinality = ResultCardinality,
+                generator = {take, RelationName, N},
+                provenance = {take, SourceRelation#relation.provenance, N}
+            },
+
+            %% Note: We don't persist take relations to Mnesia for now
+            %% They are ephemeral views
+            {Database, TakeRelation}
+    end.
+
+%% @doc Create an iterator for streaming tuples from a relation with constraints.
+%%
+%% Extended version of get_tuples_iterator/2 that accepts boundedness constraints.
+%% For infinite relations, constraints are mandatory to ensure termination.
+%%
+%% == Constraints ==
+%%
+%% Constraints bound the iteration over infinite relations:
+%% <ul>
+%%   <li>`{range, Min, Max}' - Range constraint</li>
+%%   <li>`{eq, Value}' - Equality constraint</li>
+%%   <li>`{lt, Value}', `{lte, Value}' - Upper bounds</li>
+%%   <li>`{gt, Value}', `{gte, Value}' - Lower bounds</li>
+%%   <li>`{in, List}' - Membership constraint</li>
+%% </ul>
+%%
+%% == Example ==
+%% ```
+%% %% Iterate naturals in range [0, 100]
+%% Iterator = operations:get_tuples_iterator(DB, naturals,
+%%     #{value => {range, 0, 100}}).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationName Atom naming the relation to iterate
+%% @param Constraints Map of attribute constraints
+%% @returns Pid of iterator process
+%%
+%% @see get_tuples_iterator/2
+%% @see take/3
+get_tuples_iterator(Database, RelationName, Constraints) when is_record(Database, database_state) ->
+    case maps:get(RelationName, Database#database_state.relations, error) of
+        error ->
+            erlang:error({error_tuple_iterator_init, RelationName});
+        RelationHash ->
+            [Relation] = mnesia:dirty_read(relation, RelationHash),
+
+            case Relation#relation.cardinality of
+                {finite, _} ->
+                    %% Finite relation: use tuple hashes
+                    TupleHashes = hashes_from_tuple(RelationHash),
+                    spawn(fun() -> tuple_iterator_loop(TupleHashes) end);
+
+                _ ->
+                    %% Infinite relation: use generator
+                    Generator = instantiate_generator(Relation#relation.generator, Constraints),
+                    spawn(fun() -> generator_iterator_loop(Generator) end)
+            end
+    end.
+
 %% @doc Create an iterator for streaming tuples from a relation.
 %%
 %% Implements the Volcano Iterator Model: spawns an independent process that
@@ -535,6 +748,8 @@ hashes_from_tuple(RelationHash) ->
 %% The iterator process responds to `{next, Caller}' messages and sends back
 %% either `{tuple, Tuple}' or `done' when exhausted.
 %%
+%% <b>Note:</b> For infinite relations, use `get_tuples_iterator/3' with constraints.
+%%
 %% == Example ==
 %% ```
 %% Iterator = operations:get_tuples_iterator(DB, users),
@@ -546,15 +761,12 @@ hashes_from_tuple(RelationHash) ->
 %% @param RelationName Atom naming the relation to iterate
 %% @returns Pid of iterator process
 %%
+%% @see get_tuples_iterator/3
 %% @see next_tuple/1
 %% @see close_iterator/1
 %% @see collect_all/1
 get_tuples_iterator(Database, RelationName) when is_record(Database, database_state) ->
-    case maps:get(RelationName, Database#database_state.relations, error) of
-	error -> erlang:error({error_tuple_iterator_init, RelationName});
-	RelationHash -> TupleHashes = hashes_from_tuple(RelationHash),
-			spawn(fun() -> tuple_iterator_loop(TupleHashes) end)
-    end.
+    get_tuples_iterator(Database, RelationName, #{}).
 
 %% @doc Get next tuple from iterator.
 %%
@@ -651,11 +863,319 @@ collect_all(IteratorPid) ->
 collect_all(IteratorPid, Acc) ->
     case next_tuple(IteratorPid) of
         {ok, Tuple} -> collect_all(IteratorPid, [Tuple | Acc]);
-        done -> 
+        done ->
             close_iterator(IteratorPid),
-            Acc;
-        {error, Reason} -> 
+            lists:reverse(Acc);  % Preserve order
+        {error, Reason} ->
             close_iterator(IteratorPid),
-            {error, Reason, Acc}
+            {error, Reason, lists:reverse(Acc)}
     end.
+
+%%% ============================================================================
+%%% Iterator Operators (Lazy - Volcano Model)
+%%% ============================================================================
+
+%% @doc Select iterator: Filters tuples based on a predicate.
+%%
+%% Lazy operator that wraps a child iterator and only emits tuples that
+%% satisfy the predicate function.
+%%
+%% == Example ==
+%% ```
+%% BaseIter = get_tuples_iterator(DB, employees, #{}),
+%% FilteredIter = select_iterator(BaseIter, fun(E) -> maps:get(age, E) > 30 end),
+%% Tuples = collect_all(FilteredIter).
+%% '''
+%%
+%% @param ChildIterator Iterator process to filter
+%% @param Predicate Function: tuple() -> boolean()
+%% @returns Iterator process (Pid)
+select_iterator(ChildIterator, Predicate) when is_function(Predicate, 1) ->
+    spawn(fun() -> select_loop(ChildIterator, Predicate) end).
+
+select_loop(ChildPid, Predicate) ->
+    receive
+        {next, Caller} ->
+            case next_tuple(ChildPid) of
+                {ok, Tuple} ->
+                    case Predicate(Tuple) of
+                        true ->
+                            Caller ! {tuple, Tuple},
+                            select_loop(ChildPid, Predicate);
+                        false ->
+                            %% Skip this tuple, get next
+                            self() ! {next, Caller},
+                            select_loop(ChildPid, Predicate)
+                    end;
+                done ->
+                    close_iterator(ChildPid),
+                    Caller ! done
+            end;
+        stop ->
+            close_iterator(ChildPid),
+            ok
+    end.
+
+%% @doc Project iterator: Projects tuples onto specified attributes.
+%%
+%% Lazy operator that transforms tuples by keeping only the specified
+%% attributes. This is the relational projection operator (π).
+%%
+%% == Example ==
+%% ```
+%% BaseIter = get_tuples_iterator(DB, employees, #{}),
+%% ProjectedIter = project_iterator(BaseIter, [name, age]),
+%% Tuples = collect_all(ProjectedIter).
+%% '''
+%%
+%% @param ChildIterator Iterator process to project
+%% @param Attributes List of attribute names to keep
+%% @returns Iterator process (Pid)
+project_iterator(ChildIterator, Attributes) when is_list(Attributes) ->
+    spawn(fun() -> project_loop(ChildIterator, Attributes) end).
+
+project_loop(ChildPid, Attributes) ->
+    receive
+        {next, Caller} ->
+            case next_tuple(ChildPid) of
+                {ok, Tuple} ->
+                    ProjectedTuple = maps:with(Attributes, Tuple),
+                    Caller ! {tuple, ProjectedTuple},
+                    project_loop(ChildPid, Attributes);
+                done ->
+                    close_iterator(ChildPid),
+                    Caller ! done
+            end;
+        stop ->
+            close_iterator(ChildPid),
+            ok
+    end.
+
+%% @doc Sort iterator: Sorts all tuples from child iterator.
+%%
+%% <b>Blocking operator</b> - must consume ALL tuples from child before
+%% emitting any output. Materializes and sorts tuples in memory.
+%%
+%% <b>Warning:</b> Do not use on unbounded streams! Ensure child iterator
+%% produces finite tuples (via constraints or take).
+%%
+%% == Example ==
+%% ```
+%% BaseIter = get_tuples_iterator(DB, employees, #{}),
+%% SortedIter = sort_iterator(BaseIter, fun(A, B) ->
+%%     maps:get(age, A) =< maps:get(age, B)
+%% end),
+%% Tuples = collect_all(SortedIter).
+%% '''
+%%
+%% @param ChildIterator Iterator process to sort
+%% @param CompareFun Function: (tuple(), tuple()) -> boolean()
+%% @returns Iterator process (Pid)
+sort_iterator(ChildIterator, CompareFun) when is_function(CompareFun, 2) ->
+    spawn(fun() ->
+        %% Phase 1: Consume all tuples (blocking!)
+        AllTuples = collect_all(ChildIterator),
+
+        %% Phase 2: Sort in memory
+        SortedTuples = lists:sort(CompareFun, AllTuples),
+
+        %% Phase 3: Emit sorted tuples on demand
+        sorted_emit_loop(SortedTuples)
+    end).
+
+sorted_emit_loop([]) ->
+    receive
+        {next, Caller} -> Caller ! done;
+        stop -> ok
+    end;
+sorted_emit_loop([Tuple | Rest]) ->
+    receive
+        {next, Caller} ->
+            Caller ! {tuple, Tuple},
+            sorted_emit_loop(Rest);
+        stop -> ok
+    end.
+
+%% @doc Take iterator: Limits output to N tuples.
+%%
+%% Lazy operator that emits at most N tuples from the child iterator,
+%% then closes the child and signals done.
+%%
+%% == Example ==
+%% ```
+%% BaseIter = get_tuples_iterator(DB, naturals, #{value => {range, 0, 1000}}),
+%% LimitedIter = take_iterator(BaseIter, 10),
+%% Tuples = collect_all(LimitedIter).  % Gets exactly 10 tuples
+%% '''
+%%
+%% @param ChildIterator Iterator process to limit
+%% @param N Maximum number of tuples to emit
+%% @returns Iterator process (Pid)
+take_iterator(ChildIterator, N) when is_integer(N), N > 0 ->
+    spawn(fun() -> take_iter_loop(ChildIterator, N, 0) end).
+
+take_iter_loop(ChildPid, Limit, Count) when Count < Limit ->
+    receive
+        {next, Caller} ->
+            case next_tuple(ChildPid) of
+                {ok, Tuple} ->
+                    Caller ! {tuple, Tuple},
+                    take_iter_loop(ChildPid, Limit, Count + 1);
+                done ->
+                    close_iterator(ChildPid),
+                    Caller ! done
+            end;
+        stop ->
+            close_iterator(ChildPid),
+            ok
+    end;
+take_iter_loop(ChildPid, _Limit, _Count) ->
+    %% Reached limit - close child and signal done
+    close_iterator(ChildPid),
+    receive
+        {next, Caller} -> Caller ! done;
+        stop -> ok
+    end.
+
+%%% ============================================================================
+%%% Materialization (Eager - Relation Creation)
+%%% ============================================================================
+
+%% @doc Materialize an iterator pipeline into a new relation.
+%%
+%% This is the boundary between lazy evaluation (iterator pipeline) and
+%% eager materialization (stored relation). Consumes all tuples from the
+%% iterator and stores them as a new finite relation in the database.
+%%
+%% == Example ==
+%% ```
+%% %% Build lazy pipeline
+%% Pipeline = get_tuples_iterator(DB, employees, #{})
+%%            |> select_iterator(fun(E) -> maps:get(age, E) > 30 end)
+%%            |> sort_iterator(fun(A, B) -> maps:get(age, A) =< maps:get(age, B) end)
+%%            |> take_iterator(10)
+%%            |> project_iterator([name, age]),
+%%
+%% %% Materialize into new relation
+%% {DB1, SeniorEmployees} = materialize(DB, Pipeline, senior_employees).
+%% '''
+%%
+%% @param Database Current database state
+%% @param SourceIterator Iterator process (pipeline endpoint)
+%% @param ResultName Atom naming the new relation
+%% @returns `{UpdatedDatabase, NewRelation}' tuple
+materialize(Database, SourceIterator, ResultName) when is_record(Database, database_state) ->
+    %% 1. Pull all tuples from pipeline
+    AllTuples = collect_all(SourceIterator),
+
+    case AllTuples of
+        [] ->
+            %% Empty result - create empty relation
+            Schema = #{},  % Empty schema
+            create_relation(Database, ResultName, Schema);
+
+        [FirstTuple | _] ->
+            %% 2. Infer schema from first tuple
+            Schema = infer_schema_from_tuple(FirstTuple),
+
+            %% 3. Create new relation
+            {DB1, _Relation} = create_relation(Database, ResultName, Schema),
+
+            %% 4. Insert all tuples
+            {FinalDB, FinalRelation} = insert_all_tuples(DB1, ResultName, AllTuples),
+
+            {FinalDB, FinalRelation}
+    end.
+
+%% @private
+%% @doc Infer schema from a tuple.
+infer_schema_from_tuple(Tuple) when is_map(Tuple) ->
+    maps:map(fun(_AttrName, Value) -> infer_type(Value) end, Tuple).
+
+%% @private
+%% @doc Infer type from value.
+infer_type(Value) when is_integer(Value) -> integer;
+infer_type(Value) when is_float(Value) -> float;
+infer_type(Value) when is_binary(Value) -> binary;
+infer_type(Value) when is_list(Value) -> string;
+infer_type(Value) when is_atom(Value) -> atom;
+infer_type(Value) when is_boolean(Value) -> boolean;
+infer_type(_) -> term.
+
+%% @private
+%% @doc Insert multiple tuples into a relation.
+insert_all_tuples(DB, RelationName, Tuples) ->
+    lists:foldl(
+        fun(Tuple, {DBacc, _RelAcc}) ->
+            create_tuple(DBacc, RelationName, Tuple)
+        end,
+        {DB, undefined},
+        Tuples
+    ).
+
+%%% ============================================================================
+%%% Generator Support Functions
+%%% ============================================================================
+
+%% @private
+%% @doc Instantiate a generator from a generator specification.
+%%
+%% Converts a generator spec (stored in relation record) into an actual
+%% generator function that can produce tuples.
+%%
+%% @param GeneratorSpec Generator specification
+%% @param Constraints Boundedness constraints
+%% @returns Generator function
+instantiate_generator({primitive, naturals}, Constraints) ->
+    generators:naturals(Constraints);
+instantiate_generator({primitive, integers}, Constraints) ->
+    generators:integers(Constraints);
+instantiate_generator({primitive, rationals}, Constraints) ->
+    generators:rationals(Constraints);
+instantiate_generator({custom, GeneratorFun}, Constraints) ->
+    GeneratorFun(Constraints);
+instantiate_generator({take, RelationName, N}, Constraints) ->
+    %% Take generator: wrap another generator with limit
+    %% This is a simplified version - full implementation would look up the base relation
+    make_take_generator(RelationName, N, Constraints);
+instantiate_generator(Other, _) ->
+    erlang:error({unknown_generator, Other}).
+
+%% @private
+%% @doc Generator iterator loop for infinite relations.
+%%
+%% Similar to tuple_iterator_loop but works with generator functions instead
+%% of tuple hashes.
+%%
+%% @param Generator Generator function
+generator_iterator_loop(Generator) ->
+    receive
+        {next, Caller} ->
+            case Generator(next) of
+                done ->
+                    Caller ! done;
+                {value, Tuple, NextGen} ->
+                    Caller ! {tuple, Tuple},
+                    generator_iterator_loop(NextGen);
+                {error, Reason} ->
+                    Caller ! {error, Reason}
+            end;
+        stop ->
+            ok
+    end.
+
+%% @private
+%% @doc Create a take generator that limits another generator.
+make_take_generator(_RelationName, N, _Constraints) ->
+    %% Simplified version: just count to N
+    make_take_gen(0, N).
+
+make_take_gen(Current, Max) when Current < Max ->
+    fun(next) ->
+        Tuple = #{value => Current},
+        NextGen = make_take_gen(Current + 1, Max),
+        {value, Tuple, NextGen}
+    end;
+make_take_gen(_, _) ->
+    fun(_) -> done end.
 

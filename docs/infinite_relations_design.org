@@ -1,0 +1,348 @@
+#+TITLE: Infinite Relations Design
+#+AUTHOR: Nekoma Team
+#+DATE: 2025-01-22
+
+* Overview
+
+This document specifies the design for infinite relations in Domino, enabling
+countably infinite (ℵ₀) and uncountably infinite (continuum) relations alongside
+finite relations.
+
+** Core Principle
+
+*Everything is a relation.* Types are relations. Functions are relations.
+Numbers are relations. This unifies the type system with the data model.
+
+* Cardinality System
+
+** Cardinality Types
+
+#+BEGIN_SRC erlang
+-type cardinality() :: {finite, non_neg_integer()}  % Finite set with N elements
+                     | aleph_zero                    % Countably infinite (ℵ₀)
+                     | continuum.                    % Uncountably infinite (2^ℵ₀)
+#+END_SRC
+
+** Properties
+
+- Finite relations have explicit tuple count: ={finite, 1000}=
+- Countably infinite relations: =aleph_zero=
+- Uncountably infinite relations: =continuum=
+
+* Extended Data Model
+
+** Modified Relation Record
+
+#+BEGIN_SRC erlang
+-record(relation, {
+    hash,           % Content hash (for finite) or generator hash (for infinite)
+    name,           % Relation name (atom)
+    tree,           % Merkle tree (finite only), undefined for infinite
+    schema,         % Schema definition
+    cardinality,    % {finite, N} | aleph_zero | continuum
+    generator,      % Generator function (infinite only), undefined for finite
+    is_function     % Boolean: true if relation represents a function
+}).
+#+END_SRC
+
+** Generator Specification
+
+Generators are functions that produce tuples on-demand based on constraints.
+
+#+BEGIN_SRC erlang
+-type generator_spec() ::
+    {primitive, atom()}                          % Built-in: naturals, integers, rationals
+  | {function_relation, atom(), arity()}        % Built-in function: plus/3, times/3
+  | {custom, fun((constraints()) -> tuple())}   % User-defined generator
+  | {derived, relational_operation()}.          % Derived from other relations
+
+-type constraints() :: #{
+    attribute_name() => constraint_spec()
+}.
+
+-type constraint_spec() ::
+    {eq, value()}                    % Equality: age = 30
+  | {neq, value()}                   % Inequality: age ≠ 30
+  | {lt, value()}                    % Less than: age < 30
+  | {lte, value()}                   % Less than or equal
+  | {gt, value()}                    % Greater than
+  | {gte, value()}                   % Greater than or equal
+  | {in, [value()]}                  % Membership: age in [20,30,40]
+  | {range, value(), value()}        % Range: age in [20..30]
+  | {member_of, relation_name()}.    % Type constraint: x ∈ Naturals
+#+END_SRC
+
+* Primitive Infinite Relations
+
+** Naturals (ℕ)
+
+#+BEGIN_SRC erlang
+Schema: #{value => natural}
+Cardinality: aleph_zero
+Generator: Enumerates 0, 1, 2, 3, ...
+
+Example tuples:
+  #{value => 0}
+  #{value => 1}
+  #{value => 2}
+  ...
+#+END_SRC
+
+** Integers (ℤ)
+
+#+BEGIN_SRC erlang
+Schema: #{value => integer}
+Cardinality: aleph_zero
+Generator: Enumerates 0, 1, -1, 2, -2, 3, -3, ...
+
+Enumeration strategy: Interleave positive and negative
+  f(0) = 0
+  f(2n) = n      (for n > 0)
+  f(2n+1) = -n   (for n > 0)
+#+END_SRC
+
+** Rationals (ℚ)
+
+#+BEGIN_SRC erlang
+Schema: #{numerator => integer, denominator => natural}
+Cardinality: aleph_zero
+Generator: Stern-Brocot tree or Calkin-Wilf sequence
+
+Constraints:
+  - denominator > 0
+  - gcd(numerator, denominator) = 1  (reduced form)
+
+Example tuples:
+  #{numerator => 0, denominator => 1}   % 0/1
+  #{numerator => 1, denominator => 1}   % 1/1
+  #{numerator => 1, denominator => 2}   % 1/2
+  #{numerator => 2, denominator => 1}   % 2/1
+  #{numerator => 1, denominator => 3}   % 1/3
+  ...
+#+END_SRC
+
+** Reals (ℝ) - Theoretical
+
+#+BEGIN_SRC erlang
+Schema: #{value => real}
+Cardinality: continuum
+Generator: Not fully enumerable (conceptual only)
+
+Note: In practice, we can only represent computable reals or
+      algebraic reals (still countable but more expressive).
+#+END_SRC
+
+* Function Relations
+
+A relation R is a *function* if: ∀a ∃!b : (a,b) ∈ R
+
+That is, for every input, there exists exactly one output.
+
+** Plus (addition)
+
+#+BEGIN_SRC erlang
+Name: plus
+Schema: #{a => number, b => number, sum => number}
+Cardinality: aleph_zero (when a,b ∈ ℤ or ℚ)
+Is_function: false (it's a 3-way relation, not (a,b) → sum)
+Function view: plus(a, b) = sum  where (a, b, sum) ∈ Plus
+
+Generator: For each (a, b) pair, yield #{a => A, b => B, sum => A + B}
+
+Constraints required for iteration:
+  - At least two of {a, b, sum} must be bounded
+
+Valid queries:
+  - plus where a ∈ [0..10], b ∈ [0..10]          ✓ (finite result: 121 tuples)
+  - plus where a = 5, b ∈ Naturals               ✓ (countable: {5,0,5}, {5,1,6}, ...)
+  - plus where sum = 10                          ✓ (countable: infinitely many a+b=10)
+  - plus with no constraints                     ✗ (cannot enumerate)
+#+END_SRC
+
+** Times (multiplication)
+
+#+BEGIN_SRC erlang
+Name: times
+Schema: #{a => number, b => number, product => number}
+Cardinality: aleph_zero
+Generator: For each (a, b) pair, yield #{a => A, b => B, product => A * B}
+#+END_SRC
+
+** Successor
+
+#+BEGIN_SRC erlang
+Name: successor
+Schema: #{n => integer, succ => integer}
+Cardinality: aleph_zero
+Is_function: true (n → succ is a function)
+Generator: For each n, yield #{n => N, succ => N + 1}
+#+END_SRC
+
+* Cardinality Algebra
+
+Rules for computing cardinality of relational operations:
+
+** Union (∪)
+
+| Left       | Right      | Result     | Notes                    |
+|------------+------------+------------+--------------------------|
+| {finite,m} | {finite,n} | {finite,≤m+n} | May have duplicates  |
+| {finite,n} | aleph_zero | aleph_zero | Finite + infinite = infinite |
+| aleph_zero | aleph_zero | aleph_zero | ℵ₀ + ℵ₀ = ℵ₀            |
+| aleph_zero | continuum  | continuum  | Continuum dominates      |
+| continuum  | continuum  | continuum  | 2^ℵ₀ + 2^ℵ₀ = 2^ℵ₀      |
+
+** Cartesian Product (×)
+
+| Left       | Right      | Result        | Notes                 |
+|------------+------------+---------------+-----------------------|
+| {finite,m} | {finite,n} | {finite,m·n}  | Product of sizes      |
+| {finite,n} | aleph_zero | aleph_zero    | n · ℵ₀ = ℵ₀           |
+| aleph_zero | aleph_zero | aleph_zero    | ℵ₀ · ℵ₀ = ℵ₀          |
+| aleph_zero | continuum  | continuum     | ℵ₀ · 2^ℵ₀ = 2^ℵ₀      |
+| continuum  | continuum  | continuum     | 2^ℵ₀ · 2^ℵ₀ = 2^ℵ₀   |
+
+** Natural Join (⋈)
+
+Cardinality depends on join selectivity:
+
+| Left       | Right      | Result     | Notes                              |
+|------------+------------+------------+------------------------------------|
+| {finite,m} | {finite,n} | {finite,k} | k ≤ min(m,n) typically            |
+| {finite,n} | aleph_zero | varies     | Could be finite or aleph_zero      |
+| aleph_zero | aleph_zero | varies     | Depends on join condition          |
+
+*Examples:*
+
+#+BEGIN_SRC erlang
+%% Finite ⋈ Infinite (finite result)
+Employees = {finite, 100}     % 100 employees
+Naturals = aleph_zero         % Infinite numbers
+Employees ⋈ Naturals on employee_id = value
+  ⇒ {finite, 100}  % At most 100 matches
+
+%% Infinite ⋈ Infinite (infinite result)
+Naturals ⋈ Plus on Naturals.value = Plus.a
+  ⇒ aleph_zero     % For each natural n, infinite (n,b,n+b) tuples
+
+%% Infinite ⋈ Infinite (finite result with constraints)
+(Naturals where value < 10) ⋈ (Naturals where value < 10)
+  ⇒ {finite, 100}  % 10 × 10 = 100
+#+END_SRC
+
+** Selection (σ)
+
+| Input      | Result     | Notes                              |
+|------------+------------+------------------------------------|
+| {finite,n} | {finite,k} | k ≤ n (filtering reduces size)    |
+| aleph_zero | varies     | Could be finite or aleph_zero      |
+| continuum  | varies     | Could be any cardinality           |
+
+*Examples:*
+
+#+BEGIN_SRC erlang
+σ(Naturals, value < 10)    ⇒ {finite, 10}      % Bounded selection
+σ(Naturals, value > 5)     ⇒ aleph_zero         % Infinite result
+σ(Naturals, value % 2 = 0) ⇒ aleph_zero         % Even numbers (infinite)
+#+END_SRC
+
+** Projection (π)
+
+| Input      | Result     | Notes                           |
+|------------+------------+---------------------------------|
+| {finite,n} | {finite,k} | k ≤ n (duplicates removed)     |
+| aleph_zero | aleph_zero | Typically preserves infinity    |
+| continuum  | continuum  | Typically preserves cardinality |
+
+* Constraint System
+
+** Mandatory Constraints
+
+Queries on infinite relations *must* provide constraints that bound the iteration.
+
+#+BEGIN_SRC erlang
+%% INVALID: Cannot iterate infinite relation without constraints
+Iterator = get_tuples_iterator(DB, naturals).  ❌
+
+%% VALID: Bounded by constraint
+Iterator = get_tuples_iterator(DB, naturals, #{value => {range, 0, 100}}).  ✓
+#+END_SRC
+
+** Constraint Validation
+
+Before executing a query on an infinite relation, validate:
+
+1. *Finite result check*: Do constraints guarantee finite result?
+2. *Bounded iteration check*: Can we enumerate results in finite time?
+
+#+BEGIN_SRC erlang
+validate_constraints(Relation, Constraints) ->
+    case Relation#relation.cardinality of
+        {finite, _} ->
+            ok;  % Finite relations don't need constraints
+        aleph_zero ->
+            case infers_finite_result(Relation, Constraints) of
+                true -> ok;
+                false -> {error, unbounded_iteration}
+            end;
+        continuum ->
+            {error, uncountable_relation}  % Cannot iterate continuum
+    end.
+#+END_SRC
+
+** Constraint Inference
+
+Smart inference of finiteness:
+
+#+BEGIN_SRC erlang
+%% These constraints imply finite results:
+#{value => {range, 0, 100}}                    % Range is finite
+#{value => {in, [1,2,3,4,5]}}                  % Membership in finite set
+#{value => {lt, 10}}                           % Bounded above (if naturals)
+
+%% These do NOT imply finite results:
+#{value => {gt, 10}}                           % Unbounded above
+#{value => {neq, 5}}                           % Excludes one element
+#+END_SRC
+
+* Implementation Strategy
+
+** Phase 1: Core Infrastructure
+1. Extend =relation= record with =cardinality= and =generator= fields
+2. Implement cardinality algebra functions
+3. Add constraint validation framework
+
+** Phase 2: Primitive Relations
+1. Implement =naturals= generator
+2. Implement =integers= generator (interleaving strategy)
+3. Implement =rationals= generator (Stern-Brocot or Calkin-Wilf)
+
+** Phase 3: Function Relations
+1. Implement =plus= relation
+2. Implement =times= relation
+3. Implement =successor=, =predecessor= relations
+
+** Phase 4: Query Engine
+1. Extend iterator model to support generators
+2. Implement constraint-based enumeration
+3. Add cardinality inference for query results
+
+** Phase 5: Relational Operators
+1. Extend join to handle infinite relations
+2. Extend union with cardinality tracking
+3. Extend selection with constraint propagation
+
+* Open Questions
+
+1. *Partial materialization*: Should we cache generated tuples?
+2. *Generator composition*: How to compose generators for derived relations?
+3. *Constraint solving*: Do we need a full constraint solver (CLP)?
+4. *Termination guarantees*: How to prove queries terminate?
+5. *Physical storage*: How to persist infinite relation definitions?
+
+* References
+
+- Codd, E. F. (1979). "Extending the Database Relational Model"
+- Cantor, G. "On the Cardinality of Sets"
+- Stern-Brocot Tree: Enumeration of rationals
+- Calkin-Wilf Tree: Alternative rational enumeration
