@@ -1,0 +1,4 @@
+-record(database_state, {hash, name, tree, relations, timestamp}).
+-record(relation, {hash, name, tree, schema}).
+-record(tuple, {hash, relation, attribute_map}).
+-record(attribute, {hash, value}).

@@ -1,4 +1,5 @@
 -module(operations).
+-include("operations.hrl").
 -export([setup/0, 
 	 hash/1, 
          create_database/1,
@@ -43,11 +44,6 @@ setup() ->
         {disc_copies, [node()]},
         {type, set}
     ]).
-
--record(database_state, {hash, name, tree, relations, timestamp}).
--record(relation, {hash, name, tree, schema}).
--record(tuple, {hash, relation, attribute_map}).
--record(attribute, {hash, value}).
 
 hash(Value) ->
     crypto:hash(sha256, term_to_binary(Value)).
@@ -121,15 +117,17 @@ clear_relation(Database, RelationHash) ->
 clear_relation(Database, RelationHash, Transact) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, undefined}),
-    UpdatedRelation = 
+    UpdatedRelation =
 	Relation#relation{hash = NewRelationHash,
 			  tree = undefined},
     DatabaseTreeWithoutTuples = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
     {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuples,
-    UpdatedDatabase = 
+    NewRelations = maps:put(Relation#relation.name, NewRelationHash, Database#database_state.relations),
+    UpdatedDatabase =
 	Database#database_state{timestamp = erlang:timestamp(),
 			        hash = NewDatabaseHash,
-			        tree = DatabaseTreeWithoutTuples},
+			        tree = DatabaseTreeWithoutTuples,
+			        relations = NewRelations},
      TX = fun () ->
 		 mnesia:write(relation, UpdatedRelation, write),
 		 mnesia:write(database_state, UpdatedDatabase, write),
@@ -141,7 +139,7 @@ clear_relation(Database, RelationHash, Transact) ->
     end.
 retract_tuple(Database, RelationHash, TupleHash) ->
     retract_tuple(Database, RelationHash, TupleHash, true).
-retract_tuple(Database, RelationHash, TupleHash, Transact) 
+retract_tuple(Database, RelationHash, TupleHash, Transact)
   when is_record(Database, database_state) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     RelationTreeWithoutTuple = merklet:delete(TupleHash, Relation#relation.tree),
@@ -149,10 +147,12 @@ retract_tuple(Database, RelationHash, TupleHash, Transact)
     NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, NewRelationTreeHash}),
     DatabaseTreeWithoutTuple = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
     {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuple,
+    NewRelations = maps:put(Relation#relation.name, NewRelationHash, Database#database_state.relations),
     UpdatedDatabase =
 	Database#database_state{timestamp = erlang:timestamp(),
 				hash = NewDatabaseHash,
-			        tree = DatabaseTreeWithoutTuple},
+			        tree = DatabaseTreeWithoutTuple,
+			        relations = NewRelations},
     UpdatedRelation =
 	Relation#relation{hash = NewRelationHash,
 			  tree = RelationTreeWithoutTuple},
@@ -171,8 +171,11 @@ retract_relation(Database, Name) ->
 retract_relation(Database, Name, Transact) ->
     RelationHash = maps:get(Name, Database#database_state.relations, {error, retract_relation_could_not_find}),
     {DatabaseWithClearedRelation, _ClearedRelation} = clear_relation(Database, RelationHash, false),
-    NewTree = merklet:delete(Name, DatabaseWithClearedRelation#database_state.tree),
-    {_,NewHash,_,_} = NewTree,
+    NewTree = merklet:delete(atom_to_binary(Name, utf8), DatabaseWithClearedRelation#database_state.tree),
+    NewHash = case NewTree of
+                  undefined -> <<>>;
+                  {_,H,_,_} -> H
+              end,
     UpdatedDatabase =
 	DatabaseWithClearedRelation#database_state{relations = maps:remove(Name, DatabaseWithClearedRelation#database_state.relations),
 						   hash = NewHash,
