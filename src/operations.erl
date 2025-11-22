@@ -4,6 +4,12 @@
          create_database/1,
 	 create_relation/3, 
 	 create_tuple/3, 
+	 retract_tuple/3,
+	 retract_tuple/4,
+	 clear_relation/2,
+	 clear_relation/3,
+	 retract_relation/2,
+	 retract_relation/3,
 	 get_relations/1, 
 	 get_relation_hash/2,
          hashes_from_tuple/1,
@@ -77,7 +83,8 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
         NewRelationTree = merklet:insert({TupleHash, <<>>}, RelationRecord#relation.tree),
         
         %% Step 6: Compute new relation hash as the root of the new merkle tree and store
-        {_,NewRelationHash,_,_} = NewRelationTree,
+        {_,NewRelationTreeHash,_,_} = NewRelationTree,
+	NewRelationHash = hash({RelationRecord#relation.name, RelationRecord#relation.schema, NewRelationTreeHash}),
         UpdatedRelation = #relation{
             hash = NewRelationHash, 
             name = RelationName, 
@@ -109,15 +116,38 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     
     {atomic, Result} = mnesia:transaction(F),
     Result.
-
-retract_tuple(Database, RelationHash, TupleHashes) 
-  when is_record(Database, database_state) andalso is_list(TupleHashes) ->
-    todo;
-retract_tuple(Database, RelationHash, TupleHash) when is_record(Database, database_state) ->
+clear_relation(Database, RelationHash) ->
+    clear_relation(Database, RelationHash, true).
+clear_relation(Database, RelationHash, Transact) ->
+    [Relation] = mnesia:dirty_read(relation, RelationHash),
+    NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, undefined}),
+    UpdatedRelation = 
+	Relation#relation{hash = NewRelationHash,
+			  tree = undefined},
+    DatabaseTreeWithoutTuples = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
+    {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuples,
+    UpdatedDatabase = 
+	Database#database_state{timestamp = erlang:timestamp(),
+			        hash = NewDatabaseHash,
+			        tree = DatabaseTreeWithoutTuples},
+     TX = fun () ->
+		 mnesia:write(relation, UpdatedRelation, write),
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 {UpdatedDatabase, UpdatedRelation}
+	 end,
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> {UpdatedDatabase, UpdatedRelation}
+    end.
+retract_tuple(Database, RelationHash, TupleHash) ->
+    retract_tuple(Database, RelationHash, TupleHash, true).
+retract_tuple(Database, RelationHash, TupleHash, Transact) 
+  when is_record(Database, database_state) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     RelationTreeWithoutTuple = merklet:delete(TupleHash, Relation#relation.tree),
-    {_,NewRelationHash,_,_} = RelationTreeWithoutTuple,
-    DatabaseTreeWithoutTuple = merklet:delete(RelationHash, Database#database_state.tree),
+    {_,NewRelationTreeHash,_,_} = RelationTreeWithoutTuple,
+    NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, NewRelationTreeHash}),
+    DatabaseTreeWithoutTuple = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
     {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuple,
     UpdatedDatabase =
 	Database#database_state{timestamp = erlang:timestamp(),
@@ -128,15 +158,34 @@ retract_tuple(Database, RelationHash, TupleHash) when is_record(Database, databa
 			  tree = RelationTreeWithoutTuple},
     TX = fun () ->
 		 mnesia:write(relation, UpdatedRelation, write),
-		 mnesia:write(database_state, UpdatedDatabase, write)
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 {UpdatedDatabase, UpdatedRelation}
 	 end,
-    case mnesia:is_transaction() of
-	true -> TX();
-	false -> mnesia:transaction(TX)
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> {UpdatedDatabase, UpdatedRelation}
     end.
 
 retract_relation(Database, Name) ->
-    todo.
+    retract_relation(Database, Name, true).
+retract_relation(Database, Name, Transact) ->
+    RelationHash = maps:get(Name, Database#database_state.relations, {error, retract_relation_could_not_find}),
+    {DatabaseWithClearedRelation, _ClearedRelation} = clear_relation(Database, RelationHash, false),
+    NewTree = merklet:delete(Name, DatabaseWithClearedRelation#database_state.tree),
+    {_,NewHash,_,_} = NewTree,
+    UpdatedDatabase =
+	DatabaseWithClearedRelation#database_state{relations = maps:remove(Name, DatabaseWithClearedRelation#database_state.relations),
+						   hash = NewHash,
+						   tree = NewTree,
+						   timestamp = erlang:timestamp()},
+    TX = fun () ->
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 UpdatedDatabase
+	 end,
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> UpdatedDatabase
+    end.
 
 create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
     F = fun() ->
@@ -145,7 +194,7 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
         %% It may sound nominalistic but that is a physical concern.
         %% Two relations might share definitions but their name gives another interpretation
         %% and therefore different tuples
-        RelationHash = hash({Name, Definition}),
+        RelationHash = hash({Name, Definition, undefined}),
         NewRelation = #relation{
             hash = RelationHash, 
             name = Name, 
