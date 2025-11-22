@@ -1,0 +1,272 @@
+#+TITLE: Code Documentation
+
+* Overview
+
+Domino is a content-addressed, immutable relational database engine written in Erlang. The system uses cryptographic hashing (SHA-256) and Merkle trees to provide version control, deduplication, and efficient synchronization capabilities.
+
+* Architecture
+
+** Design Patterns
+
+- *Content-Addressed Storage* :: All data (attributes, tuples, relations, databases) are identified by their cryptographic hash
+- *Immutable Data Structures* :: All operations create new versions rather than modifying existing data
+- *Merkle Trees* :: Relations and databases use merkle trees for efficient diffing and synchronization
+- *Volcano Iterator Model* :: Query execution uses lazy evaluation with process-based iterators
+- *Actor Model* :: Iterators are implemented as independent Erlang processes
+- *Transactional Storage* :: Mnesia provides ACID guarantees for all mutations
+
+* Module Structure
+
+** operations.erl
+
+The core database operations module and main API.
+
+*** Public API
+
+**** Database & Relation Management
+- =setup/0= :: Initialize Mnesia schema and create all tables
+- =create_database/1= :: Create a new database state
+- =create_relation/3= :: Add a relation to a database with schema
+- =get_relations/1= :: List all relation names in a database
+- =get_relation_hash/2= :: Get relation hash by name
+
+**** Tuple Operations
+- =create_tuple/3= :: Insert a tuple into a relation (transactional)
+- =retract_tuple/3= :: Remove a tuple from a relation (default: transactional)
+- =retract_tuple/4= :: Remove a tuple with optional transaction control
+
+**** Relation Operations
+- =clear_relation/2= :: Remove all tuples from a relation (default: transactional)
+- =clear_relation/3= :: Clear relation with optional transaction control
+- =retract_relation/2= :: Remove a relation from database (default: transactional)
+- =retract_relation/3= :: Remove relation with optional transaction control
+
+**** Iterator Pattern (Volcano Model)
+- =get_tuples_iterator/2= :: Create lazy iterator process for relation tuples
+- =next_tuple/1= :: Pull next tuple from iterator (returns ={ok, Tuple} | done=)
+- =close_iterator/1= :: Terminate iterator process
+- =collect_all/1= :: Helper to consume entire iterator into list
+
+**** Utility Functions
+- =hash/1= :: SHA-256 hash of term
+- =hashes_from_tuple/1= :: Extract all tuple hashes from a relation
+
+** relation.erl
+
+Simple helper module for building tuples and relations conceptually.
+
+*** Public API
+- =new_attribute/2= :: Create attribute map: =#{name => Name, value => Value}=
+- =new_tuple/1= :: Convert list of attributes to map
+- =new_relation/1= :: Convert list of tuples to sets:set
+
+** poc.erl
+
+Proof-of-concept demonstrating the Volcano Iterator Model for query execution.
+
+*** Key Concepts
+- Content-addressed storage simulation using in-memory maps
+- Lazy iterator chain: Scan → Select → Project
+- Message-passing protocol for tuple streaming
+- Automatic deduplication via hashing
+
+** main.erl
+
+OTP application entry point. Starts Mnesia on application startup.
+
+* Data Structures
+
+All core records are defined in =include/operations.hrl=.
+
+** attribute
+#+BEGIN_SRC erlang
+-record(attribute, {
+    hash,    % SHA-256 hash of value
+    value    % Actual value (any Erlang term)
+}).
+#+END_SRC
+
+** tuple
+#+BEGIN_SRC erlang
+-record(tuple, {
+    hash,           % SHA-256 hash of entire tuple
+    relation,       % Relation name (atom)
+    attribute_map   % #{attr_name => value_hash}
+}).
+#+END_SRC
+
+** relation
+#+BEGIN_SRC erlang
+-record(relation, {
+    hash,    % hash({name, schema, tree_root})
+    name,    % Relation name (atom)
+    tree,    % Merkle tree of tuple hashes
+    schema   % Schema definition map
+}).
+#+END_SRC
+
+** database_state
+#+BEGIN_SRC erlang
+-record(database_state, {
+    hash,       % Merkle tree root hash
+    name,       % Database name (atom)
+    tree,       % Merkle tree of relations
+    relations,  % #{relation_name => relation_hash}
+    timestamp   % Creation/modification timestamp
+}).
+#+END_SRC
+
+* Data Flow
+
+** Creating a Tuple
+
+1. Store each attribute value separately (enables deduplication)
+2. Build attribute_map with hashes: =#{name => AttrHash1, age => AttrHash2}=
+3. Create tuple record with hash
+4. Insert tuple hash into relation's merkle tree
+5. Compute new relation hash from tree root
+6. Update database merkle tree
+7. Return updated database and relation
+
+All operations occur within a Mnesia transaction.
+
+** Querying Tuples
+
+1. Lookup relation hash from database
+2. Read relation from Mnesia
+3. Extract tuple hashes from merkle tree
+4. Spawn iterator process with hash list
+5. Client pulls tuples via message passing
+6. Iterator resolves: hash → tuple → attribute hashes → actual values
+7. Return materialized tuple map
+
+* Usage Examples
+
+** Basic Workflow
+
+#+BEGIN_SRC erlang
+%% Setup
+operations:setup().
+
+%% Create database
+DB = operations:create_database(my_app).
+
+%% Create relation with schema
+{DB1, _Rel} = operations:create_relation(DB, users, #{
+    name => string,
+    age => integer
+}).
+
+%% Insert tuples
+{DB2, _} = operations:create_tuple(DB1, users, #{name => "Alice", age => 30}).
+{DB3, _} = operations:create_tuple(DB2, users, #{name => "Bob", age => 25}).
+
+%% Query tuples
+Iterator = operations:get_tuples_iterator(DB3, users).
+Tuples = operations:collect_all(Iterator).
+%% Returns: [#{name => "Alice", age => 30}, #{name => "Bob", age => 25}]
+
+%% Remove tuple
+{ok, RelHash} = operations:get_relation_hash(DB3, users).
+[TupleHash|_] = operations:hashes_from_tuple(RelHash).
+{atomic, {DB4, _}} = operations:retract_tuple(DB3, RelHash, TupleHash).
+
+%% Clear relation (remove all tuples, keep schema)
+{atomic, {DB5, _}} = operations:clear_relation(DB4, RelHash).
+
+%% Remove relation entirely
+{atomic, DB6} = operations:retract_relation(DB5, users).
+#+END_SRC
+
+** Iterator Protocol
+
+#+BEGIN_SRC erlang
+Iterator = operations:get_tuples_iterator(DB, users).
+
+%% Pull tuples one by one
+case operations:next_tuple(Iterator) of
+    {ok, Tuple} -> process_tuple(Tuple);
+    done -> io:format("No more tuples~n")
+end.
+
+%% Or collect all at once
+AllTuples = operations:collect_all(Iterator).
+
+%% Clean up
+operations:close_iterator(Iterator).
+#+END_SRC
+
+* Key Implementation Details
+
+** Immutability & Versioning
+
+Every modification creates a new hash. Old versions remain accessible via their hash. Database evolution is tracked via timestamp and hash chain.
+
+** Deduplication
+
+Identical attribute values are stored once (content-addressed). Example: 1000 users with age=30 store the value "30" only once.
+
+** Transaction Semantics
+
+All mutations are wrapped in =mnesia:transaction/1=. Dirty reads are used for immutable data lookups.
+
+** Merkle Tree Strategy
+
+- Relations store tuple hashes as keys: ={TupleHash, <<>>}=
+- Databases store relation names → hashes: ={RelationName, RelationHash}=
+- Enables efficient diff computation between versions
+- Foundation for distributed synchronization
+
+** Iterator Pattern
+
+- Decouples query execution from data access
+- Enables pipelined query operators (future: select, project, join)
+- Memory bounded (doesn't materialize entire relation)
+- Process-based concurrency via Erlang actors
+
+** Schema Flexibility
+
+Schema stored as map (e.g., =#{name => string, age => integer}=). Currently not enforced, but provides foundation for future domain validation.
+
+* Dependencies
+
+- =merklet= (2.0.0) :: Merkle tree implementation for set reconciliation
+- =mnesia= :: Distributed database for persistent storage
+- =crypto= :: SHA-256 hashing
+
+* Testing
+
+The test suite (=test/operations_test.erl=) validates:
+
+- Functional correctness (CRUD operations)
+- Hash determinism and consistency
+- Transactional integrity
+- Iterator protocol compliance
+- State evolution tracking
+- Cross-database consistency
+
+Run tests with:
+
+#+BEGIN_SRC sh
+rebar3 eunit
+#+END_SRC
+
+* Current State
+
+** Implemented
+- Core data model (attribute, tuple, relation, database)
+- Content-addressed storage with SHA-256
+- Immutable versioning
+- Merkle tree integration
+- Iterator-based lazy evaluation
+- Transactional CRUD operations
+- Comprehensive test suite
+
+** Not Yet Implemented
+- Relational algebra operators (σ, π, ⋈, ∪, ∩, −)
+- Schema validation and type checking
+- Infinite relations (aleph₀)
+- Join indexing
+- Query optimization
+- Distributed synchronization
+- REPL/query console

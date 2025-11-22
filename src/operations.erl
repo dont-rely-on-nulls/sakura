@@ -1,17 +1,77 @@
+%%% @doc Extended Relational Database Operations (RM/T)
+%%%
+%%% This module implements core database operations for Domino, an extended
+%%% relational database engine based on E. F. Codd's RM/T (1979).
+%%%
+%%% == Architecture ==
+%%%
+%%% The system uses:
+%%% <ul>
+%%%   <li><b>Content-Addressed Storage</b> - All entities identified by SHA-256 hashes</li>
+%%%   <li><b>Immutable Data Structures</b> - Operations create new versions</li>
+%%%   <li><b>Merkle Trees</b> - Efficient versioning and diffing via merklet</li>
+%%%   <li><b>Mnesia Backend</b> - ACID transactions and persistent storage</li>
+%%%   <li><b>Volcano Iterator Model</b> - Lazy evaluation with process-based iterators</li>
+%%% </ul>
+%%%
+%%% == Data Model ==
+%%%
+%%% The system maintains four tables in Mnesia:
+%%% <ul>
+%%%   <li>`attribute' - Stores atomic values with their hashes</li>
+%%%   <li>`tuple' - Stores tuples as maps from attribute names to value hashes</li>
+%%%   <li>`relation' - Stores relations with merkle trees of tuple hashes</li>
+%%%   <li>`database_state' - Stores database snapshots with relation merkle trees</li>
+%%% </ul>
+%%%
+%%% == RM/T Integrity Rules ==
+%%%
+%%% <ul>
+%%%   <li><b>Rule 3 (Entity Integrity)</b> - E-relations accept insertions/deletions, not updates</li>
+%%%   <li><b>Rule 4 (Property Integrity)</b> - Tuples require entity existence in E-relation</li>
+%%% </ul>
+%%%
+%%% @author Nekoma Team
+%%% @copyright 2025
+%%% @version 0.1.0
+%%% @reference E. F. Codd (1979). "Extending the Database Relational Model to Capture More Meaning"
+%%% @reference E. F. Codd (1970). "A Relational Model of Data for Large Shared Data Banks"
+
 -module(operations).
--export([setup/0, 
-	 hash/1, 
+-include("operations.hrl").
+-export([setup/0,
+	 hash/1,
          create_database/1,
-	 create_relation/3, 
-	 create_tuple/3, 
-	 get_relations/1, 
+	 create_relation/3,
+	 create_tuple/3,
+	 retract_tuple/3,
+	 retract_tuple/4,
+	 clear_relation/2,
+	 clear_relation/3,
+	 retract_relation/2,
+	 retract_relation/3,
+	 get_relations/1,
 	 get_relation_hash/2,
          hashes_from_tuple/1,
 	 get_tuples_iterator/2,
 	 next_tuple/1,
-	 close_iterator/1, 
+	 close_iterator/1,
 	 collect_all/1]).
 
+%% @doc Initialize Mnesia database schema and tables.
+%%
+%% Creates a fresh Mnesia schema with four tables for content-addressed storage:
+%% <ul>
+%%   <li>`attribute' - Hash → Value mapping for deduplication</li>
+%%   <li>`tuple' - Hash → Tuple mapping with attribute references</li>
+%%   <li>`relation' - Hash → Relation with merkle tree and schema</li>
+%%   <li>`database_state' - Hash → Database with relation merkle tree</li>
+%% </ul>
+%%
+%% <b>Warning:</b> This function deletes any existing schema and recreates it from scratch.
+%%
+%% @returns `ok' on success
+%% @see create_database/1
 setup() ->
     mnesia:stop(),
     mnesia:delete_schema([node()]),
@@ -38,19 +98,48 @@ setup() ->
         {type, set}
     ]).
 
--record(database_state, {hash, name, tree, relations, timestamp}).
--record(relation, {hash, name, tree, schema}).
--record(tuple, {hash, relation, attribute_map}).
--record(attribute, {hash, value}).
-
+%% @doc Compute SHA-256 hash of an Erlang term.
+%%
+%% This is the foundational hashing function used throughout the system for
+%% content addressing. All entities (attributes, tuples, relations, databases)
+%% are identified by hashes computed with this function.
+%%
+%% @param Value Any Erlang term to hash
+%% @returns Binary SHA-256 hash (32 bytes)
+%%
+%% @see create_tuple/3
+%% @see create_relation/3
 hash(Value) ->
     crypto:hash(sha256, term_to_binary(Value)).
 
-%% @doc Store a tuple into a relation and update database state
-%% Database: #database_state{} record
-%% Relation: relation name (atom)
-%% Tuple: (map) #{name => "John", age => 18}
-%% Returns: {UpdatedDatabase, UpdatedRelation}
+%% @doc Insert a tuple into a relation and update the database state.
+%%
+%% This is the primary operation for adding data to the database. It:
+%% <ol>
+%%   <li>Stores each attribute value with its hash (automatic deduplication)</li>
+%%   <li>Creates a tuple record mapping attribute names to value hashes</li>
+%%   <li>Inserts the tuple hash into the relation's merkle tree</li>
+%%   <li>Computes new relation hash from updated tree</li>
+%%   <li>Updates database merkle tree with new relation hash</li>
+%%   <li>Computes new database hash</li>
+%% </ol>
+%%
+%% All operations execute within a Mnesia transaction for ACID guarantees.
+%%
+%% == Example ==
+%% ```
+%% DB = operations:create_database(my_db),
+%% {DB1, _} = operations:create_relation(DB, users, #{name => string, age => integer}),
+%% {DB2, _} = operations:create_tuple(DB1, users, #{name => "Alice", age => 30}).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationName Atom naming the relation
+%% @param Tuple Map of attribute names to values (e.g., `#{name => "Alice", age => 30}')
+%% @returns `{UpdatedDatabase, UpdatedRelation}' tuple
+%%
+%% @see create_relation/3
+%% @see get_tuples_iterator/2
 create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Database, database_state) ->
     F = fun() ->
         %% Step 1: Store each attribute value and build attribute_map
@@ -77,7 +166,8 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
         NewRelationTree = merklet:insert({TupleHash, <<>>}, RelationRecord#relation.tree),
         
         %% Step 6: Compute new relation hash as the root of the new merkle tree and store
-        {_,NewRelationHash,_,_} = NewRelationTree,
+        {_,NewRelationTreeHash,_,_} = NewRelationTree,
+	NewRelationHash = hash({RelationRecord#relation.name, RelationRecord#relation.schema, NewRelationTreeHash}),
         UpdatedRelation = #relation{
             hash = NewRelationHash, 
             name = RelationName, 
@@ -110,34 +200,181 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     {atomic, Result} = mnesia:transaction(F),
     Result.
 
-retract_tuple(Database, RelationHash, TupleHashes) 
-  when is_record(Database, database_state) andalso is_list(TupleHashes) ->
-    todo;
-retract_tuple(Database, RelationHash, TupleHash) when is_record(Database, database_state) ->
+%% @doc Clear all tuples from a relation (truncate).
+%%
+%% Wrapper for `clear_relation/3' with transactions enabled.
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationHash Binary hash identifying the relation
+%% @returns `{atomic, {UpdatedDatabase, UpdatedRelation}}' or `{aborted, Reason}'
+%%
+%% @see clear_relation/3
+%% @see retract_relation/2
+clear_relation(Database, RelationHash) ->
+    clear_relation(Database, RelationHash, true).
+
+%% @doc Clear all tuples from a relation with optional transaction control.
+%%
+%% Removes all tuples from the relation but preserves its schema. The relation's
+%% merkle tree is set to `undefined', and a new relation hash is computed.
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationHash Binary hash identifying the relation
+%% @param Transact Boolean - if `true', wraps operation in Mnesia transaction
+%% @returns When `Transact =:= true': `{atomic, {UpdatedDatabase, UpdatedRelation}}'
+%%          When `Transact =:= false': `{UpdatedDatabase, UpdatedRelation}'
+%%
+%% @see retract_relation/2
+clear_relation(Database, RelationHash, Transact) ->
+    [Relation] = mnesia:dirty_read(relation, RelationHash),
+    NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, undefined}),
+    UpdatedRelation =
+	Relation#relation{hash = NewRelationHash,
+			  tree = undefined},
+    DatabaseTreeWithoutTuples = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
+    {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuples,
+    NewRelations = maps:put(Relation#relation.name, NewRelationHash, Database#database_state.relations),
+    UpdatedDatabase =
+	Database#database_state{timestamp = erlang:timestamp(),
+			        hash = NewDatabaseHash,
+			        tree = DatabaseTreeWithoutTuples,
+			        relations = NewRelations},
+     TX = fun () ->
+		 mnesia:write(relation, UpdatedRelation, write),
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 {UpdatedDatabase, UpdatedRelation}
+	 end,
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> {UpdatedDatabase, UpdatedRelation}
+    end.
+
+%% @doc Remove a tuple from a relation.
+%%
+%% Wrapper for `retract_tuple/4' with transactions enabled.
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationHash Binary hash identifying the relation
+%% @param TupleHash Binary hash identifying the tuple to remove
+%% @returns `{atomic, {UpdatedDatabase, UpdatedRelation}}' or `{aborted, Reason}'
+%%
+%% @see retract_tuple/4
+%% @see create_tuple/3
+retract_tuple(Database, RelationHash, TupleHash) ->
+    retract_tuple(Database, RelationHash, TupleHash, true).
+
+%% @doc Remove a tuple from a relation with optional transaction control.
+%%
+%% Deletes a specific tuple from the relation's merkle tree and recomputes
+%% the relation and database hashes.
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationHash Binary hash identifying the relation
+%% @param TupleHash Binary hash identifying the tuple to remove
+%% @param Transact Boolean - if `true', wraps operation in Mnesia transaction
+%% @returns When `Transact =:= true': `{atomic, {UpdatedDatabase, UpdatedRelation}}'
+%%          When `Transact =:= false': `{UpdatedDatabase, UpdatedRelation}'
+%%
+%% @see create_tuple/3
+retract_tuple(Database, RelationHash, TupleHash, Transact)
+  when is_record(Database, database_state) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     RelationTreeWithoutTuple = merklet:delete(TupleHash, Relation#relation.tree),
-    {_,NewRelationHash,_,_} = RelationTreeWithoutTuple,
-    DatabaseTreeWithoutTuple = merklet:delete(RelationHash, Database#database_state.tree),
+    {_,NewRelationTreeHash,_,_} = RelationTreeWithoutTuple,
+    NewRelationHash = hash({Relation#relation.name, Relation#relation.schema, NewRelationTreeHash}),
+    DatabaseTreeWithoutTuple = merklet:insert({atom_to_binary(Relation#relation.name, utf8), NewRelationHash}, Database#database_state.tree),
     {_,NewDatabaseHash,_,_} = DatabaseTreeWithoutTuple,
+    NewRelations = maps:put(Relation#relation.name, NewRelationHash, Database#database_state.relations),
     UpdatedDatabase =
 	Database#database_state{timestamp = erlang:timestamp(),
 				hash = NewDatabaseHash,
-			        tree = DatabaseTreeWithoutTuple},
+			        tree = DatabaseTreeWithoutTuple,
+			        relations = NewRelations},
     UpdatedRelation =
 	Relation#relation{hash = NewRelationHash,
 			  tree = RelationTreeWithoutTuple},
     TX = fun () ->
 		 mnesia:write(relation, UpdatedRelation, write),
-		 mnesia:write(database_state, UpdatedDatabase, write)
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 {UpdatedDatabase, UpdatedRelation}
 	 end,
-    case mnesia:is_transaction() of
-	true -> TX();
-	false -> mnesia:transaction(TX)
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> {UpdatedDatabase, UpdatedRelation}
     end.
 
+%% @doc Remove a relation from the database.
+%%
+%% Wrapper for `retract_relation/3' with transactions enabled.
+%%
+%% @param Database `#database_state{}' record
+%% @param Name Atom naming the relation to remove
+%% @returns `{atomic, UpdatedDatabase}' or `{aborted, Reason}'
+%%
+%% @see retract_relation/3
+%% @see clear_relation/2
 retract_relation(Database, Name) ->
-    todo.
+    retract_relation(Database, Name, true).
 
+%% @doc Remove a relation from the database with optional transaction control.
+%%
+%% First clears all tuples from the relation, then removes the relation entirely
+%% from the database's relation map and merkle tree.
+%%
+%% @param Database `#database_state{}' record
+%% @param Name Atom naming the relation to remove
+%% @param Transact Boolean - if `true', wraps operation in Mnesia transaction
+%% @returns When `Transact =:= true': `{atomic, UpdatedDatabase}'
+%%          When `Transact =:= false': `UpdatedDatabase'
+%%
+%% @see create_relation/3
+retract_relation(Database, Name, Transact) ->
+    RelationHash = maps:get(Name, Database#database_state.relations, {error, retract_relation_could_not_find}),
+    {DatabaseWithClearedRelation, _ClearedRelation} = clear_relation(Database, RelationHash, false),
+    NewTree = merklet:delete(atom_to_binary(Name, utf8), DatabaseWithClearedRelation#database_state.tree),
+    NewHash = case NewTree of
+                  undefined -> <<>>;
+                  {_,H,_,_} -> H
+              end,
+    UpdatedDatabase =
+	DatabaseWithClearedRelation#database_state{relations = maps:remove(Name, DatabaseWithClearedRelation#database_state.relations),
+						   hash = NewHash,
+						   tree = NewTree,
+						   timestamp = erlang:timestamp()},
+    TX = fun () ->
+		 mnesia:write(database_state, UpdatedDatabase, write),
+		 UpdatedDatabase
+	 end,
+    case Transact of
+	true -> mnesia:transaction(TX);
+	false -> UpdatedDatabase
+    end.
+
+%% @doc Create a new relation in the database with a schema definition.
+%%
+%% Creates an empty relation (no tuples) with the specified schema. The schema
+%% is stored but not yet enforced - it serves as documentation and provides a
+%% foundation for future domain validation.
+%%
+%% <b>Important:</b> The relation's identity is tied to its name. Two relations
+%% with identical schemas but different names are semantically distinct and can
+%% contain different tuples.
+%%
+%% == Example ==
+%% ```
+%% DB = operations:create_database(my_db),
+%% Schema = #{name => string, age => integer, email => string},
+%% {DB1, _Rel} = operations:create_relation(DB, users, Schema).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param Name Atom naming the new relation
+%% @param Definition Map specifying schema (e.g., `#{name => string, age => integer}')
+%% @returns `{UpdatedDatabase, NewRelation}' tuple
+%%
+%% @see create_database/1
+%% @see create_tuple/3
+%% @see retract_relation/2
 create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
     F = fun() ->
         %% Create relation with empty tree
@@ -145,7 +382,7 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
         %% It may sound nominalistic but that is a physical concern.
         %% Two relations might share definitions but their name gives another interpretation
         %% and therefore different tuples
-        RelationHash = hash({Name, Definition}),
+        RelationHash = hash({Name, Definition, undefined}),
         NewRelation = #relation{
             hash = RelationHash, 
             name = Name, 
@@ -178,32 +415,87 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
     {atomic, Result} = mnesia:transaction(F),
     Result.
 
+%% @doc Create a new database state.
+%%
+%% Initializes an empty database with no relations. The database starts with:
+%% <ul>
+%%   <li>Empty relation map</li>
+%%   <li>Undefined merkle tree (will be created when first relation is added)</li>
+%%   <li>Empty hash</li>
+%%   <li>Timestamp of creation</li>
+%% </ul>
+%%
+%% All changes are committed to Mnesia within a transaction.
+%%
+%% == Example ==
+%% ```
+%% DB = operations:create_database(my_app).
+%% '''
+%%
+%% @param Name Atom identifying the database
+%% @returns `#database_state{}' record
+%%
+%% @see setup/0
+%% @see create_relation/3
 create_database(Name) ->
     Entry = #database_state{
-        name = Name, 
-        hash = <<>>, 
+        name = Name,
+        hash = <<>>,
         tree = undefined,
         relations = #{},
         timestamp = erlang:timestamp()
     },
-    {atomic, ok} = mnesia:transaction(fun () -> 
-        mnesia:write(database_state, Entry, write) 
+    {atomic, ok} = mnesia:transaction(fun () ->
+        mnesia:write(database_state, Entry, write)
     end),
     Entry.
 
-%% @doc Get all relation names in a database
+%% @doc Get all relation names in a database.
+%%
+%% Returns a list of atoms representing all relation names currently
+%% defined in the database.
+%%
+%% @param Database `#database_state{}' record
+%% @returns List of atoms (relation names)
+%%
+%% @see get_relation_hash/2
+%% @see create_relation/3
 get_relations(Database) ->
     maps:keys(Database#database_state.relations).
 
-%% @doc Get relation hash by name
+%% @doc Get relation hash by name.
+%%
+%% Looks up a relation's hash in the database's relation map. This hash
+%% can be used to retrieve the full relation record from Mnesia.
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationName Atom naming the relation
+%% @returns `{ok, Hash}' on success, `{error, not_found}' if relation doesn't exist
+%%
+%% @see get_relations/1
+%% @see hashes_from_tuple/1
 get_relation_hash(Database, RelationName) ->
     case maps:find(RelationName, Database#database_state.relations) of
         error -> {error, not_found};
         X -> X
     end.
 
-%% @doc Resolve a tuple hash to actual values
-%% Returns map with attribute names and actual values
+%% @doc Resolve a tuple hash to actual values.
+%%
+%% This is an internal function that materializes a tuple by:
+%% <ol>
+%%   <li>Reading the tuple record from Mnesia (contains attribute_map)</li>
+%%   <li>For each attribute, reading the actual value using its hash</li>
+%%   <li>Building a map with attribute names and materialized values</li>
+%% </ol>
+%%
+%% Uses dirty reads since all data is immutable.
+%%
+%% @param TupleHash Binary hash identifying the tuple
+%% @returns Map with attribute names and actual values (e.g., `#{name => "Alice", age => 30}')
+%%
+%% @see get_tuples_iterator/2
+%% @see create_tuple/3
 resolve_tuple(TupleHash) ->
     [#tuple{attribute_map = AttributeMap}] = mnesia:dirty_read(tuple, TupleHash),
     maps:map(fun(_AttrName, ValueHash) ->
@@ -211,8 +503,18 @@ resolve_tuple(TupleHash) ->
         Value
     end, AttributeMap).
 
-%% All reads can be dirty as it is all immutable
-%% Writes need to be transactional
+%% @doc Extract all tuple hashes from a relation.
+%%
+%% Retrieves the list of all tuple hashes stored in the relation's merkle tree.
+%% Returns an empty list if the relation has no tuples (tree is `undefined').
+%%
+%% Uses dirty reads since the relation data is immutable.
+%%
+%% @param RelationHash Binary hash identifying the relation
+%% @returns List of binary tuple hashes, or empty list `[]' if relation is empty
+%%
+%% @see get_tuples_iterator/2
+%% @see create_tuple/3
 hashes_from_tuple(RelationHash) ->
     [Relation] = mnesia:dirty_read(relation, RelationHash),
     case Relation#relation.tree of
@@ -220,8 +522,33 @@ hashes_from_tuple(RelationHash) ->
         Tree -> merklet:keys(Tree)
     end.
 
-%% @doc Create an iterator for streaming tuples from a relation
-%% Returns: Pid of iterator process
+%% @doc Create an iterator for streaming tuples from a relation.
+%%
+%% Implements the Volcano Iterator Model: spawns an independent process that
+%% lazily streams tuples from the relation. This enables:
+%% <ul>
+%%   <li>Memory-bounded queries (tuples materialized on demand)</li>
+%%   <li>Composable query operators (future: select, project, join)</li>
+%%   <li>Process-based concurrency</li>
+%% </ul>
+%%
+%% The iterator process responds to `{next, Caller}' messages and sends back
+%% either `{tuple, Tuple}' or `done' when exhausted.
+%%
+%% == Example ==
+%% ```
+%% Iterator = operations:get_tuples_iterator(DB, users),
+%% {ok, Tuple} = operations:next_tuple(Iterator),
+%% operations:close_iterator(Iterator).
+%% '''
+%%
+%% @param Database `#database_state{}' record
+%% @param RelationName Atom naming the relation to iterate
+%% @returns Pid of iterator process
+%%
+%% @see next_tuple/1
+%% @see close_iterator/1
+%% @see collect_all/1
 get_tuples_iterator(Database, RelationName) when is_record(Database, database_state) ->
     case maps:get(RelationName, Database#database_state.relations, error) of
 	error -> erlang:error({error_tuple_iterator_init, RelationName});
@@ -229,12 +556,20 @@ get_tuples_iterator(Database, RelationName) when is_record(Database, database_st
 			spawn(fun() -> tuple_iterator_loop(TupleHashes) end)
     end.
 
-%% X = (a, b, c, d)
-%% Y = (a, x, y)
-%% Z = project (a, c, y, natural_join(X, Y))
-
-%% @doc Get next tuple from iterator1
-%% Returns: {ok, Tuple} | done | {error, timeout}
+%% @doc Get next tuple from iterator.
+%%
+%% Sends a `{next, self()}' message to the iterator process and waits for
+%% the response. The iterator will materialize the tuple on demand.
+%%
+%% Timeout is set to 5 seconds to prevent indefinite blocking.
+%%
+%% @param IteratorPid Pid returned from `get_tuples_iterator/2'
+%% @returns `{ok, Tuple}' with materialized tuple map,
+%%          `done' when no more tuples remain, or
+%%          `{error, timeout}' if iterator doesn't respond
+%%
+%% @see get_tuples_iterator/2
+%% @see close_iterator/1
 next_tuple(IteratorPid) ->
     IteratorPid ! {next, self()},
     receive
@@ -244,17 +579,38 @@ next_tuple(IteratorPid) ->
         {error, timeout}
     end.
 
-%% @doc Close iterator process
+%% @doc Close iterator process.
+%%
+%% Sends a `stop' message to terminate the iterator process. This should be
+%% called when you're done consuming tuples to avoid leaving processes running.
+%%
+%% @param IteratorPid Pid returned from `get_tuples_iterator/2'
+%% @returns `ok'
+%%
+%% @see get_tuples_iterator/2
+%% @see collect_all/1
 close_iterator(IteratorPid) ->
     IteratorPid ! stop,
     ok.
 
-%% Iterator loop: streams tuples one at a time
+%% @private
+%% @doc Iterator loop implementation (internal).
+%%
+%% This is the process loop for the Volcano Iterator Model. It maintains a list
+%% of tuple hashes and resolves them lazily when requested.
+%%
+%% Protocol:
+%% <ul>
+%%   <li>`{next, Caller}' - Resolve next tuple and send `{tuple, ResolvedTuple}' or `done'</li>
+%%   <li>`stop' - Terminate the process</li>
+%% </ul>
+%%
+%% @param TupleHashes List of binary tuple hashes to stream
 tuple_iterator_loop([]) ->
     receive
-        {next, Caller} -> 
+        {next, Caller} ->
             Caller ! done;
-        stop -> 
+        stop ->
             ok
     end;
 tuple_iterator_loop([TupleHash | Rest]) ->
@@ -268,7 +624,27 @@ tuple_iterator_loop([TupleHash | Rest]) ->
             ok
     end.
 
-%% @doc Helper to collect all tuples from iterator (for testing)
+%% @doc Helper to collect all tuples from an iterator into a list.
+%%
+%% This is a convenience function primarily used for testing. It exhausts the
+%% iterator by repeatedly calling `next_tuple/1' until `done' is received,
+%% accumulating all tuples into a list.
+%%
+%% <b>Warning:</b> This materializes all tuples in memory, defeating the purpose
+%% of lazy evaluation. Only use for small relations or testing.
+%%
+%% == Example ==
+%% ```
+%% Iterator = operations:get_tuples_iterator(DB, users),
+%% AllTuples = operations:collect_all(Iterator).
+%% %% Iterator is automatically closed
+%% '''
+%%
+%% @param IteratorPid Pid returned from `get_tuples_iterator/2'
+%% @returns List of tuple maps, `{error, Reason, PartialResults}' on timeout
+%%
+%% @see get_tuples_iterator/2
+%% @see next_tuple/1
 collect_all(IteratorPid) ->
     collect_all(IteratorPid, []).
 

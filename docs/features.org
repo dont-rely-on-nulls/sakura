@@ -1,96 +1,271 @@
-* Relational Algebra Engine
+#+TITLE: Domino Features & Roadmap
+
+* Extended Relational Model (RM/T)
   :PROPERTIES:
-  :CATEGORY: relational-algebra
+  :CATEGORY: semantic-modeling
   :END:
-  A pure Erlang implementation of E. F. Codd’s relational algebra.
-  Relations are treated as mathematical sets of tuples; operations are defined exactly
-  as in relational theory, with optional aleph₀ (infinite) relations.
+  An extended relational database engine based on E. F. Codd's RM/T (1979).
+  Captures more meaning through entity types, surrogates, and molecular semantics.
 
-** Core Specification
-   The theoretical backbone of the system.
+** Implemented Features
 
-*** TODO Define relation as a strict mathematical set
-    - [ ] Each tuple is a set of attributes (no duplicates, no ordering)
-    - [ ] Each attribute = (name, value) pair
-    - [ ] Attribute domains are strongly typed
+*** DONE Content-Addressed Storage
+    CLOSED: [2025-01-21]
+    - [X] SHA-256 surrogates for all entities
+    - [X] System-controlled entity identifiers (E-domain)
+    - [X] Automatic deduplication via content addressing
+    - [X] Immutable data structures
 
-*** TODO Enforce "Codd's axioms" in implementation
-    - [ ] No duplicate tuples in any relation
-    - [ ] No implicit ordering of tuples or attributes
-    - [ ] All operations closed over the relation type
-    - [ ] Proper domain checking in all operations
+*** DONE Entity Types (E-Relations)
+    CLOSED: [2025-01-21]
+    - [X] Kernel entity types (database, relation)
+    - [X] E-relations for entity existence assertion
+    - [X] Surrogate-based entity identification
+    - [X] Entity integrity enforcement
 
-** Data Model Layer (`relation.erl`)
-   Fundamental constructs of the relational model.
+*** DONE Property Relations (P-Relations)
+    CLOSED: [2025-01-21]
+    - [X] Immediate property storage
+    - [X] Single-valued property support
+    - [X] Property integrity (Rule 4)
+    - [X] Foreign key references via surrogates
 
-*** TODO Implement attributes, tuples, relations, and schemas
-*** TODO Add schema validation for domain and arity
-*** TODO Add conversion helpers:
-    - [ ] tuple <-> map
-    - [ ] schema validation checks
+*** DONE Merkle Tree Integration
+    CLOSED: [2025-01-21]
+    - [X] Relations as Merkle trees
+    - [X] Database state versioning
+    - [X] Efficient state diffing
+    - [X] Content-addressed relation hashing
 
-** Algebraic Operations (`operations.erl`)
-   The complete set of classical relational algebra operators.
+*** DONE Volcano Iterator Model
+    CLOSED: [2025-01-21]
+    - [X] Lazy tuple evaluation
+    - [X] Process-based iterators
+    - [X] Message-passing protocol
+    - [X] Memory-bounded queries
+
+*** DONE Transactional Operations
+    CLOSED: [2025-01-21]
+    - [X] ACID guarantees via Mnesia
+    - [X] Atomic tuple insertion
+    - [X] Tuple retraction with transactions
+    - [X] Relation clear and retract operations
+
+*** DONE Comprehensive Test Suite
+    CLOSED: [2025-01-21]
+    - [X] Database creation tests
+    - [X] Relation and tuple operations
+    - [X] Hash consistency validation
+    - [X] Iterator protocol tests
+    - [X] Retraction and truncate tests
+
+** Planned RM/T Extensions
+
+*** TODO Characteristic Entities
+    Multi-valued properties as subordinate entities.
+    - [ ] Characteristic entity types (C-relations)
+    - [ ] Characteristic graph (CG-relation)
+    - [ ] Characteristic tree hierarchy
+    - [ ] Characteristic integrity (Rule 5)
+    - [ ] Example: Job history as characteristic of Employee
+
+*** TODO Associative Entities
+    Relationships as first-class entities with properties.
+    - [ ] Associative entity types (A-relations)
+    - [ ] Association graph (AG-relation)
+    - [ ] Association integrity (Rule 6)
+    - [ ] Higher-order associations
+    - [ ] Example: Assignment(employee, project, start_date)
+
+*** TODO Generalization Hierarchies
+    Entity subtyping and inheritance.
+    - [ ] Unconditional gen inclusion (UGI-relation)
+    - [ ] Alternative gen inclusion (AGI-relation)
+    - [ ] Subtype integrity (Rule 7)
+    - [ ] Property inheritance
+    - [ ] Multiple inheritance support
+    - [ ] Example: Engineer/Secretary/Trucker subtypes of Employee
+
+*** TODO Cover Aggregation
+    Collections and groupings.
+    - [ ] Cover membership relation (KG-relation)
+    - [ ] Cover entity types
+    - [ ] Dynamic membership
+    - [ ] Heterogeneous covers
+    - [ ] Example: Convoys, Teams, Departments
+
+*** TODO Event Precedence
+    Temporal ordering and scripts.
+    - [ ] Event entity types (T-relations)
+    - [ ] Unconditional successor (US-relation)
+    - [ ] Alternative successor (AS-relation)
+    - [ ] Unconditional predecessor (UP-relation)
+    - [ ] Alternative predecessor (AP-relation)
+    - [ ] Example: Order → Shipment → Invoice
+
+*** TODO Extended Operators
+    Operators for molecular semantics.
+    - [ ] OUTER NATURAL JOIN
+    - [ ] OUTER UNION
+    - [ ] OUTER THETA-JOIN
+    - [ ] MAYBE operators (null handling)
+    - [ ] Graph operators (OPEN, CLOSE, STEP)
+
+*** TODO RM/T Catalog
+    Extensible schema catalog.
+    - [ ] CATR (relations catalog)
+    - [ ] CATRA (relation-attribute)
+    - [ ] CATA (attributes catalog)
+    - [ ] CATAD (attribute-domain)
+    - [ ] CATD (domains catalog)
+    - [ ] CATC (categories catalog)
+    - [ ] CATRC (relation-category)
+
+*** TODO Property Graph (PG-relation)
+    Link P-relations to E-relations.
+    - [ ] Property molecule types
+    - [ ] Dynamic property schema
+    - [ ] Property graph traversal
+
+** Classical Relational Algebra
 
 *** TODO Selection (σ)
+    Filter tuples by predicate.
+    - [ ] THETA-SELECT with comparison operators
+    - [ ] Support for <, ≤, =, ≥, >, ≠
+    - [ ] TRUE and MAYBE versions (null handling)
+
 *** TODO Projection (π)
+    Project relation onto subset of attributes.
+    - [ ] Remove specified columns
+    - [ ] Eliminate duplicate rows
+    - [ ] Preserve set semantics
+
 *** TODO Cartesian Product (×)
+    Cross product of two relations.
+    - [ ] Unrestricted concatenation
+    - [ ] Basis for joins
+
 *** TODO Natural Join (⋈)
+    Join on common attributes.
+    - [ ] Equi-join with duplicate removal
+    - [ ] Used in normalization
+
 *** TODO Theta Join (⋈θ)
+    Join with arbitrary comparison.
+    - [ ] Support all theta operators
+    - [ ] Generalizes natural join
+
 *** TODO Union (∪)
+    Set union of compatible relations.
+    - [ ] Union-compatible constraint
+    - [ ] Duplicate removal
+
 *** TODO Intersection (∩)
+    Set intersection.
+    - [ ] Union-compatible constraint
+
 *** TODO Difference (−)
+    Set difference.
+    - [ ] Union-compatible constraint
+
+*** TODO Divide (÷)
+    Relational division.
+    - [ ] Algebraic universal quantifier
+
 *** TODO Rename (ρ)
-*** TODO Set semantics enforcement (remove duplicates after each op)
+    Attribute renaming.
+    - [ ] Enable self-joins
 
-** Infinite Relations (`aleph0.erl`)
-   Representation of aleph₀-relations (countably infinite generators).
+** Advanced Features
 
-*** TODO Implement integer() generator
-*** TODO Implement plus(), minus(), multiply(), neg() relations
-*** TODO Add constraints and modes for partially bound arguments
-*** TODO Implement lazy generation using streams or coroutines
-*** TODO Support user-defined infinite relations
+*** TODO Null Value Handling
+    Three-valued logic for incomplete information.
+    - [ ] "Value unknown" null type
+    - [ ] "Property inapplicable" null type
+    - [ ] E-null for "entity unknown"
+    - [ ] Null substitution principle
+    - [ ] MAYBE operators
 
-** Unified Relation Abstraction (`unified_relation.erl`)
-   A bridge between finite and infinite relations.
+*** TODO Infinite Relations (Aleph₀)
+    Countably infinite relation generators.
+    - [ ] Integer generator
+    - [ ] Arithmetic relations (plus, minus, multiply)
+    - [ ] Lazy evaluation with constraints
+    - [ ] Partially materialized storage
+    - [ ] User-defined generators
 
-*** TODO Implement unified type for finite and aleph₀
-*** TODO Implement unified select, project, join, union, etc.
-*** TODO Support type checking between finite and infinite relations
-*** TODO Add automatic materialization with configurable limits
-*** TODO Implement caching/memoization for aleph₀ evaluations
+*** TODO View Integration
+    Merging multiple perspectives.
+    - [ ] View definition language
+    - [ ] Automatic view maintenance
+    - [ ] View update translation
 
-** Backend Integration (Mnesia)
-   Persistent storage and retrieval of finite relations.
+*** TODO Temporal Support
+    Time-varying databases.
+    - [ ] Transaction time
+    - [ ] Valid time
+    - [ ] Bitemporal support
+    - [ ] Non-forgetting mode
 
-*** TODO Map finite relations to Mnesia tables
-*** TODO Support schema registration and domain enforcement
-*** TODO Add persistence for partially materialized aleph₀ relations
-*** TODO Add atomic transactional updates
-*** TODO Add indexing support for joins
+*** TODO Distributed Synchronization
+    Merkle tree-based replication.
+    - [ ] Efficient diff protocol
+    - [ ] Conflict resolution
+    - [ ] Eventual consistency
 
-** Correctness and Validation
-   Ensuring theoretical fidelity.
+** Developer Experience
 
-*** TODO Implement relational algebra test suite
-*** TODO Verify closure and idempotence of all operations
-*** TODO Add property-based tests with PropEr or QuickCheck
-*** TODO Compare semantics with formal definitions (e.g., Date & Darwen)
+*** TODO Query Language
+    High-level relational query language.
+    - [ ] Algebraic syntax
+    - [ ] Tuple calculus variant
+    - [ ] Domain calculus variant
 
-** Developer Tools
-   Optional but desirable tools for exploration and testing.
+*** TODO REPL Console
+    Interactive query environment.
+    - [ ] Live query evaluation
+    - [ ] Schema introspection
+    - [ ] Query history
 
-*** TODO Add REPL-like console for interactive relational queries
-*** TODO Add pretty-printer for relations and schemas
-*** TODO Add visualization of join graphs and operation pipelines
-*** TODO Add Org Babel integration for relational queries
+*** TODO Visualization Tools
+    Graphical representation.
+    - [ ] Relation browser
+    - [ ] Join graph visualization
+    - [ ] Generalization hierarchy diagrams
+    - [ ] Query execution plans
 
-** Documentation
-   Literate and theoretical exposition.
+*** TODO Org Babel Integration
+    Literate programming support.
+    - [ ] Execute relational queries in org-mode
+    - [ ] Export results to tables
+    - [ ] Reproducible analysis
 
-*** TODO Write README with theoretical introduction
-*** TODO Add module-level comments summarizing relational definitions
-*** TODO Include examples of finite and aleph₀ joins
-*** TODO Provide link to E. F. Codd’s original papers
+** Documentation & Validation
 
+*** DONE Code Documentation
+    CLOSED: [2025-01-21]
+    - [X] Module architecture overview
+    - [X] Data structure specifications
+    - [X] Usage examples
+    - [X] Implementation details
+
+*** TODO Theoretical Validation
+    Ensure correctness.
+    - [ ] Formal proofs of operator properties
+    - [ ] Closure verification
+    - [ ] Idempotence tests
+    - [ ] Property-based testing with PropEr
+    - [ ] Comparison with Date & Darwen semantics
+
+*** TODO Research Papers
+    Link to foundational theory.
+    - [ ] Codd 1970: "A Relational Model"
+    - [ ] Codd 1979: "Extending the Database Relational Model" (RM/T)
+    - [ ] Codd 1985: "Does AlOL Need the Relational Algebra?"
+    - [ ] Date & Darwen: "Foundation for Future Database Systems"
+
+** References
+   - E. F. Codd (1979). "Extending the Database Relational Model to Capture More Meaning"
+   - E. F. Codd (1970). "A Relational Model of Data for Large Shared Data Banks"
+   - C. J. Date & Hugh Darwen. "Foundation for Future Database Systems: The Third Manifesto"
