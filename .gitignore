@@ -1,2 +1,6 @@
 _build
 Mnesia.*
+
+# EDoc generated files
+doc/
+!doc/overview.edoc

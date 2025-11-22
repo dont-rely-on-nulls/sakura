@@ -2,9 +2,21 @@
 
 * About
 
-Domino is a **Relational Algebra Engine** implements relational
-algebra in its strict, theoretical form, adhering rigorously to the
-principles of relational theory as articulated by E. F. Codd.
+Domino is an *Extended Relational Database Engine* based on E. F. Codd's
+RM/T (Relational Model/Tasmania, 1979). It implements relational algebra
+in its strict, theoretical form while extending it to capture more of the
+meaning of data through semantic modeling concepts.
+
+** Theoretical Foundation
+
+The engine builds upon two seminal works by E. F. Codd:
+
+1. *"A Relational Model of Data for Large Shared Data Banks"* (1970) —
+   The foundation of relational theory
+2. *"Extending the Database Relational Model to Capture More Meaning"* (1979) —
+   RM/T extensions for semantic modeling
+
+** Core Principles
 
 A relation is modeled as a set of tuples, each tuple being a set of
 attributes. Each attribute is a pairing of a name with a value drawn
@@ -12,9 +24,99 @@ from a domain. All operations are defined on entire relations as sets,
 with no recourse to the compromises typical of SQL or other practical
 implementations.
 
-The engine is intended as a study in correctness: each operation, from
-projection to join, is executed in a manner consistent with the
-classical definition of relational algebra. It is a platform for
-exploring the consequences of relational theory in a low-level
-programming context, providing both a tool for experimentation and a
-concrete realization of the abstract model.
+** What Makes Domino Extended?
+
+*** Content-Addressed Storage
+Entities are identified by system-controlled *surrogates* — cryptographic
+hashes (SHA-256) that provide permanent, unique identification. This
+enables:
+- Automatic deduplication
+- Immutable versioning
+- Merkle tree-based diffing
+- Distributed synchronization
+
+*** Entity Types (RM/T)
+Three fundamental entity classifications:
+- *Kernel Entities* — Independent entities (e.g., Employee, Supplier)
+- *Characteristic Entities* — Multi-valued properties (e.g., Job History)
+- *Associative Entities* — Relationships as first-class entities
+
+*** Four Dimensions of Molecular Semantics
+1. *Cartesian Aggregation* — Properties, characteristics, and associations
+2. *Generalization* — Subtyping and inheritance hierarchies
+3. *Cover Aggregation* — Collections and groupings (e.g., teams, convoys)
+4. *Event Precedence* — Temporal ordering of events
+
+*** Immutable Architecture
+All data structures are immutable. Every modification creates a new version
+with a new hash, enabling:
+- Temporal queries
+- Audit trails
+- Safe concurrent access
+- Version control for data
+
+** Current Implementation
+
+*** What's Built
+- Content-addressed storage with SHA-256 surrogates
+- E-relations for entity type management
+- P-relations for immediate properties
+- Merkle tree integration for efficient versioning
+- Volcano iterator model for lazy evaluation
+- Transactional ACID operations via Mnesia
+- Comprehensive EUnit test suite
+
+*** What's Planned
+- Full relational algebra operators (σ, π, ⋈, ∪, ∩, −)
+- Characteristic entities and CG-relation
+- Associative entities and AG-relation
+- Generalization hierarchies (UGI/AGI)
+- Cover aggregation (KG-relation)
+- Event precedence (US/AS/UP/AP)
+- Extended operators (OUTER JOIN, MAYBE operators)
+- RM/T catalog relations
+- Null value handling (three-valued logic)
+- Infinite relations (aleph₀)
+- High-level query language
+
+** Design Philosophy
+
+The engine is intended as a study in correctness and semantic richness:
+each operation is executed in a manner consistent with the classical
+definition of relational algebra, while the RM/T extensions provide a
+framework for capturing more meaning about entities, their properties,
+and their relationships.
+
+It is a platform for exploring the consequences of relational theory in
+a low-level programming context, providing both a tool for experimentation
+and a concrete realization of Codd's vision for semantic data modeling.
+
+** Why RM/T?
+
+Most database systems today are compromises — they sacrifice theoretical
+purity for practical performance. Domino takes a different approach:
+implement the theory *correctly* first, then optimize. RM/T provides:
+
+- *Atomic Semantics* — What constitutes a minimal meaningful unit?
+- *Molecular Semantics* — What larger clusters constitute meaningful units?
+- *Systematic Design* — Principled approach to database schema design
+- *Intelligent Behavior* — System understands more about data meaning
+
+** Documentation
+
+See =docs/= directory:
+- =code.org= — Comprehensive code documentation
+- =features.org= — Feature roadmap and RM/T extensions
+- =ci.org= — Continuous integration setup
+
+** References
+
+- Codd, E. F. (1970). "A Relational Model of Data for Large Shared Data Banks."
+  /Communications of the ACM/ 13(6): 377-387.
+- Codd, E. F. (1979). "Extending the Database Relational Model to Capture More Meaning."
+  /ACM Transactions on Database Systems/ 4(4): 397-434.
+- Date, C. J. & Darwen, H. "Foundation for Future Database Systems: The Third Manifesto."
+
+** License
+
+See LICENSE file.
