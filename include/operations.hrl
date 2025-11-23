@@ -65,9 +65,23 @@
 
 %%% Provenance Types (for updatable views)
 
+%% Relation-level provenance (tracks operation lineage)
 -type provenance() :: undefined
                     | {base, atom()}       % Base relation
                     | {join, provenance(), provenance()}
                     | {select, provenance(), constraints()}
                     | {project, provenance(), [atom()]}
                     | {take, provenance(), pos_integer()}.
+
+%% Attribute-level provenance (tracks data lineage for each attribute)
+%% Maps attribute name to its source (relation, original_attribute_name)
+-type attribute_provenance() :: #{atom() => {atom(), atom()}}.
+
+%% Tuple metadata (contains provenance and other system-managed fields)
+-type tuple_metadata() :: #{
+    provenance => attribute_provenance()
+    % Future: timestamp, version, etc.
+}.
+
+%% Tuples with metadata use a nested 'meta' field:
+%% #{id => 1, name => "Alice", meta => #{provenance => #{id => {employees, id}, name => {employees, name}}}}

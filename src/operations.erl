@@ -65,6 +65,9 @@
 	 project_iterator/2,
 	 sort_iterator/2,
 	 take_iterator/2,
+	 %% Join operators
+	 equijoin_iterator/3,
+	 theta_join_iterator/3,
 	 %% Materialization (eager)
 	 materialize/3]).
 
@@ -722,16 +725,20 @@ get_tuples_iterator(Database, RelationName, Constraints) when is_record(Database
         RelationHash ->
             [Relation] = mnesia:dirty_read(relation, RelationHash),
 
+            %% Check if provenance tracking is enabled
+            EnableProvenance = maps:get('_provenance', Constraints, false),
+            CleanConstraints = maps:remove('_provenance', Constraints),
+
             case Relation#relation.cardinality of
                 {finite, _} ->
                     %% Finite relation: use tuple hashes
                     TupleHashes = hashes_from_tuple(RelationHash),
-                    spawn(fun() -> tuple_iterator_loop(TupleHashes) end);
+                    spawn(fun() -> tuple_iterator_loop(TupleHashes, RelationName, EnableProvenance) end);
 
                 _ ->
                     %% Infinite relation: use generator
-                    Generator = instantiate_generator(Relation#relation.generator, Constraints),
-                    spawn(fun() -> generator_iterator_loop(Generator) end)
+                    Generator = instantiate_generator(Relation#relation.generator, CleanConstraints),
+                    spawn(fun() -> generator_iterator_loop(Generator, RelationName, EnableProvenance) end)
             end
     end.
 
@@ -819,20 +826,27 @@ close_iterator(IteratorPid) ->
 %% </ul>
 %%
 %% @param TupleHashes List of binary tuple hashes to stream
-tuple_iterator_loop([]) ->
+%% @param RelationName Name of the source relation (for provenance)
+%% @param EnableProvenance Boolean flag to enable provenance tracking
+tuple_iterator_loop([], _RelationName, _EnableProvenance) ->
     receive
         {next, Caller} ->
             Caller ! done;
         stop ->
             ok
     end;
-tuple_iterator_loop([TupleHash | Rest]) ->
+tuple_iterator_loop([TupleHash | Rest], RelationName, EnableProvenance) ->
     receive
         {next, Caller} ->
             %% Resolve tuple on demand
             ResolvedTuple = resolve_tuple(TupleHash),
-            Caller ! {tuple, ResolvedTuple},
-            tuple_iterator_loop(Rest);
+            %% Optionally add provenance tracking
+            FinalTuple = case EnableProvenance of
+                true -> add_base_provenance(ResolvedTuple, RelationName);
+                false -> ResolvedTuple
+            end,
+            Caller ! {tuple, FinalTuple},
+            tuple_iterator_loop(Rest, RelationName, EnableProvenance);
         stop ->
             ok
     end.
@@ -1039,6 +1053,59 @@ take_iter_loop(ChildPid, _Limit, _Count) ->
     end.
 
 %%% ============================================================================
+%%% Join Operators
+%%% ============================================================================
+
+%% @doc Equijoin iterator: Natural join on matching attribute values.
+%%
+%% Performs an equijoin between two relations on a common attribute.
+%% For each tuple from the left iterator, finds all matching tuples from
+%% the right iterator where the specified attributes are equal.
+%%
+%% The result tuples merge attributes from both sides. If attribute names
+%% conflict, right side attributes are prefixed with "right_".
+%%
+%% Implementation: Nested loop join (simple but works for small-medium datasets).
+%% Future: Hash join for better performance.
+%%
+%% == Example ==
+%% ```
+%% %% Join employees with departments on dept_id
+%% LeftIter = operations:get_tuples_iterator(DB, employees, #{}),
+%% RightIter = operations:get_tuples_iterator(DB, departments, #{}),
+%% JoinIter = operations:equijoin_iterator(LeftIter, RightIter, dept_id)
+%% '''
+%%
+%% @param LeftIterator Iterator for left relation
+%% @param RightIterator Iterator for right relation
+%% @param JoinAttribute Attribute name to join on (must exist in both relations)
+%% @returns Iterator process that emits joined tuples
+equijoin_iterator(LeftIterator, RightIterator, JoinAttribute) ->
+    spawn(fun() -> equijoin_loop(LeftIterator, RightIterator, JoinAttribute) end).
+
+%% @doc Theta-join iterator: Join with arbitrary predicate.
+%%
+%% Performs a theta-join between two relations using a user-provided
+%% predicate function. For each pair of tuples (left, right), the predicate
+%% is evaluated. If true, the tuples are merged and emitted.
+%%
+%% == Example ==
+%% ```
+%% %% Join where employee.age > department.min_age
+%% Predicate = fun(EmpTuple, DeptTuple) ->
+%%     maps:get(age, EmpTuple) > maps:get(min_age, DeptTuple)
+%% end,
+%% JoinIter = operations:theta_join_iterator(LeftIter, RightIter, Predicate)
+%% '''
+%%
+%% @param LeftIterator Iterator for left relation
+%% @param RightIterator Iterator for right relation
+%% @param Predicate Function `fun(LeftTuple, RightTuple) -> boolean()'
+%% @returns Iterator process that emits joined tuples
+theta_join_iterator(LeftIterator, RightIterator, Predicate) ->
+    spawn(fun() -> theta_join_loop(LeftIterator, RightIterator, Predicate) end).
+
+%%% ============================================================================
 %%% Materialization (Eager - Relation Creation)
 %%% ============================================================================
 
@@ -1157,20 +1224,219 @@ instantiate_generator(Other, _) ->
 %% of tuple hashes.
 %%
 %% @param Generator Generator function
-generator_iterator_loop(Generator) ->
+generator_iterator_loop(Generator, RelationName, EnableProvenance) ->
     receive
         {next, Caller} ->
             case Generator(next) of
                 done ->
                     Caller ! done;
                 {value, Tuple, NextGen} ->
-                    Caller ! {tuple, Tuple},
-                    generator_iterator_loop(NextGen);
+                    %% Optionally add provenance tracking
+                    FinalTuple = case EnableProvenance of
+                        true -> add_base_provenance(Tuple, RelationName);
+                        false -> Tuple
+                    end,
+                    Caller ! {tuple, FinalTuple},
+                    generator_iterator_loop(NextGen, RelationName, EnableProvenance);
                 {error, Reason} ->
                     Caller ! {error, Reason}
             end;
         stop ->
             ok
+    end.
+
+%% @private
+%% @doc Equijoin loop: nested loop join on attribute equality.
+%%
+%% Strategy:
+%% 1. Collect all tuples from right iterator into memory
+%% 2. For each left tuple, scan right tuples for matches
+%% 3. Emit merged tuple when join attribute values match
+%%
+%% @param LeftIter Left iterator process
+%% @param RightIter Right iterator process
+%% @param JoinAttr Attribute to join on
+equijoin_loop(LeftIter, RightIter, JoinAttr) ->
+    % Materialize right side (for nested loop)
+    RightTuples = collect_all(RightIter),
+    equijoin_emit_loop(LeftIter, RightTuples, JoinAttr).
+
+equijoin_emit_loop(LeftIter, RightTuples, JoinAttr) ->
+    receive
+        {next, Caller} ->
+            case next_tuple(LeftIter) of
+                done ->
+                    Caller ! done,
+                    ok;  % Stop after sending done
+                {ok, LeftTuple} ->
+                    % Find all right tuples that match on join attribute
+                    case maps:get(JoinAttr, LeftTuple, undefined) of
+                        undefined ->
+                            % Left tuple doesn't have join attribute - try next
+                            self() ! {next, Caller},
+                            equijoin_emit_loop(LeftIter, RightTuples, JoinAttr);
+                        LeftValue ->
+                            % Find matching right tuples
+                            Matches = [merge_tuples(LeftTuple, RightTuple)
+                                      || RightTuple <- RightTuples,
+                                         maps:get(JoinAttr, RightTuple, undefined) =:= LeftValue],
+                            case Matches of
+                                [] ->
+                                    % No matches - try next left tuple
+                                    self() ! {next, Caller},
+                                    equijoin_emit_loop(LeftIter, RightTuples, JoinAttr);
+                                [FirstMatch | RestMatches] ->
+                                    % Emit first match, buffer rest
+                                    Caller ! {tuple, FirstMatch},
+                                    equijoin_emit_buffered(LeftIter, RightTuples, JoinAttr, RestMatches)
+                            end
+                    end;
+                {error, Reason} ->
+                    Caller ! {error, Reason},
+                    ok  % Stop after sending error
+            end;
+        stop ->
+            close_iterator(LeftIter),
+            ok
+    end.
+
+equijoin_emit_buffered(LeftIter, RightTuples, JoinAttr, [Match | Rest]) ->
+    receive
+        {next, Caller} ->
+            Caller ! {tuple, Match},
+            equijoin_emit_buffered(LeftIter, RightTuples, JoinAttr, Rest);
+        stop ->
+            close_iterator(LeftIter),
+            ok
+    end;
+equijoin_emit_buffered(LeftIter, RightTuples, JoinAttr, []) ->
+    % Buffer empty - continue with next left tuple
+    equijoin_emit_loop(LeftIter, RightTuples, JoinAttr).
+
+%% @private
+%% @doc Theta-join loop: nested loop join with predicate.
+%%
+%% @param LeftIter Left iterator process
+%% @param RightIter Right iterator process
+%% @param Pred Predicate function fun(LeftTuple, RightTuple) -> boolean()
+theta_join_loop(LeftIter, RightIter, Pred) ->
+    % Materialize right side
+    RightTuples = collect_all(RightIter),
+    theta_join_emit_loop(LeftIter, RightTuples, Pred).
+
+theta_join_emit_loop(LeftIter, RightTuples, Pred) ->
+    receive
+        {next, Caller} ->
+            case next_tuple(LeftIter) of
+                done ->
+                    Caller ! done;
+                {ok, LeftTuple} ->
+                    % Find all right tuples that satisfy predicate
+                    Matches = [merge_tuples(LeftTuple, RightTuple)
+                              || RightTuple <- RightTuples,
+                                 Pred(LeftTuple, RightTuple)],
+                    case Matches of
+                        [] ->
+                            % No matches - continue
+                            self() ! {next, Caller},
+                            theta_join_emit_loop(LeftIter, RightTuples, Pred);
+                        [FirstMatch | RestMatches] ->
+                            Caller ! {tuple, FirstMatch},
+                            theta_join_emit_buffered(LeftIter, RightTuples, Pred, RestMatches)
+                    end;
+                {error, Reason} ->
+                    Caller ! {error, Reason}
+            end;
+        stop ->
+            close_iterator(LeftIter),
+            ok
+    end.
+
+theta_join_emit_buffered(LeftIter, RightTuples, Pred, [Match | Rest]) ->
+    receive
+        {next, Caller} ->
+            Caller ! {tuple, Match},
+            theta_join_emit_buffered(LeftIter, RightTuples, Pred, Rest);
+        stop ->
+            close_iterator(LeftIter),
+            ok
+    end;
+theta_join_emit_buffered(LeftIter, RightTuples, Pred, []) ->
+    theta_join_emit_loop(LeftIter, RightTuples, Pred).
+
+%% @private
+%% @doc Add base provenance to a tuple from a relation.
+%%
+%% Creates a nested meta.provenance field mapping each attribute to its source relation.
+%% Example: add_base_provenance(#{id => 1, name => "Alice"}, employees)
+%%   => #{id => 1, name => "Alice", meta => #{provenance => #{id => {employees, id}, name => {employees, name}}}}
+add_base_provenance(Tuple, RelationName) ->
+    % Build provenance map for all attributes (excluding existing meta)
+    DataAttrs = maps:remove(meta, Tuple),
+    Provenance = maps:fold(
+        fun(Key, _Value, Acc) ->
+            maps:put(Key, {RelationName, Key}, Acc)
+        end,
+        #{},
+        DataAttrs
+    ),
+    % Add metadata with provenance
+    maps:put(meta, #{provenance => Provenance}, Tuple).
+
+%% @private
+%% @doc Merge two tuples for join result, including metadata.
+%%
+%% If attribute names conflict, right side attributes are prefixed with "right_".
+%% Metadata (including provenance) is also merged, tracking the source of each attribute.
+merge_tuples(LeftTuple, RightTuple) ->
+    % Extract metadata from both sides (if present)
+    LeftMeta = maps:get(meta, LeftTuple, #{}),
+    RightMeta = maps:get(meta, RightTuple, #{}),
+
+    % Extract provenance from metadata
+    LeftProv = maps:get(provenance, LeftMeta, #{}),
+    RightProv = maps:get(provenance, RightMeta, #{}),
+
+    % Remove metadata from tuples for data merging
+    LeftData = maps:remove(meta, LeftTuple),
+    RightData = maps:remove(meta, RightTuple),
+
+    % Merge data attributes
+    MergedData = maps:fold(
+        fun(Key, Value, Acc) ->
+            case maps:is_key(Key, Acc) of
+                true ->
+                    % Conflict - prefix right attribute
+                    RightKey = list_to_atom("right_" ++ atom_to_list(Key)),
+                    maps:put(RightKey, Value, Acc);
+                false ->
+                    maps:put(Key, Value, Acc)
+            end
+        end,
+        LeftData,
+        RightData
+    ),
+
+    % Merge provenance (same conflict resolution)
+    MergedProv = maps:fold(
+        fun(Key, Source, Acc) ->
+            case maps:is_key(Key, Acc) of
+                true ->
+                    % Conflict - prefix right attribute provenance
+                    RightKey = list_to_atom("right_" ++ atom_to_list(Key)),
+                    maps:put(RightKey, Source, Acc);
+                false ->
+                    maps:put(Key, Source, Acc)
+            end
+        end,
+        LeftProv,
+        RightProv
+    ),
+
+    % Add merged metadata to result (only if provenance non-empty)
+    case maps:size(MergedProv) of
+        0 -> MergedData;
+        _ -> maps:put(meta, #{provenance => MergedProv}, MergedData)
     end.
 
 %% @private
