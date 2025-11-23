@@ -1,9 +1,56 @@
 %%% @doc Generators for Infinite Relations
 %%%
-%%% This module provides generator functions for primitive infinite relations:
-%%% - Naturals (ℕ): {0, 1, 2, 3, ...}
-%%% - Integers (ℤ): {0, 1, -1, 2, -2, 3, -3, ...}
-%%% - Rationals (ℚ): Using Stern-Brocot tree enumeration
+%%% This module provides generator functions for primitive infinite relations.
+%%%
+%%% == Domain Relations (Base Types) ==
+%%%
+%%% Domain relations are unary relations representing mathematical sets:
+%%% <ul>
+%%%   <li>Naturals (ℕ): {(0), (1), (2), (3), ...}</li>
+%%%   <li>Integers (ℤ): {(0), (1), (-1), (2), (-2), ...}</li>
+%%%   <li>Rationals (ℚ): {(0/1), (1/1), (1/2), (2/1), ...}</li>
+%%% </ul>
+%%%
+%%% Domain relations have empty schemas (`schema => #{}') as they are the
+%%% base case in the type system.
+%%%
+%%% == Function Relations ==
+%%%
+%%% Function relations represent mathematical operations as infinite relations:
+%%% <ul>
+%%%   <li>Plus: {(a, b, sum) | a ∈ ℤ, b ∈ ℤ, sum = a + b}</li>
+%%%   <li>Times: {(a, b, product) | a ∈ ℤ, b ∈ ℤ, product = a × b}</li>
+%%%   <li>Minus: {(a, b, difference) | a ∈ ℤ, b ∈ ℤ, difference = a - b}</li>
+%%%   <li>Divide: {(a, b, q, r) | a ∈ ℤ, b ∈ ℤ\{0}, a = b×q + r}</li>
+%%% </ul>
+%%%
+%%% Function relations reference domain relations in their schemas:
+%%% ```
+%%% schema => #{a => integers, b => integers, sum => integers}
+%%% '''
+%%%
+%%% == Reversibility ==
+%%%
+%%% Function relations support bidirectional querying (like Prolog):
+%%% <ul>
+%%%   <li>`Plus[1, 2, ?]' → ? = 3 (forward)</li>
+%%%   <li>`Plus[1, ?, 3]' → ? = 2 (backward, solve for b)</li>
+%%%   <li>`Plus[?, 2, 3]' → ? = 1 (backward, solve for a)</li>
+%%%   <li>`Plus[?, ?, 5]' → all pairs (a,b) where a+b=5</li>
+%%% </ul>
+%%%
+%%% The generators use constraint analysis to determine which arguments
+%%% are bound and compute the missing values accordingly.
+%%%
+%%% == Relational Composition ==
+%%%
+%%% In the future, function relations will be used through joins:
+%%% ```
+%%% Integer[A], Integer[B], Plus[A, B, Sum]
+%%% '''
+%%%
+%%% This corresponds to a three-way join where the join conditions
+%%% provide the constraints to each relation.
 %%%
 %%% Generators produce tuples lazily based on constraints, enabling
 %%% memory-bounded iteration over infinite relations.
@@ -20,7 +67,12 @@
     rationals/1,
     make_range_generator/3,
     constrained_naturals/2,
-    constrained_integers/2
+    constrained_integers/2,
+    %% Function relations
+    plus/1,
+    times/1,
+    minus/1,
+    divide/1
 ]).
 
 %%% ============================================================================
@@ -264,3 +316,228 @@ constrained_naturals(Min, Max) ->
 -spec constrained_integers(integer(), integer()) -> generator_fun().
 constrained_integers(Min, Max) ->
     integers(#{value => {range, Min, Max}}).
+
+%%% ============================================================================
+%%% Function Relations
+%%% ============================================================================
+
+%% @doc Plus relation: {(a, b, sum) | sum = a + b}.
+%%
+%% Generates tuples for the addition relation. Requires at least 2 of 3
+%% attributes to be constrained for bounded generation.
+%%
+%% Constraint strategies:
+%% <ul>
+%%   <li>a, b constrained → compute sum</li>
+%%   <li>a, sum constrained → compute b = sum - a</li>
+%%   <li>b, sum constrained → compute a = sum - b</li>
+%%   <li>sum constrained only → generate all (a,b) pairs that sum to value</li>
+%%   <li>Less than 1 constrained → error (unbounded)</li>
+%% </ul>
+%%
+%% @param Constraints Map of attribute constraints
+%% @returns Generator function producing plus tuples
+plus(Constraints) ->
+    ABounds = extract_bounds(Constraints, a),
+    BBounds = extract_bounds(Constraints, b),
+    SumBounds = extract_bounds(Constraints, sum),
+
+    case {ABounds, BBounds, SumBounds} of
+        %% Both operands constrained - generate sums
+        {{range, AMin, AMax}, {range, BMin, BMax}, _} ->
+            make_plus_ab_generator(AMin, AMax, BMin, BMax);
+
+        %% a and sum constrained - compute b
+        {{range, AMin, AMax}, _, {range, SMin, SMax}} ->
+            make_plus_a_sum_generator(AMin, AMax, SMin, SMax);
+
+        %% b and sum constrained - compute a
+        {_, {range, BMin, BMax}, {range, SMin, SMax}} ->
+            make_plus_b_sum_generator(BMin, BMax, SMin, SMax);
+
+        %% Only sum constrained - generate all pairs
+        {unbounded, unbounded, {eq, SumValue}} ->
+            make_plus_sum_only_generator(SumValue);
+
+        {unbounded, unbounded, {range, SMin, SMax}} ->
+            make_plus_sum_range_generator(SMin, SMax);
+
+        %% Insufficient constraints
+        _ ->
+            fun(_) -> {error, {unbounded_plus, Constraints}} end
+    end.
+
+%% @doc Times relation: {(a, b, product) | product = a * b}.
+%%
+%% Generates tuples for the multiplication relation.
+%%
+%% @param Constraints Map of attribute constraints
+%% @returns Generator function producing times tuples
+times(Constraints) ->
+    ABounds = extract_bounds(Constraints, a),
+    BBounds = extract_bounds(Constraints, b),
+    ProductBounds = extract_bounds(Constraints, product),
+
+    case {ABounds, BBounds, ProductBounds} of
+        %% Both operands constrained - generate products
+        {{range, AMin, AMax}, {range, BMin, BMax}, _} ->
+            make_times_ab_generator(AMin, AMax, BMin, BMax);
+
+        %% Insufficient constraints
+        _ ->
+            fun(_) -> {error, {unbounded_times, Constraints}} end
+    end.
+
+%% @doc Minus relation: {(a, b, difference) | difference = a - b}.
+%%
+%% @param Constraints Map of attribute constraints
+%% @returns Generator function producing minus tuples
+minus(Constraints) ->
+    ABounds = extract_bounds(Constraints, a),
+    BBounds = extract_bounds(Constraints, b),
+    DiffBounds = extract_bounds(Constraints, difference),
+
+    case {ABounds, BBounds, DiffBounds} of
+        {{range, AMin, AMax}, {range, BMin, BMax}, _} ->
+            make_minus_ab_generator(AMin, AMax, BMin, BMax);
+
+        _ ->
+            fun(_) -> {error, {unbounded_minus, Constraints}} end
+    end.
+
+%% @doc Divide relation: {(a, b, quotient) | quotient = a / b, b ≠ 0}.
+%%
+%% @param Constraints Map of attribute constraints
+%% @returns Generator function producing divide tuples
+divide(Constraints) ->
+    ABounds = extract_bounds(Constraints, a),
+    BBounds = extract_bounds(Constraints, b),
+
+    case {ABounds, BBounds} of
+        {{range, AMin, AMax}, {range, BMin, BMax}} when BMin =/= 0 orelse BMax =/= 0 ->
+            make_divide_ab_generator(AMin, AMax, BMin, BMax);
+
+        _ ->
+            fun(_) -> {error, {unbounded_divide, Constraints}} end
+    end.
+
+%%% ============================================================================
+%%% Function Relation Generator Helpers
+%%% ============================================================================
+
+%% Plus: a and b constrained
+make_plus_ab_generator(AMin, AMax, BMin, BMax) ->
+    Pairs = [{A, B} || A <- lists:seq(AMin, AMax), B <- lists:seq(BMin, BMax)],
+    make_plus_pairs_gen(Pairs).
+
+make_plus_pairs_gen([]) ->
+    fun(_) -> done end;
+make_plus_pairs_gen([{A, B} | Rest]) ->
+    fun(next) ->
+        Tuple = #{a => A, b => B, sum => A + B},
+        NextGen = make_plus_pairs_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Plus: a and sum constrained, compute b
+make_plus_a_sum_generator(AMin, AMax, SMin, SMax) ->
+    Pairs = [{A, S} ||
+             A <- lists:seq(AMin, AMax),
+             S <- lists:seq(SMin, SMax),
+             (S - A) >= 0],  % b must be non-negative if we want naturals
+    make_plus_a_sum_gen(Pairs).
+
+make_plus_a_sum_gen([]) ->
+    fun(_) -> done end;
+make_plus_a_sum_gen([{A, Sum} | Rest]) ->
+    fun(next) ->
+        B = Sum - A,
+        Tuple = #{a => A, b => B, sum => Sum},
+        NextGen = make_plus_a_sum_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Plus: b and sum constrained, compute a
+make_plus_b_sum_generator(BMin, BMax, SMin, SMax) ->
+    Pairs = [{B, S} ||
+             B <- lists:seq(BMin, BMax),
+             S <- lists:seq(SMin, SMax),
+             (S - B) >= 0],
+    make_plus_b_sum_gen(Pairs).
+
+make_plus_b_sum_gen([]) ->
+    fun(_) -> done end;
+make_plus_b_sum_gen([{B, Sum} | Rest]) ->
+    fun(next) ->
+        A = Sum - B,
+        Tuple = #{a => A, b => B, sum => Sum},
+        NextGen = make_plus_b_sum_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Plus: only sum constrained - generate all non-negative pairs
+make_plus_sum_only_generator(SumValue) ->
+    Pairs = [{A, SumValue - A} || A <- lists:seq(0, SumValue)],
+    make_plus_pairs_gen(Pairs).
+
+%% Plus: sum range constrained
+make_plus_sum_range_generator(SMin, SMax) ->
+    Pairs = [{A, B, S} ||
+             S <- lists:seq(SMin, SMax),
+             A <- lists:seq(0, S),
+             B <- [S - A]],
+    make_plus_triple_gen(Pairs).
+
+make_plus_triple_gen([]) ->
+    fun(_) -> done end;
+make_plus_triple_gen([{A, B, Sum} | Rest]) ->
+    fun(next) ->
+        Tuple = #{a => A, b => B, sum => Sum},
+        NextGen = make_plus_triple_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Times: a and b constrained
+make_times_ab_generator(AMin, AMax, BMin, BMax) ->
+    Pairs = [{A, B} || A <- lists:seq(AMin, AMax), B <- lists:seq(BMin, BMax)],
+    make_times_pairs_gen(Pairs).
+
+make_times_pairs_gen([]) ->
+    fun(_) -> done end;
+make_times_pairs_gen([{A, B} | Rest]) ->
+    fun(next) ->
+        Tuple = #{a => A, b => B, product => A * B},
+        NextGen = make_times_pairs_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Minus: a and b constrained
+make_minus_ab_generator(AMin, AMax, BMin, BMax) ->
+    Pairs = [{A, B} || A <- lists:seq(AMin, AMax), B <- lists:seq(BMin, BMax)],
+    make_minus_pairs_gen(Pairs).
+
+make_minus_pairs_gen([]) ->
+    fun(_) -> done end;
+make_minus_pairs_gen([{A, B} | Rest]) ->
+    fun(next) ->
+        Tuple = #{a => A, b => B, difference => A - B},
+        NextGen = make_minus_pairs_gen(Rest),
+        {value, Tuple, NextGen}
+    end.
+
+%% Divide: a and b constrained (integer division)
+make_divide_ab_generator(AMin, AMax, BMin, BMax) ->
+    Pairs = [{A, B} ||
+             A <- lists:seq(AMin, AMax),
+             B <- lists:seq(BMin, BMax),
+             B =/= 0],  % Avoid division by zero
+    make_divide_pairs_gen(Pairs).
+
+make_divide_pairs_gen([]) ->
+    fun(_) -> done end;
+make_divide_pairs_gen([{A, B} | Rest]) ->
+    fun(next) ->
+        Tuple = #{a => A, b => B, quotient => A div B, remainder => A rem B},
+        NextGen = make_divide_pairs_gen(Rest),
+        {value, Tuple, NextGen}
+    end.

@@ -30,9 +30,10 @@ cleanup(_DB) ->
 
 test_create_naturals(DB) ->
     %% Create infinite relation of natural numbers
+    %% Domain relations have empty schemas (base case)
     {DB1, Naturals} = operations:create_infinite_relation(DB, #{
         name => naturals,
-        schema => #{value => natural},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, naturals},
         constraints => #{value => {gte, 0}}
@@ -49,7 +50,7 @@ test_naturals_with_constraints(DB) ->
     %% Create naturals relation
     {DB1, _Naturals} = operations:create_infinite_relation(DB, #{
         name => naturals,
-        schema => #{value => natural},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, naturals},
         constraints => #{value => {gte, 0}}
@@ -71,7 +72,7 @@ test_integers_generator(DB) ->
     %% Create integers relation
     {DB1, Integers} = operations:create_infinite_relation(DB, #{
         name => integers,
-        schema => #{value => integer},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, integers}
     }),
@@ -93,7 +94,7 @@ test_rationals_generator(DB) ->
     %% Create rationals relation
     {DB1, Rationals} = operations:create_infinite_relation(DB, #{
         name => rationals,
-        schema => #{numerator => integer, denominator => natural},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, rationals}
     }),
@@ -118,7 +119,7 @@ test_take_operator(DB) ->
     %% Create naturals
     {DB1, _} = operations:create_infinite_relation(DB, #{
         name => naturals,
-        schema => #{value => natural},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, naturals},
         constraints => #{value => {gte, 0}}
