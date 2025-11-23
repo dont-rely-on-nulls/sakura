@@ -142,7 +142,7 @@ test_materialize_infinite(DB) ->
     %% Create infinite naturals
     {DB1, _} = operations:create_infinite_relation(DB, #{
         name => naturals,
-        schema => #{value => natural},
+        schema => #{},
         cardinality => aleph_zero,
         generator => {primitive, naturals},
         constraints => #{value => {gte, 0}}
