@@ -45,6 +45,9 @@ jobs:
     - name: Generate EDoc
       run: rebar3 edoc
 
+    - name: Fix index.html for GitHub Pages
+      run: cp doc/overview-summary.html doc/index.html
+
     - name: Setup Pages
       uses: actions/configure-pages@v4
 
