@@ -58,6 +58,18 @@
     - [X] Hash consistency validation
     - [X] Iterator protocol tests
     - [X] Retraction and truncate tests
+    - [X] Join operation tests
+    - [X] Provenance tracking tests
+
+*** DONE Attribute-Level Provenance Tracking
+    CLOSED: [2025-01-22]
+    - [X] Nested metadata structure (meta.provenance)
+    - [X] Track immediate source of each attribute
+    - [X] Always enabled - every tuple includes metadata
+    - [X] Automatic provenance merging in joins
+    - [X] Conflict resolution for duplicate attributes
+    - [X] Clean separation of data attributes and metadata
+    - [X] Foundation for tuple-level lineage tracking (implemented)
 
 ** Planned RM/T Extensions
 
@@ -146,15 +158,22 @@
     - [ ] Unrestricted concatenation
     - [ ] Basis for joins
 
-*** TODO Natural Join (⋈)
+*** DONE Natural Join (⋈)
+    CLOSED: [2025-01-22]
     Join on common attributes.
-    - [ ] Equi-join with duplicate removal
-    - [ ] Used in normalization
+    - [X] Equi-join with duplicate removal (equijoin_iterator)
+    - [X] Nested loop join strategy
+    - [X] Attribute conflict resolution (right_ prefix)
+    - [X] Attribute-level provenance tracking
+    - [X] Comprehensive test coverage
 
-*** TODO Theta Join (⋈θ)
+*** DONE Theta Join (⋈θ)
+    CLOSED: [2025-01-22]
     Join with arbitrary comparison.
-    - [ ] Support all theta operators
-    - [ ] Generalizes natural join
+    - [X] Support all theta operators via predicate functions
+    - [X] Generalizes natural join
+    - [X] Nested loop join with custom predicates
+    - [X] Provenance merging from both sides
 
 *** TODO Union (∪)
     Set union of compatible relations.
@@ -178,6 +197,145 @@
     - [ ] Enable self-joins
 
 ** Advanced Features
+
+*** DONE Tuple-Level Lineage Tracking
+    CLOSED: [2025-01-23]
+    Track complete operational history of each tuple through query pipelines.
+
+**** Status: IMPLEMENTED
+
+**** API Usage
+
+    Metadata tracking is ALWAYS enabled. All tuples include the 'meta' field:
+    #+BEGIN_SRC erlang
+    %% Simple query (metadata automatically included)
+    Iter = operations:get_tuples_iterator(DB, employees, #{}).
+
+    %% With constraints (metadata still included)
+    Iter = operations:get_tuples_iterator(DB, employees,
+        #{constraints => #{age => {gt, 30}}}).
+
+    %% Results always have:
+    %% #{id => 1, name => "Alice",
+    %%   meta => #{
+    %%     provenance => #{id => {employees, id}, name => {employees, name}},
+    %%     lineage => {base, employees}
+    %%   }}
+    #+END_SRC
+
+**** Provenance vs. Lineage
+
+    - *Provenance* (IMPLEMENTED): Tracks immediate source of each attribute
+      #+BEGIN_SRC erlang
+      meta => #{
+        provenance => #{
+          name => {employees, name},
+          dept_name => {departments, dept_name}
+        }
+      }
+      #+END_SRC
+
+    - *Lineage* (IMPLEMENTED): Tracks complete operation tree that created the tuple
+      #+BEGIN_SRC erlang
+      meta => #{
+        provenance => #{...},  % Attribute sources
+        lineage => {project, [name, dept_name],
+                     {join, dept_id,
+                       {select, fun(T) -> maps:get(age, T) > 30 end,
+                         {base, employees}},
+                       {base, departments}}}
+      }
+      #+END_SRC
+
+**** Type Definition
+
+    #+BEGIN_SRC erlang
+    -type lineage_op() ::
+        {base, atom()}                                    % Base relation
+      | {select, fun(), lineage_op()}                     % Filter operation
+      | {project, [atom()], lineage_op()}                 % Projection
+      | {join, atom(), lineage_op(), lineage_op()}        % Join on attribute
+      | {theta_join, fun(), lineage_op(), lineage_op()}   % Join with predicate
+      | {sort, fun(), lineage_op()}                       % Sort operation
+      | {take, pos_integer(), lineage_op()}               % Limit operation
+      | {aggregate, atom(), atom(), lineage_op()}.        % Aggregation (future)
+    #+END_SRC
+
+**** Use Cases
+
+    - [ ] *Updatable Views*: Propagate updates back to base relations
+      - Example: =UPDATE view SET name = "Bob"= → trace lineage → =UPDATE employees SET name = "Bob"=
+
+    - [ ] *Incremental View Maintenance*: Identify affected tuples when base data changes
+      - Example: If employees tuple changes, lineage identifies which view tuples need recomputation
+
+    - [ ] *Audit Trails*: Track how sensitive data was transformed
+      - Example: "This salary came from: employees → join(departments) → aggregate(avg)"
+
+    - [ ] *Query Explanation*: Debug complex pipelines
+      - Example: "Why is this tuple here?" → inspect lineage to see operations applied
+
+    - [ ] *Provenance Queries*: Query the lineage itself
+      - Example: "Show all tuples derived from employees.id=5"
+
+**** Implementation Plan
+
+    1. [X] Extend =tuple_metadata()= type with lineage field
+    2. [X] Add lineage construction to each iterator operator
+       - [X] select_iterator: ={select, Predicate, ChildLineage}=
+       - [X] project_iterator: ={project, Attributes, ChildLineage}=
+       - [X] equijoin_iterator: ={join, Attr, LeftLineage, RightLineage}=
+       - [X] theta_join_iterator: ={theta_join, Pred, LeftLineage, RightLineage}=
+       - [X] sort_iterator: ={sort, CompareFun, ChildLineage}=
+       - [X] take_iterator: ={take, N, ChildLineage}=
+    3. [X] Implement lineage merging in joins (combine operation trees)
+    4. [ ] Add lineage querying API for provenance analysis (future)
+    5. [ ] Use lineage for updatable view update propagation (future)
+    6. [X] Add comprehensive lineage tests
+
+**** Relation to Existing Code
+
+    Relation-level provenance already exists in =#relation.provenance=:
+    #+BEGIN_SRC erlang
+    -type provenance() ::
+        {base, atom()}
+      | {join, provenance(), provenance()}
+      | {select, provenance(), constraints()}
+      | {project, provenance(), [atom()]}
+      | {take, provenance(), pos_integer()}.
+    #+END_SRC
+
+    This tracks where *relations* come from. Lineage is the *tuple-level*
+    equivalent, tracking operational history of individual tuples through
+    query pipelines.
+
+**** Example: Complete Lineage Chain
+
+    #+BEGIN_SRC erlang
+    % Query: employees → select(age>30) → join(departments) → project([name, dept_name])
+
+    % Resulting tuple with full lineage:
+    #{name => "Alice",
+      dept_name => "Engineering",
+      meta => #{
+        provenance => #{
+          name => {employees, name},
+          dept_name => {departments, dept_name}
+        },
+        lineage => {
+          project, [name, dept_name],
+          {join, dept_id,
+            {select, fun(T) -> maps:get(age, T) > 30 end,
+              {base, employees}},
+            {base, departments}}}
+      }}
+
+    % From this lineage, we can:
+    % 1. Trace "Alice" back to employees.name
+    % 2. Know she passed the age>30 filter
+    % 3. See she was joined with departments on dept_id
+    % 4. Understand the projection removed other attributes
+    #+END_SRC
 
 *** TODO Null Value Handling
     Three-valued logic for incomplete information.
