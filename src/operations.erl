@@ -951,7 +951,10 @@ select_loop(ChildPid, Predicate) ->
                     end;
                 done ->
                     close_iterator(ChildPid),
-                    Caller ! done
+                    Caller ! done;
+                {error, Reason} ->
+                    close_iterator(ChildPid),
+                    Caller ! {error, Reason}
             end;
         stop ->
             close_iterator(ChildPid),
@@ -1008,7 +1011,10 @@ project_loop(ChildPid, Attributes) ->
                     project_loop(ChildPid, Attributes);
                 done ->
                     close_iterator(ChildPid),
-                    Caller ! done
+                    Caller ! done;
+                {error, Reason} ->
+                    close_iterator(ChildPid),
+                    Caller ! {error, Reason}
             end;
         stop ->
             close_iterator(ChildPid),
@@ -1092,7 +1098,10 @@ take_iter_loop(ChildPid, Limit, Count, OriginalN) when Count < Limit ->
                     take_iter_loop(ChildPid, Limit, Count + 1, OriginalN);
                 done ->
                     close_iterator(ChildPid),
-                    Caller ! done
+                    Caller ! done;
+                {error, Reason} ->
+                    close_iterator(ChildPid),
+                    Caller ! {error, Reason}
             end;
         stop ->
             close_iterator(ChildPid),
@@ -1343,6 +1352,7 @@ equijoin_emit_loop(LeftIter, RightTuples, JoinAttr) ->
                             end
                     end;
                 {error, Reason} ->
+                    close_iterator(LeftIter),
                     Caller ! {error, Reason},
                     ok  % Stop after sending error
             end;
@@ -1396,6 +1406,7 @@ theta_join_emit_loop(LeftIter, RightTuples, Pred) ->
                             theta_join_emit_buffered(LeftIter, RightTuples, Pred, RestMatches)
                     end;
                 {error, Reason} ->
+                    close_iterator(LeftIter),
                     Caller ! {error, Reason}
             end;
         stop ->
