@@ -140,11 +140,11 @@ hash(Value) ->
 %% All operations execute within a Mnesia transaction for ACID guarantees.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% DB = operations:create_database(my_db),
 %% {DB1, _} = operations:create_relation(DB, users, #{name => string, age => integer}),
 %% {DB2, _} = operations:create_tuple(DB1, users, #{name => "Alice", age => 30}).
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param RelationName Atom naming the relation
@@ -385,11 +385,11 @@ retract_relation(Database, Name, Transact) ->
 %% contain different tuples.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% DB = operations:create_database(my_db),
 %% Schema = #{name => string, age => integer, email => string},
 %% {DB1, _Rel} = operations:create_relation(DB, users, Schema).
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param Name Atom naming the new relation
@@ -456,9 +456,9 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
 %% All changes are committed to Mnesia within a transaction.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% DB = operations:create_database(my_app).
-%% '''
+%% </pre>
 %%
 %% @param Name Atom identifying the database
 %% @returns `#database_state{}' record
@@ -493,7 +493,7 @@ create_database(Name) ->
 %% </ul>
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% %% Create infinite relation of natural numbers
 %% {DB1, Naturals} = operations:create_infinite_relation(DB, #{
 %%     name => naturals,
@@ -506,7 +506,7 @@ create_database(Name) ->
 %% %% Query with bounds
 %% Iterator = operations:get_tuples_iterator(DB1, naturals,
 %%     #{value => {range, 0, 100}}).
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param Spec Map with keys: name, schema, cardinality, generator, constraints
@@ -641,13 +641,13 @@ hashes_from_tuple(RelationHash) ->
 %% For infinite relations, returns first N elements by generator order.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% %% Take 100 naturals (returns {0, 1, 2, ..., 99})
 %% {DB1, Naturals100} = operations:take(DB, naturals, 100).
 %%
 %% %% Can compose with other operators
 %% Iterator = operations:get_tuples_iterator(DB1, naturals100).
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param RelationName Atom naming the source relation
@@ -702,14 +702,14 @@ take(Database, RelationName, N) when is_record(Database, database_state), is_int
 %% == Options Format ==
 %%
 %% Nested format (preferred):
-%% ```
+%% <pre>
 %% #{constraints => #{age => {gt, 30}}}
-%% '''
+%% </pre>
 %%
 %% Flat format (backward compatible):
-%% ```
+%% <pre>
 %% #{age => {gt, 30}}
-%% '''
+%% </pre>
 %%
 %% == Constraints ==
 %%
@@ -723,7 +723,7 @@ take(Database, RelationName, N) when is_record(Database, database_state), is_int
 %% </ul>
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% %% Iterate employees with age > 30 (metadata always included)
 %% Iterator = operations:get_tuples_iterator(DB, employees,
 %%     #{constraints => #{age => {gt, 30}}}).
@@ -734,7 +734,7 @@ take(Database, RelationName, N) when is_record(Database, database_state), is_int
 %% %%     provenance => #{id => {employees, id}, ...},
 %% %%     lineage => {select, Fun, {base, employees}}
 %% %%   }}
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param RelationName Atom naming the relation to iterate
@@ -786,11 +786,11 @@ get_tuples_iterator(Database, RelationName, Options) when is_record(Database, da
 %% <b>Note:</b> For infinite relations, use `get_tuples_iterator/3' with constraints.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% Iterator = operations:get_tuples_iterator(DB, users),
 %% {ok, Tuple} = operations:next_tuple(Iterator),
 %% operations:close_iterator(Iterator).
-%% '''
+%% </pre>
 %%
 %% @param Database `#database_state{}' record
 %% @param RelationName Atom naming the relation to iterate
@@ -886,11 +886,11 @@ tuple_iterator_loop([TupleHash | Rest], RelationName, EnableProvenance) ->
 %% of lazy evaluation. Only use for small relations or testing.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% Iterator = operations:get_tuples_iterator(DB, users),
 %% AllTuples = operations:collect_all(Iterator).
 %% %% Iterator is automatically closed
-%% '''
+%% </pre>
 %%
 %% @param IteratorPid Pid returned from `get_tuples_iterator/2'
 %% @returns List of tuple maps, `{error, Reason, PartialResults}' on timeout
@@ -921,11 +921,11 @@ collect_all(IteratorPid, Acc) ->
 %% satisfy the predicate function.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% BaseIter = get_tuples_iterator(DB, employees, #{}),
-%% FilteredIter = select_iterator(BaseIter, fun(E) -> maps:get(age, E) > 30 end),
+%% FilteredIter = select_iterator(BaseIter, fun(E) -&gt; maps:get(age, E) &gt; 30 end),
 %% Tuples = collect_all(FilteredIter).
-%% '''
+%% </pre>
 %%
 %% @param ChildIterator Iterator process to filter
 %% @param Predicate Function: tuple() -> boolean()
@@ -967,11 +967,11 @@ select_loop(ChildPid, Predicate) ->
 %% attributes. This is the relational projection operator (π).
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% BaseIter = get_tuples_iterator(DB, employees, #{}),
 %% ProjectedIter = project_iterator(BaseIter, [name, age]),
 %% Tuples = collect_all(ProjectedIter).
-%% '''
+%% </pre>
 %%
 %% @param ChildIterator Iterator process to project
 %% @param Attributes List of attribute names to keep
@@ -1030,13 +1030,13 @@ project_loop(ChildPid, Attributes) ->
 %% produces finite tuples (via constraints or take).
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% BaseIter = get_tuples_iterator(DB, employees, #{}),
-%% SortedIter = sort_iterator(BaseIter, fun(A, B) ->
-%%     maps:get(age, A) =< maps:get(age, B)
+%% SortedIter = sort_iterator(BaseIter, fun(A, B) -&gt;
+%%     maps:get(age, A) =&lt; maps:get(age, B)
 %% end),
 %% Tuples = collect_all(SortedIter).
-%% '''
+%% </pre>
 %%
 %% @param ChildIterator Iterator process to sort
 %% @param CompareFun Function: (tuple(), tuple()) -> boolean()
@@ -1075,11 +1075,11 @@ sorted_emit_loop([Tuple | Rest]) ->
 %% then closes the child and signals done.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% BaseIter = get_tuples_iterator(DB, naturals, #{value => {range, 0, 1000}}),
 %% LimitedIter = take_iterator(BaseIter, 10),
 %% Tuples = collect_all(LimitedIter).  % Gets exactly 10 tuples
-%% '''
+%% </pre>
 %%
 %% @param ChildIterator Iterator process to limit
 %% @param N Maximum number of tuples to emit
@@ -1132,12 +1132,12 @@ take_iter_loop(ChildPid, _Limit, _Count, _OriginalN) ->
 %% Future: Hash join for better performance.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% %% Join employees with departments on dept_id
 %% LeftIter = operations:get_tuples_iterator(DB, employees, #{}),
 %% RightIter = operations:get_tuples_iterator(DB, departments, #{}),
 %% JoinIter = operations:equijoin_iterator(LeftIter, RightIter, dept_id)
-%% '''
+%% </pre>
 %%
 %% @param LeftIterator Iterator for left relation
 %% @param RightIterator Iterator for right relation
@@ -1153,13 +1153,13 @@ equijoin_iterator(LeftIterator, RightIterator, JoinAttribute) ->
 %% is evaluated. If true, the tuples are merged and emitted.
 %%
 %% == Example ==
-%% ```
-%% %% Join where employee.age > department.min_age
-%% Predicate = fun(EmpTuple, DeptTuple) ->
-%%     maps:get(age, EmpTuple) > maps:get(min_age, DeptTuple)
+%% <pre>
+%% %% Join where employee.age &gt; department.min_age
+%% Predicate = fun(EmpTuple, DeptTuple) -&gt;
+%%     maps:get(age, EmpTuple) &gt; maps:get(min_age, DeptTuple)
 %% end,
 %% JoinIter = operations:theta_join_iterator(LeftIter, RightIter, Predicate)
-%% '''
+%% </pre>
 %%
 %% @param LeftIterator Iterator for left relation
 %% @param RightIterator Iterator for right relation
@@ -1179,17 +1179,17 @@ theta_join_iterator(LeftIterator, RightIterator, Predicate) ->
 %% iterator and stores them as a new finite relation in the database.
 %%
 %% == Example ==
-%% ```
+%% <pre>
 %% %% Build lazy pipeline
 %% Pipeline = get_tuples_iterator(DB, employees, #{})
-%%            |> select_iterator(fun(E) -> maps:get(age, E) > 30 end)
-%%            |> sort_iterator(fun(A, B) -> maps:get(age, A) =< maps:get(age, B) end)
-%%            |> take_iterator(10)
-%%            |> project_iterator([name, age]),
+%%            |&gt; select_iterator(fun(E) -&gt; maps:get(age, E) &gt; 30 end)
+%%            |&gt; sort_iterator(fun(A, B) -&gt; maps:get(age, A) =&lt; maps:get(age, B) end)
+%%            |&gt; take_iterator(10)
+%%            |&gt; project_iterator([name, age]),
 %%
 %% %% Materialize into new relation
 %% {DB1, SeniorEmployees} = materialize(DB, Pipeline, senior_employees).
-%% '''
+%% </pre>
 %%
 %% @param Database Current database state
 %% @param SourceIterator Iterator process (pipeline endpoint)

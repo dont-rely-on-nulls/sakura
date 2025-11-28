@@ -25,18 +25,18 @@
 %%% </ul>
 %%%
 %%% Function relations reference domain relations in their schemas:
-%%% ```
-%%% schema => #{a => integers, b => integers, sum => integers}
-%%% '''
+%%% <pre>
+%%% schema =&gt; #{a =&gt; integers, b =&gt; integers, sum =&gt; integers}
+%%% </pre>
 %%%
 %%% == Reversibility ==
 %%%
 %%% Function relations support bidirectional querying (like Prolog):
 %%% <ul>
-%%%   <li>`Plus[1, 2, ?]' → ? = 3 (forward)</li>
-%%%   <li>`Plus[1, ?, 3]' → ? = 2 (backward, solve for b)</li>
-%%%   <li>`Plus[?, 2, 3]' → ? = 1 (backward, solve for a)</li>
-%%%   <li>`Plus[?, ?, 5]' → all pairs (a,b) where a+b=5</li>
+%%%   <li>Plus[1, 2, ?] yields ? = 3 (forward)</li>
+%%%   <li>Plus[1, ?, 3] yields ? = 2 (backward, solve for b)</li>
+%%%   <li>Plus[?, 2, 3] yields ? = 1 (backward, solve for a)</li>
+%%%   <li>Plus[?, ?, 5] yields all pairs (a,b) where a+b=5</li>
 %%% </ul>
 %%%
 %%% The generators use constraint analysis to determine which arguments
@@ -45,9 +45,9 @@
 %%% == Relational Composition ==
 %%%
 %%% In the future, function relations will be used through joins:
-%%% ```
+%%% <pre>
 %%% Integer[A], Integer[B], Plus[A, B, Sum]
-%%% '''
+%%% </pre>
 %%%
 %%% This corresponds to a three-way join where the join conditions
 %%% provide the constraints to each relation.
