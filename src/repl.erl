@@ -123,7 +123,7 @@ example_db() ->
     {DB10, _} = operations:create_tuple(DB9, departments, #{dept_id => 30, dept_name => "Marketing", budget => 90000}),
     {DB11, _} = operations:create_infinite_relation(DB10, #{
         name => naturals,
-        schema => #{},
+        schema => #{value => integer},
         cardinality => aleph_zero,
         generator => {primitive, naturals},
         constraints => #{value => {gte, 0}}
