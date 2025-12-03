@@ -42,7 +42,7 @@ setup() ->
     % Just create the function relations using the new format
 
     % Create function relations - note how their schemas reference the domain relations
-    {DB1, _Plus} = operations:create_infinite_relation(DB, #infinite_relation{
+    {DB1, _Plus} = operations:create_immutable_relation(DB, #immutable_relation_spec{
         name = plus,
         schema = #{a => integers, b => integers, sum => integers},
         generator = {generators, plus},
@@ -50,7 +50,7 @@ setup() ->
         cardinality = aleph_zero
     }),
 
-    {DB2, _Times} = operations:create_infinite_relation(DB1, #infinite_relation{
+    {DB2, _Times} = operations:create_immutable_relation(DB1, #immutable_relation_spec{
         name = times,
         schema = #{a => integers, b => integers, product => integers},
         generator = {generators, times},
@@ -58,7 +58,7 @@ setup() ->
         cardinality = aleph_zero
     }),
 
-    {DB3, _Minus} = operations:create_infinite_relation(DB2, #infinite_relation{
+    {DB3, _Minus} = operations:create_immutable_relation(DB2, #immutable_relation_spec{
         name = minus,
         schema = #{a => integers, b => integers, difference => integers},
         generator = {generators, minus},
@@ -66,7 +66,7 @@ setup() ->
         cardinality = aleph_zero
     }),
 
-    {DB4, _Divide} = operations:create_infinite_relation(DB3, #infinite_relation{
+    {DB4, _Divide} = operations:create_immutable_relation(DB3, #immutable_relation_spec{
         name = divide,
         schema = #{a => integers, b => integers, quotient => integers, remainder => naturals},
         generator = {generators, divide},

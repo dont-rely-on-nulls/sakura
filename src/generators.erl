@@ -62,6 +62,7 @@
 -include("operations.hrl").
 
 -export([
+    boolean/1,
     naturals/1,
     integers/1,
     rationals/1,
@@ -78,6 +79,28 @@
 %%% ============================================================================
 %%% Primitive Generators
 %%% ============================================================================
+
+%% @doc Generator for boolean domain (𝔹 = {true, false}).
+%%
+%% Generates the two boolean values. This is a finite immutable relation.
+%% If constraints specify equality, only generates that value.
+%%
+%% @param Constraints Map of attribute constraints
+%% @returns Generator function producing booleans
+boolean(Constraints) ->
+    case maps:get(value, Constraints, unbounded) of
+        {eq, true} ->
+            make_singleton_generator(#{value => true});
+        {eq, false} ->
+            make_singleton_generator(#{value => false});
+        {in, Values} ->
+            %% Filter to only boolean values
+            BoolValues = [V || V <- Values, V =:= true orelse V =:= false],
+            make_membership_generator(BoolValues, fun(V) -> #{value => V} end);
+        _ ->
+            %% Enumerate all booleans: true, false
+            make_membership_generator([true, false], fun(V) -> #{value => V} end)
+    end.
 
 %% @doc Generator for natural numbers (ℕ = {0, 1, 2, 3, ...}).
 %%

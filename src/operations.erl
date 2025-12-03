@@ -43,7 +43,7 @@
 	 hash/1,
          create_database/1,
 	 create_relation/3,
-	 create_infinite_relation/2,
+	 create_immutable_relation/2,
 	 create_tuple/3,
 	 retract_tuple/3,
 	 retract_tuple/4,
@@ -101,7 +101,7 @@ setup() ->
         {type, set}
     ]),
     mnesia:create_table(relation, [
-        {attributes, [hash, name, tree, schema, constraints, cardinality, generator, provenance]},
+        {attributes, [hash, name, tree, schema, constraints, cardinality, generator, membership_criteria, mutability, provenance]},
         {disc_copies, [node()]},
         {type, set}
     ]),
@@ -154,6 +154,22 @@ hash(Value) ->
 %% @see create_relation/3
 %% @see get_tuples_iterator/2
 create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Database, database_state) ->
+    %% Check if relation is immutable before attempting insert
+    CurrentRelationHash = maps:get(RelationName, Database#database_state.relations),
+    [RelationRecord] = mnesia:dirty_read(relation, CurrentRelationHash),
+
+    case RelationRecord#relation.mutability of
+        immutable ->
+            {error, {immutable_relation, RelationName}};
+        mutable ->
+            create_tuple_internal(Database, RelationName, Tuple, RelationRecord);
+        undefined ->
+            %% Backwards compatibility: treat undefined as mutable
+            create_tuple_internal(Database, RelationName, Tuple, RelationRecord)
+    end.
+
+%% Internal function for tuple creation (after mutability check)
+create_tuple_internal(Database, RelationName, Tuple, _RelationRecord) ->
     F = fun() ->
         %% Step 1: Store each attribute value and build attribute_map
         AttributeMap = maps:map(fun(_AttrName, Value) ->
@@ -412,10 +428,12 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
             name = Name,
             tree = undefined,
             schema = Definition,
-            constraints = #{},           % No constraints by default
-            cardinality = {finite, 0},   % Empty relation
-            generator = undefined,        % Finite relation has no generator
-            provenance = {base, Name}     % Base relation
+            constraints = #{},              % No constraints by default
+            cardinality = {finite, 0},      % Empty relation
+            generator = undefined,          % Finite relation has no generator
+            membership_criteria = #{},      % No membership criteria by default
+            mutability = mutable,           % Mutable by default
+            provenance = {base, Name}       % Base relation
         },
         mnesia:write(relation, NewRelation, write),
         
@@ -473,38 +491,51 @@ create_database(Name) ->
         relations = #{},
         timestamp = erlang:timestamp()
     },
+    %% Standard immutable relations (domains and their predicates)
     StandardTypeRelations = [
-        #infinite_relation{
-	   name = naturals,
-	   schema = #{value => naturals},
-	   generator = {generators, naturals},
-	   membership_criteria = #{value => {'and', {gte, 0}, is_integer}},
-	   cardinality = aleph_zero
-	},
-	#infinite_relation{
-	    name = integers,
-	    schema = #{value => integers},
-	    generator = {generators, integers},
-	    membership_criteria = #{value => is_integer},
-	    cardinality = aleph_zero
+        %% Boolean domain - finite, immutable
+        #immutable_relation_spec{
+            name = boolean,
+            schema = #{value => boolean},
+            generator = {generators, boolean},
+            membership_criteria = #{value => {in, [true, false]}},
+            cardinality = {finite, 2}
         },
-        #infinite_relation{
-	    name = rationals,
-	    schema = #{numerator => integers, denominator => integers},
-	    generator = {generators, rationals},
-	    membership_criteria = #{denominator => {neq, 0}},
-	    cardinality = aleph_zero
-	}
-	%% , #infinite_relation{
-	%%    name = reals,
-	%%    schema = #{value => reals},
-	%%    generator = {primitive, reals},
-	%%    membership_criteria = #{value => {is_float}},
-	%%    cardinality = continuum
-	%% }
+        %% Natural numbers - infinite, immutable
+        #immutable_relation_spec{
+            name = naturals,
+            schema = #{value => naturals},
+            generator = {generators, naturals},
+            membership_criteria = #{value => {'and', {gte, 0}, is_integer}},
+            cardinality = aleph_zero
+        },
+        %% Integers - infinite, immutable
+        #immutable_relation_spec{
+            name = integers,
+            schema = #{value => integers},
+            generator = {generators, integers},
+            membership_criteria = #{value => is_integer},
+            cardinality = aleph_zero
+        },
+        %% Rationals - infinite, immutable
+        #immutable_relation_spec{
+            name = rationals,
+            schema = #{numerator => integers, denominator => integers},
+            generator = {generators, rationals},
+            membership_criteria = #{denominator => {neq, 0}},
+            cardinality = aleph_zero
+        }
+        %% Reals - TODO: implement
+        %% #immutable_relation_spec{
+        %%     name = reals,
+        %%     schema = #{value => reals},
+        %%     generator = {generators, reals},
+        %%     membership_criteria = #{value => is_float},
+        %%     cardinality = continuum
+        %% }
     ],
-    Folder = fun (Elem, AccDB) -> 
-		     {NextDB, _} = operations:create_infinite_relation(AccDB, Elem), 
+    Folder = fun (Elem, AccDB) ->
+		     {NextDB, _} = operations:create_immutable_relation(AccDB, Elem),
 		     NextDB
 	     end,
     StandardDB = lists:foldl(Folder, DB, StandardTypeRelations),
@@ -529,12 +560,13 @@ create_database(Name) ->
 %%
 %% == Example ==
 %% <pre>
-%% %% Create infinite relation of natural numbers
-%% {DB1, Naturals} = operations:create_infinite_relation(DB, #infinite_relation{
+%% %% Create immutable relation of natural numbers
+%% {DB1, Naturals} = operations:create_immutable_relation(DB, #immutable_relation_spec{
 %%     name = naturals,
-%%     schema = #{value => natural},
-%%     generator = {primitive, naturals},
-%%     membership_criteria = #{value => {gte, 0}}
+%%     schema = #{value => naturals},
+%%     generator = {generators, naturals},
+%%     membership_criteria = #{value => {'and', {gte, 0}, is_integer}},
+%%     cardinality = aleph_zero
 %% }).
 %%
 %% %% Query with bounds
@@ -548,14 +580,25 @@ create_database(Name) ->
 %%
 %% @see create_relation/3
 %% @see get_tuples_iterator/3
-create_infinite_relation(Database, Specification) 
+%% @doc Create an immutable relation (with optional generator for infinite extent).
+%%
+%% Creates a relation that cannot be modified via insert/delete operations.
+%% Used for:
+%% - Infinite domains (Naturals, Integers, Rationals)
+%% - Infinite-extent relations (Plus, Times, LessThan)
+%% - Protected finite relations (Boolean)
+%%
+%% @param Database `#database_state{}' record
+%% @param Specification `#immutable_relation_spec{}' record
+%% @returns `{UpdatedDatabase, NewRelation}'
+create_immutable_relation(Database, Specification)
   when is_record(Database, database_state)
-       andalso is_record(Specification, infinite_relation) ->
-    Name = Specification#infinite_relation.name,
-    Schema = Specification#infinite_relation.schema,
-    Generator = Specification#infinite_relation.generator,
-    Constraints = Specification#infinite_relation.membership_criteria,
-    Cardinality = Specification#infinite_relation.cardinality,
+       andalso is_record(Specification, immutable_relation_spec) ->
+    Name = Specification#immutable_relation_spec.name,
+    Schema = Specification#immutable_relation_spec.schema,
+    Generator = Specification#immutable_relation_spec.generator,
+    MembershipCriteria = Specification#immutable_relation_spec.membership_criteria,
+    Cardinality = Specification#immutable_relation_spec.cardinality,
 
     F = fun() ->
         RelationHash = hash({Name, Schema, undefined}),
@@ -563,11 +606,13 @@ create_infinite_relation(Database, Specification)
         NewRelation = #relation{
             hash = RelationHash,
             name = Name,
-            tree = undefined,  % Infinite relations have no merkle tree
+            tree = undefined,           % Immutable relations have no merkle tree
             schema = Schema,
-            constraints = Constraints,
+            constraints = #{},          % No constraints by default
             cardinality = Cardinality,
             generator = Generator,
+            membership_criteria = MembershipCriteria,
+            mutability = immutable,     % Always immutable
             provenance = {base, Name}
         },
         mnesia:write(relation, NewRelation, write),
