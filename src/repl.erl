@@ -119,19 +119,15 @@ example_db() ->
     {DB8, _} = operations:create_tuple(DB7, departments, #{dept_id => 10, dept_name => "Engineering", budget => 100000}),
     {DB9, _} = operations:create_tuple(DB8, departments, #{dept_id => 20, dept_name => "Sales", budget => 80000}),
     {DB10, _} = operations:create_tuple(DB9, departments, #{dept_id => 30, dept_name => "Marketing", budget => 90000}),
-    {DB11, _} = operations:create_infinite_relation(DB10, #{
-        name => naturals,
-        schema => #{value => integer},
-        cardinality => aleph_zero,
-        generator => {primitive, naturals},
-        constraints => #{value => {gte, 0}}
-    }),
+
+    %% Note: naturals, integers, rationals, and boolean are now built-in to every database
 
     io:format("Example database created with:~n"),
     io:format("  - employees (5 tuples)~n"),
-    io:format("  - departments (3 tuples)~n~n"),
+    io:format("  - departments (3 tuples)~n"),
+    io:format("  - Built-in immutable relations: boolean, naturals, integers, rationals~n~n"),
 
-    DB11.
+    DB10.
 
 %% @doc Execute a query and pretty-print results (default table mode).
 %%
