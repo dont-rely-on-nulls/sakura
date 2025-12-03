@@ -142,7 +142,7 @@ test_materialize_infinite(DB) ->
     %% Naturals are built-in, no need to create them
 
     %% Take 100 and materialize
-    Pipeline = operations:get_tuples_iterator(DB, naturals, #{value => {range, 0, 99}}),
+    Pipeline = operations:get_tuples_iterator(DB, natural, #{value => {range, 0, 99}}),
     {_DB2, Naturals100} = operations:materialize(DB, Pipeline, naturals_100),
 
     [

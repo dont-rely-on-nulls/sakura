@@ -210,7 +210,7 @@ test_join_with_infinite_relation(DB) ->
     % Integers are built-in, no need to create them
 
     % Get small set of integers
-    IntIter = operations:get_tuples_iterator(DB, integers, #{value => {range, 1, 5}}),
+    IntIter = operations:get_tuples_iterator(DB, integer, #{value => {range, 1, 5}}),
 
     % Get employees
     EmpIter = operations:get_tuples_iterator(DB, employees, #{}),

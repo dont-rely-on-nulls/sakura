@@ -52,7 +52,7 @@ test_create_naturals(DB) ->
 test_naturals_with_constraints(DB) ->
     %% Naturals are built-in, just query them
     %% Query with range constraint [0, 9]
-    Iterator = operations:get_tuples_iterator(DB, naturals, #{value => {range, 0, 9}}),
+    Iterator = operations:get_tuples_iterator(DB, natural, #{value => {range, 0, 9}}),
     Tuples = operations:collect_all(Iterator),
     DataOnly = strip_meta(Tuples),
 
@@ -70,7 +70,7 @@ test_integers_generator(DB) ->
     [Integers] = mnesia:dirty_read(relation, IntegersHash),
 
     %% Query with range constraint [-5, 5]
-    Iterator = operations:get_tuples_iterator(DB, integers, #{value => {range, -5, 5}}),
+    Iterator = operations:get_tuples_iterator(DB, integer, #{value => {range, -5, 5}}),
     Tuples = operations:collect_all(Iterator),
     DataOnly = strip_meta(Tuples),
 
@@ -89,7 +89,7 @@ test_rationals_generator(DB) ->
     [Rationals] = mnesia:dirty_read(relation, RationalsHash),
 
     %% Take first 10 rationals using constraints
-    Iterator = operations:get_tuples_iterator(DB, rationals, #{}),
+    Iterator = operations:get_tuples_iterator(DB, rational, #{}),
 
     %% Just get a few tuples to verify generator works
     {ok, First} = operations:next_tuple(Iterator),
@@ -107,7 +107,7 @@ test_rationals_generator(DB) ->
 test_take_operator(DB) ->
     %% Naturals are built-in, just use them
     %% Take 100 naturals
-    {_DB2, Naturals100} = operations:take(DB, naturals, 100),
+    {_DB2, Naturals100} = operations:take(DB, natural, 100),
 
     %% Verify result is finite
     [
