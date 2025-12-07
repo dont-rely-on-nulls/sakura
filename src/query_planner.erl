@@ -379,18 +379,6 @@ compute_provenance(_UnknownPlan) ->
     % Unknown plan type
     undefined.
 
-%% @doc Legacy function: Execute a query plan and return an iterator.
-%%
-%% This is kept for backward compatibility and internal use by the
-%% ephemeral relation generator.
-%%
-%% @param DB The database state
-%% @param Plan The query plan
-%% @returns Iterator process PID
--spec execute_to_iterator(term(), query_plan()) -> pid().
-execute_to_iterator(DB, Plan) ->
-    compile_to_iterator(DB, Plan).
-
 %% Validate query plan structure
 -spec validate_plan(query_plan()) -> ok | {error, term()}.
 validate_plan({scan, Name}) when is_atom(Name) ->
