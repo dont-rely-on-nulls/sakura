@@ -77,8 +77,7 @@
 %%% Types
 
 -type query_plan() ::
-    {scan, atom()}                                         % Scan relation
-  | {relation, atom()}                                     % Reference relation
+    atom()                                                 % Relation name
   | {select, query_plan(), fun((map()) -> boolean())}      % Filter
   | {project, query_plan(), [atom()]}                      % Projection
   | {join, query_plan(), query_plan(), atom()}             % Equijoin
@@ -191,7 +190,7 @@ create_ephemeral_relation(DB, Plan) ->
 %% @param Plan The query plan
 %% @returns Schema map
 -spec compute_schema(term(), query_plan()) -> map().
-compute_schema(DB, {scan, RelationName}) ->
+compute_schema(DB, RelationName) when is_atom(RelationName) ->
     case maps:get(RelationName, DB#database_state.relations, undefined) of
         undefined ->
             % Relation not found, return empty schema
@@ -200,10 +199,6 @@ compute_schema(DB, {scan, RelationName}) ->
             [Relation] = mnesia:dirty_read(relation, RelationHash),
             Relation#relation.schema
     end;
-
-compute_schema(DB, {relation, RelationName}) ->
-    % Same as scan
-    compute_schema(DB, {scan, RelationName});
 
 compute_schema(DB, {select, SubPlan, _Predicate}) ->
     % Select doesn't change schema, just filters tuples
@@ -304,10 +299,7 @@ merge_join_schemas(LeftSchema, RightSchema) ->
 %% @param Plan The query plan
 %% @returns Provenance term
 -spec compute_provenance(query_plan()) -> term().
-compute_provenance({scan, RelationName}) ->
-    {base, RelationName};
-
-compute_provenance({relation, RelationName}) ->
+compute_provenance(RelationName) when is_atom(RelationName) ->
     {base, RelationName};
 
 compute_provenance({select, SubPlan, _Predicate}) ->
@@ -356,9 +348,7 @@ compute_provenance(_UnknownPlan) ->
 
 %% Validate query plan structure
 -spec validate_plan(query_plan()) -> ok | {error, term()}.
-validate_plan({scan, Name}) when is_atom(Name) ->
-    ok;
-validate_plan({relation, Name}) when is_atom(Name) ->
+validate_plan(Name) when is_atom(Name) ->
     ok;
 validate_plan({select, SubPlan, Pred}) when is_function(Pred, 1) ->
     validate_plan(SubPlan);
@@ -394,10 +384,7 @@ validate_plan(Plan) ->
 
 %% Compile query plan to iterator pipeline
 -spec compile_to_iterator(term(), query_plan()) -> pid().
-compile_to_iterator(DB, {scan, Name}) ->
-    operations:get_tuples_iterator(DB, Name);
-
-compile_to_iterator(DB, {relation, Name}) ->
+compile_to_iterator(DB, Name) when is_atom(Name) ->
     operations:get_tuples_iterator(DB, Name);
 
 compile_to_iterator(DB, {select, SubPlan, Predicate}) ->
@@ -497,10 +484,7 @@ rename_loop_inline(SourceIter, OldAttr, NewAttr) ->
 
 %% Pretty-print query plan
 -spec explain_plan(query_plan(), non_neg_integer()) -> string().
-explain_plan({scan, Name}, Indent) ->
-    indent(Indent) ++ "Scan: " ++ atom_to_list(Name) ++ "\n";
-
-explain_plan({relation, Name}, Indent) ->
+explain_plan(Name, Indent) when is_atom(Name) ->
     indent(Indent) ++ "Relation: " ++ atom_to_list(Name) ++ "\n";
 
 explain_plan({select, SubPlan, _Pred}, Indent) ->
@@ -546,6 +530,21 @@ explain_plan({materialize, SubPlan, N}, Indent) ->
 -spec indent(non_neg_integer()) -> string().
 indent(N) -> lists:duplicate(N, $\s).
 
+%% Helper: convert iterator PID to generator function
+%% Generator protocol: fun(next) -> done | {value, Tuple, NextGenerator} | {error, Reason}
+-spec make_iterator_generator(pid()) -> fun((next) -> term()).
+make_iterator_generator(IterPid) ->
+    fun(next) ->
+        case operations:next_tuple(IterPid) of
+            done ->
+                done;
+            {ok, Tuple} ->
+                {value, Tuple, make_iterator_generator(IterPid)};
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end.
+
 %% Helper: get relation from database
 -spec get_relation_from_db(term(), atom()) -> #relation{}.
 get_relation_from_db(DB, RelationName) ->
@@ -563,11 +562,17 @@ get_relation_from_db(DB, RelationName) ->
 %% then return the final ephemeral relation. No iterators are created until
 %% the generator is called.
 -spec compile_to_relation(term(), query_plan()) -> #relation{}.
-compile_to_relation(DB, {scan, RelationName}) ->
-    get_relation_from_db(DB, RelationName);
-
-compile_to_relation(DB, {relation, RelationName}) ->
-    get_relation_from_db(DB, RelationName);
+compile_to_relation(DB, RelationName) when is_atom(RelationName) ->
+    BaseRelation = get_relation_from_db(DB, RelationName),
+    % For base finite relations, create a generator that properly resolves tuples
+    % The generator returns a generator function (not a PID)
+    GeneratorFun = fun(Constraints) ->
+        % Get iterator PID
+        IterPid = operations:get_tuples_iterator(DB, RelationName, Constraints),
+        % Convert iterator to generator function
+        make_iterator_generator(IterPid)
+    end,
+    BaseRelation#relation{generator = GeneratorFun};
 
 compile_to_relation(DB, {select, SubPlan, Predicate}) ->
     SubRelation = compile_to_relation(DB, SubPlan),
