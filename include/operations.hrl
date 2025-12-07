@@ -12,7 +12,8 @@
     generator,             % Generator function (immutable only), undefined for tree-based
     membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership test
     mutability,            % mutable | immutable
-    provenance             % Provenance tracking for updatable views (future)
+    provenance,            % attribute_provenance() - maps attribute to source relation
+    lineage                % lineage_op() - operation tree showing derivation
 }).
 
 -record(tuple, {hash, relation, attribute_map}).
