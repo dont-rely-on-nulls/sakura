@@ -105,14 +105,17 @@ test_rationals_generator(DB) ->
     ].
 
 test_take_operator(DB) ->
-    %% Naturals are built-in, just use them
-    %% Take 100 naturals
-    {_DB2, Naturals100} = operations:take(DB, natural, 100),
+    %% Get natural relation
+    NaturalHash = maps:get(natural, DB#database_state.relations),
+    [NaturalRel] = mnesia:dirty_read(relation, NaturalHash),
 
-    %% Verify result is finite
+    %% Take 100 naturals - returns ephemeral relation
+    Naturals100 = relational_operators:take(NaturalRel, 100),
+
+    %% Verify result is finite with generator
     [
      ?_assertEqual({finite, 100}, Naturals100#relation.cardinality),
-     ?_assertEqual({take, natural, 100}, Naturals100#relation.generator)
+     ?_assert(is_function(Naturals100#relation.generator))
     ].
 
 test_finite_relation_cardinality(DB) ->
