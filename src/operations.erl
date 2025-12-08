@@ -45,6 +45,7 @@
 	 create_relation/3,
 	 create_immutable_relation/2,
 	 create_tuple/3,
+	 create_all_tuples/3,
 	 retract_tuple/3,
 	 retract_tuple/4,
 	 clear_relation/2,
@@ -1238,7 +1239,7 @@ materialize(Database, SourceIterator, ResultName) when is_record(Database, datab
             {DB1, _Relation} = create_relation(Database, ResultName, Schema),
 
             %% 4. Insert all tuples
-            {FinalDB, FinalRelation} = insert_all_tuples(DB1, ResultName, AllTuples),
+            {FinalDB, FinalRelation} = create_all_tuples(DB1, ResultName, AllTuples),
 
             {FinalDB, FinalRelation}
     end.
@@ -1260,7 +1261,7 @@ infer_type(_) -> term.
 
 %% @private
 %% Insert multiple tuples into a relation.
-insert_all_tuples(DB, RelationName, Tuples) ->
+create_all_tuples(DB, RelationName, Tuples) ->
     lists:foldl(
         fun(Tuple, {DBacc, _RelAcc}) ->
             create_tuple(DBacc, RelationName, Tuple)

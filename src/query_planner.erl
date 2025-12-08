@@ -463,8 +463,7 @@ rename_loop_inline(SourceIter, OldAttr, NewAttr) ->
         {next, Caller} ->
             case operations:next_tuple(SourceIter) of
                 done ->
-                    Caller ! done,
-                    rename_loop_inline(SourceIter, OldAttr, NewAttr);
+                    Caller ! done;
                 {ok, Tuple} ->
                     RenamedTuple = case maps:is_key(OldAttr, Tuple) of
                         true ->

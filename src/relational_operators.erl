@@ -383,14 +383,12 @@ generator_loop(GenFun) ->
         {next, Caller} ->
             case GenFun(next) of
                 done ->
-                    Caller ! done,
-                    generator_loop(GenFun);
+                    Caller ! done;
                 {value, Tuple, NextGen} ->
                     Caller ! {tuple, Tuple},
                     generator_loop(NextGen);
                 {error, Reason} ->
-                    Caller ! {error, Reason},
-                    generator_loop(GenFun)
+                    Caller ! {error, Reason}
             end;
         {close, Caller} ->
             Caller ! ok
@@ -406,8 +404,7 @@ rename_loop(SourceIter, RenameMappings) ->
         {next, Caller} ->
             case operations:next_tuple(SourceIter) of
                 done ->
-                    Caller ! done,
-                    rename_loop(SourceIter, RenameMappings);
+                    Caller ! done;
                 {ok, Tuple} ->
                     RenamedTuple = maps:fold(
                         fun(OldAttr, NewAttr, TupleAcc) ->
