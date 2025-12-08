@@ -24,7 +24,7 @@
 
 -module(relational_operators).
 
--include("operations.hrl").
+-include("../include/operations.hrl").
 
 -export([
     take/2,
@@ -41,26 +41,11 @@
 %%% ============================================================================
 
 %% @private
-%% Generate unique name for ephemeral relation.
-%% @param Prefix Operation prefix (e.g., "take", "select", "project")
-%% @param SourceRelation Source relation
-%% @param Suffix Optional additional suffix (e.g., integer parameter)
-generate_ephemeral_name(Prefix, SourceRelation) ->
-    generate_ephemeral_name(Prefix, SourceRelation, "").
-
-generate_ephemeral_name(Prefix, SourceRelation, "") ->
-    list_to_atom(
-        atom_to_list(Prefix) ++ "_" ++
-        atom_to_list(SourceRelation#relation.name) ++ "_" ++
-        integer_to_list(erlang:unique_integer([positive]))
-    );
-generate_ephemeral_name(Prefix, SourceRelation, Suffix) when is_integer(Suffix) ->
-    list_to_atom(
-        atom_to_list(Prefix) ++ "_" ++
-        atom_to_list(SourceRelation#relation.name) ++ "_" ++
-        integer_to_list(Suffix) ++ "_" ++
-        integer_to_list(erlang:unique_integer([positive]))
-    ).
+%% Generate a random name for ephemeral relations.
+generate_ephemeral_name() ->
+    {UUID, _} = uuid:get_v1(uuid:new(self(), erlang)),
+    [Base64UUID] = io_lib:format("~s", [base64:encode(UUID)]),
+    Base64UUID.
 
 %%% ============================================================================
 %%% Relational Operators
@@ -98,8 +83,7 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
         _ -> {finite, N}
     end,
 
-    %% Create unique name
-    Name = generate_ephemeral_name(take, SourceRelation, N),
+    Name = generate_ephemeral_name(),
 
     %% Generator closure that spawns fresh iterators
     GeneratorFun = fun(Constraints) ->
@@ -110,7 +94,7 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
     end,
 
     #relation{
-        hash = operations:hash({take, SourceRelation#relation.name, N, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = SourceRelation#relation.schema,
@@ -133,7 +117,7 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
 %% @returns Ephemeral #relation{} with generator
 -spec select(#relation{}, fun((map()) -> boolean())) -> #relation{}.
 select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_function(Predicate, 1) ->
-    Name = generate_ephemeral_name(select, SourceRelation),
+    Name = generate_ephemeral_name(),
 
     GeneratorFun = fun(Constraints) ->
         SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
@@ -141,7 +125,7 @@ select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_f
     end,
 
     #relation{
-        hash = operations:hash({select, SourceRelation#relation.name, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = SourceRelation#relation.schema,
@@ -164,7 +148,7 @@ select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_f
 %% @returns Ephemeral #relation{} with generator
 -spec project(#relation{}, [atom()]) -> #relation{}.
 project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is_list(Attributes) ->
-    Name = generate_ephemeral_name(project, SourceRelation),
+    Name = generate_ephemeral_name(),
 
     %% Compute projected schema
     ProjectedSchema = maps:with(Attributes, SourceRelation#relation.schema),
@@ -175,7 +159,7 @@ project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is
     end,
 
     #relation{
-        hash = operations:hash({project, SourceRelation#relation.name, Attributes, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = ProjectedSchema,
@@ -219,7 +203,7 @@ join(LeftRelation, RightRelation, JoinAttribute)
     end,
 
     #relation{
-        hash = operations:hash({join, LeftRelation#relation.name, RightRelation#relation.name, JoinAttribute, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = MergedSchema,
@@ -262,7 +246,7 @@ theta_join(LeftRelation, RightRelation, Predicate)
     end,
 
     #relation{
-        hash = operations:hash({theta_join, LeftRelation#relation.name, RightRelation#relation.name, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = MergedSchema,
@@ -285,7 +269,7 @@ theta_join(LeftRelation, RightRelation, Predicate)
 %% @returns Ephemeral #relation{} with generator
 -spec rename(#relation{}, #{atom() => atom()}) -> #relation{}.
 rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation), is_map(RenameMappings) ->
-    Name = generate_ephemeral_name(rename, SourceRelation),
+    Name = generate_ephemeral_name(),
 
     %% Compute renamed schema
     RenamedSchema = maps:fold(
@@ -307,7 +291,7 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
     end,
 
     #relation{
-        hash = operations:hash({rename, SourceRelation#relation.name, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = RenamedSchema,
@@ -330,7 +314,7 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
 %% @returns Ephemeral #relation{} with generator
 -spec sort(#relation{}, fun((map(), map()) -> boolean())) -> #relation{}.
 sort(SourceRelation, Comparator) when is_record(SourceRelation, relation), is_function(Comparator, 2) ->
-    Name = generate_ephemeral_name(sort, SourceRelation),
+    Name = generate_ephemeral_name(),
 
     GeneratorFun = fun(Constraints) ->
         SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
@@ -338,7 +322,7 @@ sort(SourceRelation, Comparator) when is_record(SourceRelation, relation), is_fu
     end,
 
     #relation{
-        hash = operations:hash({sort, SourceRelation#relation.name, erlang:system_time()}),
+        hash = <<>>,
         name = Name,
         tree = undefined,
         schema = SourceRelation#relation.schema,
