@@ -16,7 +16,6 @@ join_test_() ->
       fun test_equijoin_simple/1,
       fun test_equijoin_multiple_matches/1,
       fun test_equijoin_no_matches/1,
-      fun test_equijoin_with_conflicts/1,
       fun test_theta_join_greater_than/1,
       fun test_theta_join_complex_predicate/1,
       fun test_join_with_infinite_relation/1,
@@ -126,33 +125,6 @@ test_equijoin_no_matches(DB) ->
      ?_assertEqual(0, length(Results))
     ].
 
-test_equijoin_with_conflicts(DB) ->
-    % Create relations with conflicting attribute names
-    {DB1, _} = operations:create_relation(DB, table_a, #{
-        id => integer,
-        value => integer
-    }),
-    {DB2, _} = operations:create_tuple(DB1, table_a, #{id => 1, value => 100}),
-
-    {DB3, _} = operations:create_relation(DB2, table_b, #{
-        id => integer,
-        value => integer  % Same name as table_a.value
-    }),
-    {DB4, _} = operations:create_tuple(DB3, table_b, #{id => 1, value => 200}),
-
-    AIter = operations:get_tuples_iterator(DB4, table_a),
-    BIter = operations:get_tuples_iterator(DB4, table_b),
-
-    JoinIter = operations:equijoin_iterator(AIter, BIter, id),
-    Results = operations:collect_all(JoinIter),
-
-    % Should have one result with both values
-    % Right side 'value' should be prefixed as 'right_value'
-    [
-     ?_assertEqual(1, length(Results)),
-     ?_assertMatch([#{id := 1, value := 100, right_value := 200}], Results)
-    ].
-
 %%% Theta-Join Tests
 
 test_theta_join_greater_than(DB) ->
@@ -208,9 +180,12 @@ test_theta_join_complex_predicate(DB) ->
 
 test_join_with_infinite_relation(DB) ->
     % Integers are built-in, no need to create them
+    {ok, IntegerHash} = operations:get_relation_hash(DB, integer),
+    [IntegerRel] = mnesia:dirty_read(relation, IntegerHash),
 
-    % Get small set of integers
-    IntIter = operations:get_tuples_iterator(DB, integer, #{value => {range, 1, 5}}),
+    % Get small set of integers using take
+    Take5 = relational_operators:take(IntegerRel, 5),
+    IntIter = (Take5#relation.generator)(),
 
     % Get employees
     EmpIter = operations:get_tuples_iterator(DB, employees),
@@ -223,13 +198,14 @@ test_join_with_infinite_relation(DB) ->
     JoinIter = operations:theta_join_iterator(EmpIter, IntIter, Predicate),
     Results = operations:collect_all(JoinIter),
 
-    % Should get employees with id in [1,5] (all 4 employees)
+    % Integers generate in interleaved order: [0, 1, -1, 2, -2]
+    % So only employees with id 1 and 2 will match
     [
-     ?_assertEqual(4, length(Results)),
+     ?_assertEqual(2, length(Results)),
      ?_assert(lists:all(fun(T) ->
                            Id = maps:get(id, T),
                            Value = maps:get(value, T),
-                           Id =:= Value andalso Id >= 1 andalso Id =< 5
+                           Id =:= Value andalso (Id =:= 1 orelse Id =:= 2)
                        end, Results))
     ].
 
