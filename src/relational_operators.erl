@@ -60,13 +60,13 @@ generate_ephemeral_name() ->
 %% == Example ==
 %% <pre>
 %% NaturalRel = get_relation(DB, natural),
-%% First100 = relational_operators:take(NaturalRel, 100),
+%% Some100 = relational_operators:take(NaturalRel, 100),
 %%
 %% %% Can call generator multiple times
-%% Iter1 = (First100#relation.generator)(#{}),
+%% Iter1 = operations:get_iterator_from_generator(ephemeral, Some100#relation.generator),
 %% Results1 = operations:collect_all(Iter1),
 %%
-%% Iter2 = (First100#relation.generator)(#{}),
+%% Iter2 = operations:get_iterator_from_generator(ephemeral, Some100#relation.generator),
 %% Results2 = operations:collect_all(Iter2),
 %% %% Results1 =:= Results2
 %% </pre>
@@ -82,17 +82,12 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
         {finite, _} -> {finite, N};
         _ -> {finite, N}
     end,
-
     Name = generate_ephemeral_name(),
-
-    %% Generator closure that spawns fresh iterators
-    GeneratorFun = fun(Constraints) ->
-        %% Spawn iterator from source relation
-        SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
-        %% Apply take operation
+    SourceGen = SourceRelation#relation.generator,
+    GeneratorFun = fun() ->
+        SourceIter = SourceGen(),
         operations:take_iterator(SourceIter, N)
     end,
-
     #relation{
         hash = <<>>,
         name = Name,
@@ -119,8 +114,9 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
 select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_function(Predicate, 1) ->
     Name = generate_ephemeral_name(),
 
-    GeneratorFun = fun(Constraints) ->
-        SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
+    SourceGen = SourceRelation#relation.generator,
+    GeneratorFun = fun() ->
+        SourceIter = SourceGen(),
         operations:select_iterator(SourceIter, Predicate)
     end,
 
@@ -153,8 +149,9 @@ project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is
     %% Compute projected schema
     ProjectedSchema = maps:with(Attributes, SourceRelation#relation.schema),
 
-    GeneratorFun = fun(Constraints) ->
-        SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
+    SourceGen = SourceRelation#relation.generator,
+    GeneratorFun = fun() ->
+        SourceIter = SourceGen(),
         operations:project_iterator(SourceIter, Attributes)
     end,
 
@@ -196,9 +193,11 @@ join(LeftRelation, RightRelation, JoinAttribute)
     %% Merge schemas
     MergedSchema = maps:merge(LeftRelation#relation.schema, RightRelation#relation.schema),
 
-    GeneratorFun = fun(Constraints) ->
-        LeftIter = spawn_iterator_from_generator(LeftRelation#relation.generator, Constraints),
-        RightIter = spawn_iterator_from_generator(RightRelation#relation.generator, Constraints),
+    LeftGen = LeftRelation#relation.generator,
+    RightGen = RightRelation#relation.generator,
+    GeneratorFun = fun() ->
+        LeftIter = LeftGen(),
+        RightIter = RightGen(),
         operations:equijoin_iterator(LeftIter, RightIter, JoinAttribute)
     end,
 
@@ -239,9 +238,11 @@ theta_join(LeftRelation, RightRelation, Predicate)
 
     MergedSchema = maps:merge(LeftRelation#relation.schema, RightRelation#relation.schema),
 
-    GeneratorFun = fun(Constraints) ->
-        LeftIter = spawn_iterator_from_generator(LeftRelation#relation.generator, Constraints),
-        RightIter = spawn_iterator_from_generator(RightRelation#relation.generator, Constraints),
+    LeftGen = LeftRelation#relation.generator,
+    RightGen = RightRelation#relation.generator,
+    GeneratorFun = fun() ->
+        LeftIter = LeftGen(),
+        RightIter = RightGen(),
         operations:theta_join_iterator(LeftIter, RightIter, Predicate)
     end,
 
@@ -285,8 +286,9 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
         RenameMappings
     ),
 
-    GeneratorFun = fun(Constraints) ->
-        SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
+    SourceGen = SourceRelation#relation.generator,
+    GeneratorFun = fun() ->
+        SourceIter = SourceGen(),
         rename_iterator(SourceIter, RenameMappings)
     end,
 
@@ -316,8 +318,9 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
 sort(SourceRelation, Comparator) when is_record(SourceRelation, relation), is_function(Comparator, 2) ->
     Name = generate_ephemeral_name(),
 
-    GeneratorFun = fun(Constraints) ->
-        SourceIter = spawn_iterator_from_generator(SourceRelation#relation.generator, Constraints),
+    SourceGen = SourceRelation#relation.generator,
+    GeneratorFun = fun() ->
+        SourceIter = SourceGen(),
         operations:sort_iterator(SourceIter, Comparator)
     end,
 
@@ -336,47 +339,6 @@ sort(SourceRelation, Comparator) when is_record(SourceRelation, relation), is_fu
     }.
 
 %%% Helper Functions
-
-%% @private
-%% @doc Spawn iterator from a relation's generator
-%%
-%% Handles both function generators and tuple-spec generators.
-%% For tuple-spec generators {Module, Function}, calls Module:Function(Constraints)
-%% to get a generator function, then wraps it in an iterator process.
--spec spawn_iterator_from_generator(term(), map()) -> pid().
-spawn_iterator_from_generator(Generator, Constraints) when is_function(Generator) ->
-    %% Function generator - call it to get another function, wrap in iterator
-    GenFun = Generator(Constraints),
-    spawn_generator_iterator(GenFun);
-spawn_iterator_from_generator({Module, Function}, Constraints) ->
-    %% Tuple-spec generator - call module function to get generator function
-    GenFun = Module:Function(Constraints),
-    spawn_generator_iterator(GenFun);
-spawn_iterator_from_generator(Other, _Constraints) ->
-    erlang:error({invalid_generator, Other}).
-
-%% @private
-%% @doc Spawn iterator process for a generator function
-spawn_generator_iterator(GenFun) ->
-    spawn(fun() -> generator_loop(GenFun) end).
-
-%% @private
-%% @doc Iterator loop that calls generator function
-generator_loop(GenFun) ->
-    receive
-        {next, Caller} ->
-            case GenFun(next) of
-                done ->
-                    Caller ! done;
-                {value, Tuple, NextGen} ->
-                    Caller ! {tuple, Tuple},
-                    generator_loop(NextGen);
-                {error, Reason} ->
-                    Caller ! {error, Reason}
-            end;
-        {close, Caller} ->
-            Caller ! ok
-    end.
 
 %% @private
 %% @doc Rename iterator - applies rename mapping to each tuple

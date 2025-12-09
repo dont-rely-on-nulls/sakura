@@ -392,16 +392,15 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
         RelationHash = hash({Name, Definition, undefined}),
 
         %% Returns a generator function (not a PID) that yields tuples one at a time
-        GeneratorFun = fun(DBVersion) ->
-            %% Read current relation state from Mnesia by name using index
+        GeneratorFun = fun() ->
             [CurrentRelation] = mnesia:dirty_index_read(relation, Name, #relation.name),
             CurrentHash = CurrentRelation#relation.hash,
             TupleHashes = case CurrentRelation#relation.tree of
                 undefined -> [];
                 _ -> hashes_from_tuple(CurrentHash)
             end,
-            %% Return a generator function that yields tuples
-            make_finite_generator(TupleHashes)
+            InnerGen = make_finite_generator(TupleHashes),
+            spawn(fun() -> generator_iterator_loop(InnerGen) end)
         end,
 
         NewRelation = #relation{
@@ -739,16 +738,11 @@ get_tuples_iterator(Database, RelationName) when is_record(Database, database_st
     end.
 
 %% @doc Get an iterator out of a generator.
-get_iterator_from_generator(RelationName, Generator) ->
-    %% Relation with generator (infinite or ephemeral)
-    case Generator of
-      undefined ->
-        %% Empty finite relation without materialized tuples
-        spawn(fun() -> tuple_iterator_loop([]) end);
-      GeneratorFun when is_function(GeneratorFun) ->
-        %% Function generator (finite mutable relations, ephemeral relations)
-        spawn(fun() -> generator_iterator_loop(GeneratorFun) end);
-      _ -> erlang:error({error_tuple_iterator_init, non_function_generator, RelationName})
+get_iterator_from_generator(RelationName, GeneratorFun) ->
+    case GeneratorFun of
+	undefined -> spawn(fun() -> tuple_iterator_loop([]) end);
+	Generator when is_function(Generator) -> Generator();
+        _ -> erlang:error({error_tuple_iterator_init, non_function_generator, RelationName})
     end.
 
 %% @doc Get next tuple from iterator.
@@ -1354,9 +1348,7 @@ make_finite_generator([]) ->
     fun(_) -> done end;
 make_finite_generator([Hash | Rest]) ->
     fun(next) ->
-        %% Read tuple from Mnesia
-        [Tuple] = mnesia:dirty_read(tuple, Hash),
-        TupleData = Tuple#tuple.attribute_map,
+        ResolvedTuple = resolve_tuple(Hash),
         NextGen = make_finite_generator(Rest),
-        {value, TupleData, NextGen}
+        {value, ResolvedTuple, NextGen}
     end.
