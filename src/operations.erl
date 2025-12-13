@@ -118,19 +118,10 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     %% Check if relation is immutable before attempting insert
     CurrentRelationHash = maps:get(RelationName, Database#database_state.relations),
     [RelationRecord] = mnesia:dirty_read(relation, CurrentRelationHash),
-
-    case RelationRecord#relation.mutability of
-        immutable ->
-            {error, {immutable_relation, RelationName}};
-        mutable ->
-            create_tuple_internal(Database, RelationName, Tuple, RelationRecord);
-        undefined ->
-            %% Backwards compatibility: treat undefined as mutable
-            create_tuple_internal(Database, RelationName, Tuple, RelationRecord)
-    end.
+    create_tuple_internal(Database, RelationName, Tuple, RelationRecord).
 
 %% @private
-%% Internal function for tuple creation (after mutability check)
+%% Internal function for tuple creation
 create_tuple_internal(Database, RelationName, Tuple, _RelationRecord) ->
     F = fun() ->
         %% Step 1: Store each attribute value and build attribute_map
@@ -176,8 +167,7 @@ create_tuple_internal(Database, RelationName, Tuple, _RelationRecord) ->
             generator = RelationRecord#relation.generator,
             provenance = RelationRecord#relation.provenance,
             lineage = RelationRecord#relation.lineage,
-            membership_criteria = RelationRecord#relation.membership_criteria,
-            mutability = RelationRecord#relation.mutability
+            membership_criteria = RelationRecord#relation.membership_criteria
         },
         %% Delete old relation record before writing new one
         %% This ensures only one relation record exists per name
@@ -414,7 +404,6 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
             cardinality = {finite, 0},      % Empty relation
             generator = GeneratorFun,       % Function generator for finite relations
             membership_criteria = #{},      % No membership criteria by default
-            mutability = mutable,           % Mutable by default
             provenance = build_base_provenance(Definition, Name), % Base relation provenance
             lineage = {base, Name}          % Base relation lineage
         },
@@ -477,7 +466,7 @@ create_database(Name) ->
     %% Standard immutable relations (domains and their predicates)
     StandardTypeRelations = [
         %% Boolean domain - finite, immutable
-        #immutable_relation_spec{
+        #domain{
             name = boolean,
             schema = #{value => boolean},
             generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:boolean(#{})) end) end,
@@ -485,7 +474,7 @@ create_database(Name) ->
             cardinality = {finite, 2}
         },
         %% Natural numbers - infinite, immutable
-        #immutable_relation_spec{
+        #domain{
             name = natural,
             schema = #{value => natural},
             generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:natural(#{})) end) end,
@@ -493,7 +482,7 @@ create_database(Name) ->
             cardinality = aleph_zero
         },
         %% Integers - infinite, immutable
-        #immutable_relation_spec{
+        #domain{
             name = integer,
             schema = #{value => integer},
             generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:integer(#{})) end) end,
@@ -501,7 +490,7 @@ create_database(Name) ->
             cardinality = aleph_zero
         },
         %% Rationals - infinite, immutable
-        #immutable_relation_spec{
+        #domain{
             name = rational,
             schema = #{numerator => integer, denominator => integer},
             generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:rational(#{})) end) end,
@@ -509,7 +498,7 @@ create_database(Name) ->
             cardinality = aleph_zero
         }
         %% Reals - TODO: implement
-        %% #immutable_relation_spec{
+        %% #domain{
         %%     name = reals,
         %%     schema = #{value => reals},
         %%     generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:reals(#{})) end) end,
@@ -544,7 +533,7 @@ create_database(Name) ->
 %% == Example ==
 %% <pre>
 %% %% Create immutable relation of natural numbers
-%% {DB1, Naturals} = operations:create_immutable_relation(DB, #immutable_relation_spec{
+%% {DB1, Naturals} = operations:create_immutable_relation(DB, #domain{
 %%     name = naturals,
 %%     schema = #{value => naturals},
 %%     generator = {generators, naturals},
@@ -558,19 +547,19 @@ create_database(Name) ->
 %% </pre>
 %%
 %% @param Database `#database_state{}' record
-%% @param Specification `#immutable_relation_spec{}' record
+%% @param Specification `#domain{}' record
 %% @returns `{UpdatedDatabase, NewRelation}'
 %%
 %% @see create_relation/3
 %% @see get_tuples_iterator/3
 create_immutable_relation(Database, Specification)
   when is_record(Database, database_state)
-       andalso is_record(Specification, immutable_relation_spec) ->
-    Name = Specification#immutable_relation_spec.name,
-    Schema = Specification#immutable_relation_spec.schema,
-    Generator = Specification#immutable_relation_spec.generator,
-    MembershipCriteria = Specification#immutable_relation_spec.membership_criteria,
-    Cardinality = Specification#immutable_relation_spec.cardinality,
+       andalso is_record(Specification, domain) ->
+    Name = Specification#domain.name,
+    Schema = Specification#domain.schema,
+    Generator = Specification#domain.generator,
+    MembershipCriteria = Specification#domain.membership_criteria,
+    Cardinality = Specification#domain.cardinality,
 
     F = fun() ->
         RelationHash = hash({Name, Schema, undefined}),
@@ -584,7 +573,6 @@ create_immutable_relation(Database, Specification)
             cardinality = Cardinality,
             generator = Generator,
             membership_criteria = MembershipCriteria,
-            mutability = immutable,     % Always immutable
             provenance = build_base_provenance(Schema, Name), % Base relation provenance
             lineage = {base, Name}      % Base relation lineage
         },

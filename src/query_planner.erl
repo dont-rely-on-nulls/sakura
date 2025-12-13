@@ -590,7 +590,6 @@ compile_to_relation(DB, {materialize, SubPlan}) ->
         cardinality = unknown,
         generator = GeneratorFun,
         membership_criteria = #{},
-        mutability = immutable,
         provenance = compute_provenance(SubPlan)
     };
 

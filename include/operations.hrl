@@ -11,7 +11,6 @@
     cardinality,           % {finite, N} | aleph_zero | continuum
     generator,             % Generator function (immutable only), undefined for tree-based
     membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership test
-    mutability,            % mutable | immutable
     provenance,            % attribute_provenance() - maps attribute to source relation
     lineage                % lineage_op() - operation tree showing derivation
 }).
@@ -20,7 +19,7 @@
 -record(attribute, {hash, value}).
 
 %% Specification record for creating immutable relations
--record(immutable_relation_spec, {
+-record(domain, {
     name,                  % Atom - relation name
     schema,                % #{attribute_name => relation_name}
     generator,             % {module, function} - tuple generator
@@ -33,11 +32,6 @@
 -type cardinality() :: {finite, non_neg_integer()}   % Finite set with N elements
                      | aleph_zero                    % Countably infinite (ℵ₀)
                      | continuum.                    % Uncountably infinite (2^ℵ₀)
-
-%%% Mutability Types
-
--type mutability() :: mutable                        % Supports insert/delete (tree-based)
-                    | immutable.                     % Read-only (generator-based or protected)
 
 %%% Constraint Types
 
