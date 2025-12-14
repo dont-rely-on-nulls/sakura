@@ -76,7 +76,7 @@
 %% @returns ok
 -spec start() -> ok.
 start() ->
-    operations:setup(),
+    main:setup(),
     io:format("~n~s~n", [banner()]),
     io:format("Domino REPL started. Type repl:help() for usage.~n~n"),
     ok.
