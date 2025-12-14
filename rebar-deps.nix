@@ -20,7 +20,7 @@ let
       src = fetchHex {
         pkg = "uuid_erl";
         version = "2.0.7";
-        sha256 = "sha256-ss";
+        sha256 = "sha256-teho2ll5+bPD5Oi4FxqlwWeGjjVJW4FzHJPYOC/dMag=";
       };
       beamDeps = [ ];
     };
