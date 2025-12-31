@@ -106,25 +106,44 @@ take(SourceRelation, N) when is_record(SourceRelation, relation), is_integer(N),
 %% Creates an ephemeral relation containing only tuples that satisfy the
 %% predicate. The generator closure captures the source relation and predicate.
 %%
+%% Constraints are propagated: source constraints are preserved, and new
+%% constraints may be inferred from declarative predicates.
+%%
+%% Predicate formats:
+%% - fun((map()) -> boolean()) - opaque function, no inference
+%% - {attr, AttrName, Op, Value} - declarative, infers constraints
+%% - {'and', [Pred1, ...]} - conjunction of declarative predicates
+%%
 %% @param SourceRelation Source #relation{} record
-%% @param Predicate Function that takes a tuple and returns boolean
-%% @returns Ephemeral #relation{} with generator
--spec select(#relation{}, fun((map()) -> boolean())) -> #relation{}.
-select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_function(Predicate, 1) ->
+%% @param Predicate Function or declarative term
+%% @returns Ephemeral #relation{} with generator and propagated constraints
+-spec select(#relation{}, fun((map()) -> boolean()) | term()) -> #relation{}.
+select(SourceRelation, Predicate) when is_record(SourceRelation, relation) ->
     Name = generate_ephemeral_name(),
+
+    %% Build actual filter function from predicate
+    FilterFun = predicate_to_function(Predicate),
 
     SourceGen = SourceRelation#relation.generator,
     GeneratorFun = fun() ->
         SourceIter = SourceGen(),
-        operations:select_iterator(SourceIter, Predicate)
+        operations:select_iterator(SourceIter, FilterFun)
     end,
+
+    %% Infer constraints from predicate and merge with source constraints
+    Schema = SourceRelation#relation.schema,
+    InferredConstraints = constraint:infer_constraints_from_pred(Predicate, Schema),
+    MergedConstraints = constraint:merge_constraints(
+        SourceRelation#relation.constraints,
+        InferredConstraints
+    ),
 
     #relation{
         hash = <<>>,
         name = Name,
         tree = undefined,
-        schema = SourceRelation#relation.schema,
-        constraints = SourceRelation#relation.constraints,
+        schema = Schema,
+        constraints = MergedConstraints,
         cardinality = unknown,  % Cannot determine without evaluation
         generator = GeneratorFun,
         membership_criteria = #{},
@@ -137,15 +156,24 @@ select(SourceRelation, Predicate) when is_record(SourceRelation, relation), is_f
 %% Creates an ephemeral relation containing only the specified attributes.
 %% The generator closure captures the source relation and attribute list.
 %%
+%% Constraints are filtered to only include those for projected attributes.
+%% Constraints on attributes that are projected away are dropped.
+%%
 %% @param SourceRelation Source #relation{} record
 %% @param Attributes List of attribute names to keep
-%% @returns Ephemeral #relation{} with generator
+%% @returns Ephemeral #relation{} with generator and filtered constraints
 -spec project(#relation{}, [atom()]) -> #relation{}.
 project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is_list(Attributes) ->
     Name = generate_ephemeral_name(),
 
     %% Compute projected schema
     ProjectedSchema = maps:with(Attributes, SourceRelation#relation.schema),
+
+    %% Filter constraints to only projected attributes
+    FilteredConstraints = constraint:filter_constraints(
+        SourceRelation#relation.constraints,
+        Attributes
+    ),
 
     SourceGen = SourceRelation#relation.generator,
     GeneratorFun = fun() ->
@@ -158,7 +186,7 @@ project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is
         name = Name,
         tree = undefined,
         schema = ProjectedSchema,
-        constraints = SourceRelation#relation.constraints,
+        constraints = FilteredConstraints,
         cardinality = SourceRelation#relation.cardinality,
         generator = GeneratorFun,
         membership_criteria = #{},
@@ -171,10 +199,13 @@ project(SourceRelation, Attributes) when is_record(SourceRelation, relation), is
 %% Creates an ephemeral relation by joining two relations on a common attribute.
 %% The generator closure captures both source relations and the join attribute.
 %%
+%% Constraints from both relations are merged with AND semantics.
+%% If both relations have constraints on the same attribute, both are kept.
+%%
 %% @param LeftRelation Left #relation{} record
 %% @param RightRelation Right #relation{} record
 %% @param JoinAttribute Attribute name to join on
-%% @returns Ephemeral #relation{} with generator
+%% @returns Ephemeral #relation{} with generator and merged constraints
 -spec join(#relation{}, #relation{}, atom()) -> #relation{}.
 join(LeftRelation, RightRelation, JoinAttribute)
     when is_record(LeftRelation, relation),
@@ -190,6 +221,12 @@ join(LeftRelation, RightRelation, JoinAttribute)
     %% Merge schemas
     MergedSchema = maps:merge(LeftRelation#relation.schema, RightRelation#relation.schema),
 
+    %% Merge constraints from both relations (AND semantics)
+    MergedConstraints = constraint:merge_constraints(
+        LeftRelation#relation.constraints,
+        RightRelation#relation.constraints
+    ),
+
     LeftGen = LeftRelation#relation.generator,
     RightGen = RightRelation#relation.generator,
     GeneratorFun = fun() ->
@@ -203,7 +240,7 @@ join(LeftRelation, RightRelation, JoinAttribute)
         name = Name,
         tree = undefined,
         schema = MergedSchema,
-        constraints = #{},
+        constraints = MergedConstraints,
         cardinality = unknown,
         generator = GeneratorFun,
         membership_criteria = #{},
@@ -216,15 +253,17 @@ join(LeftRelation, RightRelation, JoinAttribute)
 %% Creates an ephemeral relation by joining two relations with an arbitrary
 %% predicate. The generator closure captures both source relations and predicate.
 %%
+%% Constraints are merged from both relations, and additional constraints may
+%% be inferred from declarative predicates.
+%%
 %% @param LeftRelation Left #relation{} record
 %% @param RightRelation Right #relation{} record
-%% @param Predicate Function that takes two tuples and returns boolean
-%% @returns Ephemeral #relation{} with generator
--spec theta_join(#relation{}, #relation{}, fun((map(), map()) -> boolean())) -> #relation{}.
+%% @param Predicate Function or declarative term
+%% @returns Ephemeral #relation{} with generator and merged constraints
+-spec theta_join(#relation{}, #relation{}, fun((map(), map()) -> boolean()) | term()) -> #relation{}.
 theta_join(LeftRelation, RightRelation, Predicate)
     when is_record(LeftRelation, relation),
-         is_record(RightRelation, relation),
-         is_function(Predicate, 2) ->
+         is_record(RightRelation, relation) ->
 
     Name = list_to_atom(
         "theta_join_" ++ atom_to_list(LeftRelation#relation.name) ++ "_" ++
@@ -234,12 +273,26 @@ theta_join(LeftRelation, RightRelation, Predicate)
 
     MergedSchema = maps:merge(LeftRelation#relation.schema, RightRelation#relation.schema),
 
+    %% Merge constraints from both relations
+    MergedConstraints = constraint:merge_constraints(
+        LeftRelation#relation.constraints,
+        RightRelation#relation.constraints
+    ),
+
+    %% Infer additional constraints from predicate
+    InferredConstraints = constraint:infer_constraints_from_pred(Predicate, MergedSchema),
+    FinalConstraints = constraint:merge_constraints(MergedConstraints, InferredConstraints),
+
+    %% Build filter function from predicate (for theta join, needs 2-arity)
+    %% The theta_join_iterator expects a 2-arity function
+    FilterFun = theta_predicate_to_function(Predicate),
+
     LeftGen = LeftRelation#relation.generator,
     RightGen = RightRelation#relation.generator,
     GeneratorFun = fun() ->
         LeftIter = LeftGen(),
         RightIter = RightGen(),
-        operations:theta_join_iterator(LeftIter, RightIter, Predicate)
+        operations:theta_join_iterator(LeftIter, RightIter, FilterFun)
     end,
 
     #relation{
@@ -247,7 +300,7 @@ theta_join(LeftRelation, RightRelation, Predicate)
         name = Name,
         tree = undefined,
         schema = MergedSchema,
-        constraints = #{},
+        constraints = FinalConstraints,
         cardinality = unknown,
         generator = GeneratorFun,
         membership_criteria = #{},
@@ -260,9 +313,12 @@ theta_join(LeftRelation, RightRelation, Predicate)
 %% Creates an ephemeral relation with attributes renamed according to the mapping.
 %% The generator closure captures the source relation and rename mappings.
 %%
+%% Constraints are updated: both the map keys and any {var, AttrName} references
+%% inside constraint terms are renamed according to the mapping.
+%%
 %% @param SourceRelation Source #relation{} record
 %% @param RenameMappings Map of old_name => new_name (atoms or strings)
-%% @returns Ephemeral #relation{} with generator
+%% @returns Ephemeral #relation{} with generator and renamed constraints
 -spec rename(#relation{}, #{atom() => atom()}) -> #relation{}.
 rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation), is_map(RenameMappings) ->
     Name = generate_ephemeral_name(),
@@ -281,6 +337,12 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
         RenameMappings
     ),
 
+    %% Rename constraint attributes (both keys and internal variable references)
+    RenamedConstraints = constraint:rename_constraint_attrs(
+        SourceRelation#relation.constraints,
+        RenameMappings
+    ),
+
     SourceGen = SourceRelation#relation.generator,
     GeneratorFun = fun() ->
         SourceIter = SourceGen(),
@@ -292,7 +354,7 @@ rename(SourceRelation, RenameMappings) when is_record(SourceRelation, relation),
         name = Name,
         tree = undefined,
         schema = RenamedSchema,
-        constraints = SourceRelation#relation.constraints,
+        constraints = RenamedConstraints,
         cardinality = SourceRelation#relation.cardinality,
         generator = GeneratorFun,
         membership_criteria = #{},
@@ -363,4 +425,66 @@ rename_loop(SourceIter, RenameMappings) ->
         {close, Caller} ->
             operations:close_iterator(SourceIter),
             Caller ! ok
+    end.
+
+%% @private
+%% @doc Convert a predicate (function or declarative term) to a filter function.
+%%
+%% Supports:
+%% - fun((map()) -> boolean()) - returns as-is
+%% - {attr, AttrName, Op, Value} - single attribute comparison
+%% - {'and', [Pred1, ...]} - conjunction
+%% - {'or', [Pred1, ...]} - disjunction
+predicate_to_function(Predicate) when is_function(Predicate, 1) ->
+    Predicate;
+predicate_to_function({attr, AttrName, Op, Value}) ->
+    fun(Tuple) ->
+        AttrValue = maps:get(AttrName, Tuple, undefined),
+        apply_comparison(Op, AttrValue, Value)
+    end;
+predicate_to_function({'and', Predicates}) ->
+    Funs = [predicate_to_function(P) || P <- Predicates],
+    fun(Tuple) ->
+        lists:all(fun(F) -> F(Tuple) end, Funs)
+    end;
+predicate_to_function({'or', Predicates}) ->
+    Funs = [predicate_to_function(P) || P <- Predicates],
+    fun(Tuple) ->
+        lists:any(fun(F) -> F(Tuple) end, Funs)
+    end;
+predicate_to_function(_) ->
+    %% Unknown format - accept all
+    fun(_) -> true end.
+
+%% @private
+%% @doc Apply a comparison operation.
+apply_comparison(lt, A, B) -> A < B;
+apply_comparison(lte, A, B) -> A =< B;
+apply_comparison(gt, A, B) -> A > B;
+apply_comparison(gte, A, B) -> A >= B;
+apply_comparison(eq, A, B) -> A =:= B;
+apply_comparison(neq, A, B) -> A =/= B;
+apply_comparison(between, A, {Min, Max}) -> A >= Min andalso A < Max;
+apply_comparison(_, _, _) -> true.
+
+%% @private
+%% @doc Convert a theta predicate to a 2-arity filter function.
+%%
+%% Theta join predicates operate on merged tuples from both relations.
+%% For declarative predicates, we convert to a function that works on
+%% the merged tuple (left and right tuples combined).
+theta_predicate_to_function(Predicate) when is_function(Predicate, 2) ->
+    Predicate;
+theta_predicate_to_function(Predicate) when is_function(Predicate, 1) ->
+    %% Convert 1-arity function to 2-arity by merging tuples
+    fun(LeftTuple, RightTuple) ->
+        MergedTuple = maps:merge(LeftTuple, RightTuple),
+        Predicate(MergedTuple)
+    end;
+theta_predicate_to_function(DeclarativePred) ->
+    %% Convert declarative predicate to 1-arity first, then wrap
+    OneTupleFun = predicate_to_function(DeclarativePred),
+    fun(LeftTuple, RightTuple) ->
+        MergedTuple = maps:merge(LeftTuple, RightTuple),
+        OneTupleFun(MergedTuple)
     end.

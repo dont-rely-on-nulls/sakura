@@ -1,0 +1,97 @@
+#+TITLE: Constraints
+
+* Preamble
+Under an ontological commitment to objects, with an objects-properties
+modeling in a conceptual model, there are primitive and compound objects:
+
+** Primitive objects
+These are things we directly observe their existence independent of their individual properties
+
+** Compound objects
+These are collective properties observed through their relationships in groups or multigroups
+
+* Entity Properties
+These are the properties derived by observation or measurement
+procedures. They can be further divided in:
+- Quantitative :: which include ordinal and cardinal properties; for
+  example, customer rating and price of a product.
+- Qualitative :: observed only, for example an enum
+
+* 1st Order Properties
+They are inferred properties not directly observable in entities. They
+are abstractions generalized from multiple observed or measured
+properties that share:
+- The same kind of values;
+- The same allowable manipulations, and;
+- Meaningful comparability.
+
+They arise when several concrete properties, for example salary,
+commission and department budget, meet the above criteria. They are
+understood as deriving from a more general underlying property, in the
+example aforementioned, compensation, budget or whatever. That
+underlying abstraction is the 1OP.
+
+** 1st Order Properties in Context
+These are directly observed or measured properties of entities that
+appear in a specific group in context. In other words, they are
+concrete properties associated with entities of a particular type
+whithin a context of a specific group or multigroup. The context is
+essential because the underlying 1OP may manifest as different 1OPiCs
+depending on the entity type (employee VS department) or group
+membership (sales employees VS marketing employees).
+
+They are related to 1OPs insofar as they are contextual instantiations
+of a 1OP, therefore, all 1OPiCs of the same kind share comparable
+value sets and allow operations because they derive from the same
+root. To illustrate with one example: salary and commission are 1OPiC
+of the 1OP Compensation in the context of employees.
+
+* Constraint Algebra
+The costrait module attempts to implement constraints as relations, in
+other words, it follows the principle that Entity/1OPs/1OPiCs should
+be a relation or domain.
+
+** Core Distinction: Domains vs Relations
+- Domain (#domain{}): A VALUE SET with membership criteria (e.g., integers, rationals)
+- Relation (#relation{}): A SET OF TUPLES
+`less_than` is NOT a domain. It is a binary relation (subset of D × D).
+
+** 1st Order Properties (1OPs)
+A 1OP is a direct property (attribute) of individual entities. 1OPs can be:
+- Observed/measured: directly observed from entities (e.g., `salary`, `commission`)
+- Derived/inferred: computed from other 1OPs (e.g., `compensation` = salary + commission)
+
+** Types
+Domain constraints: ARE the domains themselves (membership criteria)
+- `integer` domain: membership test is_integer/1
+- `rational` domain: numerator, denominator (integers), denominator ≠ 0
+Attribute constraints (1OP constraints): Restrict attribute values
+- Specify which domain the attribute draws from
+- Add constraints beyond domain membership
+- Example: `salary` draws from `rational` + [gt(0), lt(1000000)]
+
+** 1st Order Properties in Context (1OPiCs)
+A 1OPiC is a 1OP that is DERIVED from other observed/measured 1OPs within
+the context of a specific relation.
+Examples in `employees` relation:
+- `salary`: observed/measured 1OP (draws from `money` domain)
+- `commission`: observed/measured 1OP (draws from `money` domain)
+- `compensation`: 1OPiC derived as salary + commission in context of employees
+The schema entry `#{compensation => money}` declares which domain the
+derived 1OPiC draws its values from.
+
+** Binary Relations
+Comparisons are proper relations (not domains!):
+```
+Less_Than_Integer = {(a, b) | a, b in Z, a < b}
+```
+To express "x < 5", we check: `(x, 5) in Less_Than_Integer`
+
+** First-Order Logic Interface
+Constraints become membership tests in relations:
+- `x < 5` becomes `(x, 5) in less_than`
+- `x > 3 AND x < 10` becomes `(3, x) in less_than AND (x, 10) in less_than`
+
+** Negation
+Negation requires an explicit universe: `not(R, Universe)` computes
+the complement of R within Universe.

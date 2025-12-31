@@ -40,7 +40,7 @@
 -module(operations).
 -include("../include/operations.hrl").
 -export([
-   create_database/1,
+	 create_database/1,
 	 create_relation/3,
 	 create_immutable_relation/2,
 	 create_tuple/3,
@@ -51,11 +51,11 @@
 	 clear_relation/3,
 	 retract_relation/2,
 	 retract_relation/3,
-   get_relation_hash/2,
-   get_relations/1,
-   hashes_from_tuple/1,
-   get_tuples_iterator/2,
-   get_iterator_from_generator/2,
+	 get_relation_hash/2,
+	 get_relations/1,
+	 hashes_from_tuple/1,
+	 get_tuples_iterator/2,
+	 get_iterator_from_generator/2,
 	 next_tuple/1,
 	 close_iterator/1,
 	 collect_all/1,
@@ -69,7 +69,7 @@
 	 theta_join_iterator/3,
 	 %% Materialization (eager)
 	 materialize/3
-]).
+	]).
 
 %% @private
 %% @doc Compute SHA-256 hash of an Erlang term.
@@ -118,7 +118,14 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     %% Check if relation is immutable before attempting insert
     CurrentRelationHash = maps:get(RelationName, Database#database_state.relations),
     [RelationRecord] = mnesia:dirty_read(relation, CurrentRelationHash),
-    create_tuple_internal(Database, RelationName, Tuple, RelationRecord).
+
+    %% Validate tuple against relation schema before insertion
+    case constraint:validate_tuple(Tuple, RelationRecord) of
+        ok ->
+            create_tuple_internal(Database, RelationName, Tuple, RelationRecord);
+        {error, Reason} ->
+            {error, {constraint_violation, Reason}}
+    end.
 
 %% @private
 %% Internal function for tuple creation
@@ -374,16 +381,27 @@ retract_relation(Database, Name, Transact) ->
 %% @see create_tuple/3
 %% @see retract_relation/2
 create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
+    %% Validate schema before creating relation
+    case constraint:validate_schema(Definition) of
+        {error, Reason} ->
+            {error, {invalid_schema, Reason}};
+        ok ->
+            create_relation_internal(Database, Name, Definition)
+    end.
+
+%% @private
+%% Internal function for relation creation after schema validation
+create_relation_internal(Database, Name, Definition) ->
     F = fun() ->
         %% Create relation with empty tree
-	%% The meaning of a relation needs to be attached to its name
+        %% The meaning of a relation needs to be attached to its name
         %% It may sound nominalistic but that is a physical concern.
         %% Two relations might share definitions but their name gives another interpretation
         %% and therefore different tuples
         RelationHash = hash({Name, Definition, undefined}),
 
         %% Returns a generator function (not a PID) that yields tuples one at a time
-	%% TODO: investigate if a generator should or should not be bound to a specific DATABASE VERSION. If so, create the fun passing the DB as an attribute
+        %% TODO: investigate if a generator should or should not be bound to a specific DATABASE VERSION. If so, create the fun passing the DB as an attribute
         GeneratorFun = fun() ->
             [CurrentRelation] = mnesia:dirty_index_read(relation, Name, #relation.name),
             CurrentHash = CurrentRelation#relation.hash,
@@ -395,15 +413,18 @@ create_relation(Database, Name, Definition) when is_record(Database, database_st
             spawn(fun() -> generator_iterator_loop(InnerGen) end)
         end,
 
+        %% Build membership criteria from schema (1OPiC declarations)
+        MembershipCriteria = constraint:build_membership_criteria(Definition),
+
         NewRelation = #relation{
             hash = RelationHash,
             name = Name,
             tree = undefined,
             schema = Definition,
-            constraints = #{},              % No constraints by default
+            constraints = constraint:empty_constraints(),  % No constraints by default
             cardinality = {finite, 0},      % Empty relation
             generator = GeneratorFun,       % Function generator for finite relations
-            membership_criteria = #{},      % No membership criteria by default
+            membership_criteria = MembershipCriteria,  % Domain membership from schema
             provenance = build_base_provenance(Definition, Name), % Base relation provenance
             lineage = {base, Name}          % Base relation lineage
         },
@@ -569,7 +590,7 @@ create_immutable_relation(Database, Specification)
             name = Name,
             tree = undefined,           % Immutable relations have no merkle tree
             schema = Schema,
-            constraints = #{},          % No constraints by default
+            constraints = constraint:empty_constraints(),  % No constraints by default
             cardinality = Cardinality,
             generator = Generator,
             membership_criteria = MembershipCriteria,
