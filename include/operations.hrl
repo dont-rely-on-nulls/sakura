@@ -7,7 +7,7 @@
     name,                  % Relation name (atom)
     tree,                  % Merkle tree (mutable only), undefined for immutable/generator-based
     schema,                % #{attribute_name => relation_name}
-    constraints,           % #{attribute_name => constraint_spec()} - integrity constraints
+    constraints,           % #relation_constraints{} - all constraint types (1OP, 2OP, 3OP)
     cardinality,           % {finite, N} | aleph_zero | continuum
     generator,             % Generator function (immutable only), undefined for tree-based
     membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership test
@@ -25,6 +25,21 @@
     generator,             % {module, function} - tuple generator
     membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership
     cardinality            % {finite, N} | aleph_zero | continuum
+}).
+
+%% Attribute constraint (1OP - 1st Order Property)
+%% Constrains values of a specific attribute in a relation
+-record(attribute_constraint, {
+    attribute :: atom(),              % Attribute name (e.g., salary)
+    domain :: atom() | #relation{},   % Domain or relation this attribute draws from
+    constraints :: [term()]           % Additional relational constraints beyond domain membership
+}).
+
+%% Relation constraints - holds all types of constraints for a relation
+-record(relation_constraints, {
+    attribute_constraints :: #{atom() => #attribute_constraint{}},  % 1OPs - attribute constraints
+    tuple_constraints :: [term()],                                   % 2OPs - inter-attribute constraints (future)
+    multi_tuple_constraints :: [term()]                             % 3OPs - multi-tuple constraints (future)
 }).
 
 %%% Cardinality Types
