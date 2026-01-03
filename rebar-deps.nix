@@ -4,13 +4,13 @@ in { builder ? fetchOnly, fetchHex, fetchgit, fetchFromGitHub, overrides ? (x: y
 let
   self = packages // (overrides self packages);
   packages = with self; {
-    merklet = builder {
-      name = "merklet";
-      version = "2.0.0";
+    quickrand = builder {
+      name = "quickrand";
+      version = "2.0.7";
       src = fetchHex {
-        pkg = "merklet";
-        version = "2.0.0";
-        sha256 = "sha256-teho2ll5+bPD5Oi4FxqlwWeGjjVJW4FzHJPYOC/dMng=";
+        pkg = "quickrand";
+        version = "2.0.7";
+        sha256 = "sha256-uKy/iaIkvCF8MHDKi+vG6yNtvn+XZ5k7J0CE6gRNNfA=";
       };
       beamDeps = [ ];
     };
@@ -21,6 +21,22 @@ let
         pkg = "uuid_erl";
         version = "2.0.7";
         sha256 = "sha256-Tkxco0YdxHxeFX7UKqOYGgU7ehhnkq+XKiexSpSJMk4=";
+      };
+      beamDeps = [ quickrand ];
+      postPatch = ''
+        # The package is named uuid_erl but the app.src uses {application, uuid, ...}
+        # Rename the .app.src file and update the application name to match the package name
+        mv src/uuid.app.src src/uuid_erl.app.src
+        sed -i 's/{application, *uuid,/{application,uuid_erl,/g' src/uuid_erl.app.src
+      '';
+    };
+    merklet = builder {
+      name = "merklet";
+      version = "2.0.0";
+      src = fetchHex {
+        pkg = "merklet";
+        version = "2.0.0";
+        sha256 = "sha256-teho2ll5+bPD5Oi4FxqlwWeGjjVJW4FzHJPYOC/dMng=";
       };
       beamDeps = [ ];
     };
