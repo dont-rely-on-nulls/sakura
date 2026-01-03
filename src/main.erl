@@ -33,7 +33,7 @@ setup() ->
     {type, set}
   ]),
   mnesia:create_table(relation, [
-    {attributes, [hash, name, tree, schema, constraints, cardinality, generator, membership_criteria, mutability, provenance, lineage]},
+    {attributes, [hash, name, tree, schema, constraints, cardinality, generator, membership_criteria, provenance, lineage]},
     {disc_copies, [node()]},
     {type, set},
     {index, [name]}  % Index on name for efficient lookup

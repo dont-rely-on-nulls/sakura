@@ -3,12 +3,13 @@
 -include("../include/operations.hrl").
 
 -export([
-    less_than/1,
-    less_than_or_equal/1,
-    greater_than/1,
-    greater_than_or_equal/1,
-    equal/1,
-    not_equal/1,
+    example/0,
+    less_than/2,
+    less_than_or_equal/2,
+    greater_than/2,
+    greater_than_or_equal/2,
+    equal/2,
+    not_equal/2,
     member/2,
     member/3,
     'not'/2,
@@ -35,7 +36,8 @@
     filter_constraints/2,          % Keep only constraints for given attributes
     rename_constraint_attrs/2,     % Update attribute names in constraints
     infer_constraints_from_pred/2, % Extract constraints from predicate
-    add_attribute_constraint/3     % Add an attribute constraint to constraints
+    add_attribute_constraint/3,    % Add an attribute constraint to constraints
+    get_domain_from_db/2
 ]).
 
 -type relational_constraint() ::
@@ -52,113 +54,116 @@
 
 -export_type([relational_constraint/0, binding/0]).
 
--spec less_than(atom()) -> #relation{}.
-less_than(DomainName) ->
+-spec less_than(atom(), cardinality()) -> #relation{}.
+less_than(DomainName, Cardinality) ->
     #relation{
         hash = undefined,  % Computed lazily if needed
-        name = list_to_atom("less_than_" ++ atom_to_list(DomainName)),
+        name = less_than,
         tree = undefined,  % Generator-based, not stored
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '<', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L < R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("less_than_" ++ atom_to_list(DomainName))}
+        lineage = {base, less_than}
     }.
 
--spec less_than_or_equal(atom()) -> #relation{}.
-less_than_or_equal(DomainName) ->
+-spec less_than_or_equal(atom(), cardinality()) -> #relation{}.
+less_than_or_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("less_than_or_equal_" ++ atom_to_list(DomainName)),
+        name = less_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '=<', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L =< R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("less_than_or_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, less_than_or_equal}
     }.
 
--spec greater_than(atom()) -> #relation{}.
-greater_than(DomainName) ->
+-spec greater_than(atom(), cardinality()) -> #relation{}.
+greater_than(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("greater_than_" ++ atom_to_list(DomainName)),
+        name = greater_than,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '>', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L > R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("greater_than_" ++ atom_to_list(DomainName))}
+        lineage = {base, greater_than}
     }.
 
--spec greater_than_or_equal(atom()) -> #relation{}.
-greater_than_or_equal(DomainName) ->
+-spec greater_than_or_equal(atom(), cardinality()) -> #relation{}.
+greater_than_or_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("greater_than_or_equal_" ++ atom_to_list(DomainName)),
+        name = greater_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '>=', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L >= R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("greater_than_or_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, greater_than_or_equal}
     }.
 
--spec equal(atom()) -> #relation{}.
-equal(DomainName) ->
+-spec equal(atom(), cardinality()) -> #relation{}.
+equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("equal_" ++ atom_to_list(DomainName)),
+        name = equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
         %% The diagonal has the same cardinality as the domain itself
-        cardinality = domain_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '==', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L == R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, equal}
     }.
 
--spec not_equal(atom()) -> #relation{}.
-not_equal(DomainName) ->
+-spec not_equal(atom(), cardinality()) -> #relation{}.
+not_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("not_equal_" ++ atom_to_list(DomainName)),
+        name = not_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '/=', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L /= R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("not_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, not_equal}
     }.
 
 -spec member(map(), #domain{} | #relation{}) -> boolean().
 member(Tuple, #relation{membership_criteria = #{intension := Intension}}) ->
     %% Generator-based relation with intension predicate (e.g., less_than)
     Intension(Tuple);
+member(Tuple, #relation{membership_criteria = #{test := TestFun}}) ->
+    %% Domain relation with test function (e.g., integer, string, atom domains)
+    TestFun(Tuple);
 member(_Tuple, #relation{tree = undefined, generator = Generator}) when Generator =/= undefined ->
     %% Generator-based relation without explicit intension - would need enumeration
     %% This is a fallback; ideally all generator relations have an intension
@@ -793,27 +798,6 @@ op_to_constraint(neq, Value) -> neq(Value);
 op_to_constraint(between, {Min, Max}) -> between(Min, Max);
 op_to_constraint(_, _Value) -> {'and', []}.  % No-op constraint
 
-%%% Internal trash functions
-
-%% Determine cardinality for comparison relations
-comparison_cardinality(boolean) ->
-    {finite, 1};  % Only (false, true) for less_than
-comparison_cardinality(natural) ->
-    aleph_zero;   % Countably infinite pairs
-comparison_cardinality(integer) ->
-    aleph_zero;
-comparison_cardinality(rational) ->
-    continuum;    % Uncountably infinite
-comparison_cardinality(_) ->
-    aleph_zero.   % Default assumption
-
-%% Get cardinality of a base domain
-domain_cardinality(boolean) -> {finite, 2};
-domain_cardinality(natural) -> aleph_zero;
-domain_cardinality(integer) -> aleph_zero;
-domain_cardinality(rational) -> continuum;
-domain_cardinality(_) -> aleph_zero.
-
 %% Validate tuple against criteria map
 validate_tuple_against_criteria(Tuple, Criteria) when is_map(Criteria) ->
     maps:fold(
@@ -991,9 +975,25 @@ bind_variables(Binding, Context) ->
 get_domain_from_db(Database, DomainName) ->
     case maps:find(DomainName, Database#database_state.relations) of
         {ok, DomainHash} ->
+	    io:format("~p~n", [DomainName]),
             [Domain] = mnesia:dirty_read(relation, DomainHash),
             {ok, Domain};
         error ->
             {error, not_found}
     end.
 
+example() ->
+    main:setup(),
+    DB = operations:create_database(test_db),
+    maps:keys(DB#database_state.relations),
+    {DB1, _} = operations:create_relation(DB, employees, #{id => integer, name => string, age => integer, salary => integer}),
+    IdConstraint = constraint:create_1op(id, integer, [constraint:gt(0)]),
+    AgeConstraint = constraint:create_1op(age, integer, [constraint:gte(18), constraint:lt(70)]),
+    SalaryConstraint = constraint:create_1op(salary, integer, [constraint:between(30000, 200000)]),
+    C1 = constraint:add_attribute_constraint(undefined, id, IdConstraint),
+    C2 = constraint:add_attribute_constraint(C1, age, AgeConstraint),
+    C3 = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
+    {DB2, _UpdatedRel} = operations:update_relation_constraints(DB1, employees, C3),
+    {DB3, _} = operations:create_tuple(DB2, employees, #{id => 1, name => "Alice", age => 30, salary => 75000}),
+    {DB4, _} = operations:create_tuple(DB3, employees, #{id => -1, name => "Alice", age => 30, salary => 75000}),
+    {_DB5, _} = operations:create_tuple(DB4, employees, #{id => 1, name => "Alice", age => 30, salary => 3005000}).

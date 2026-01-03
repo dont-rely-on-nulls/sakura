@@ -43,6 +43,7 @@
 	 create_database/1,
 	 create_relation/3,
 	 create_immutable_relation/2,
+	 update_relation_constraints/3,
 	 create_tuple/3,
 	 create_all_tuples/3,
 	 retract_tuple/3,
@@ -175,9 +176,6 @@ create_tuple_internal(Database, RelationName, Tuple, _RelationRecord) ->
             lineage = RelationRecord#relation.lineage,
             membership_criteria = RelationRecord#relation.membership_criteria
         },
-        %% Delete old relation record before writing new one
-        %% This ensures only one relation record exists per name
-        mnesia:delete({relation, CurrentRelationHash}),
         mnesia:write(relation, UpdatedRelation, write),
         
         %% Step 7: Update database relations map
@@ -442,6 +440,83 @@ create_relation(Database, Name, Definition) ->
     {atomic, Result} = mnesia:transaction(F),
     Result.
 
+%% @doc Update a relation's constraints.
+%%
+%% This function updates the constraints on an existing relation and returns
+%% an updated database state with the new relation version. The merklet tree
+%% automatically replaces the old relation hash with the new one.
+%%
+%% == Example ==
+%% <pre>
+%% %% Create constraints
+%% AgeConstraint = constraint:create_1op(age, integer, [constraint:gte(18), constraint:lt(70)]),
+%% SalaryConstraint = constraint:create_1op(salary, integer, [constraint:between(30000, 200000)]),
+%% C1 = constraint:add_attribute_constraint(undefined, age, AgeConstraint),
+%% C2 = constraint:add_attribute_constraint(C1, salary, SalaryConstraint),
+%%
+%% %% Update relation with constraints
+%% {DB2, UpdatedRel} = operations:update_relation_constraints(DB1, employees, C2).
+%% </pre>
+%%
+%% @param Database Current database state
+%% @param RelationName Name of the relation to update
+%% @param Constraints The #relation_constraints{} record to set
+%% @returns {UpdatedDatabase, UpdatedRelation}
+update_relation_constraints(Database, RelationName, Constraints)
+  when is_record(Database, database_state),
+       is_atom(RelationName),
+       is_record(Constraints, relation_constraints) ->
+    F = fun() ->
+        %% Get current relation hash from database state
+        CurrentRelationHash = maps:get(RelationName, Database#database_state.relations),
+
+        %% Read current relation from mnesia
+        case mnesia:read(relation, CurrentRelationHash) of
+            [] ->
+                %% Relation not found, might be using wrong database version
+                mnesia:abort({relation_not_found, RelationName, CurrentRelationHash});
+            [CurrentRelation] ->
+                update_relation_with_constraints(CurrentRelation, RelationName, Constraints, Database)
+        end
+    end,
+    {atomic, Result} = mnesia:transaction(F),
+    Result.
+
+%% @private
+update_relation_with_constraints(CurrentRelation, RelationName, Constraints, Database) ->
+    %% Create updated relation with new constraints
+    %% The hash changes because constraints are part of the relation definition
+    NewRelationHash = hash({CurrentRelation#relation.name,
+                            CurrentRelation#relation.schema,
+                            Constraints}),
+
+    UpdatedRelation = CurrentRelation#relation{
+        hash = NewRelationHash,
+        constraints = Constraints
+    },
+
+    %% Write updated relation
+    mnesia:write(relation, UpdatedRelation, write),
+
+    %% Update database relations map
+    NewRelations = maps:put(RelationName, NewRelationHash, Database#database_state.relations),
+
+    %% Update database tree (merklet:insert automatically replaces old value)
+    NewTree = merklet:insert({atom_to_binary(RelationName), NewRelationHash},
+                             Database#database_state.tree),
+    {_, NewHash, _, _} = NewTree,
+
+    UpdatedDatabase = #database_state{
+        name = Database#database_state.name,
+        hash = NewHash,
+        tree = NewTree,
+        relations = NewRelations,
+        timestamp = erlang:timestamp()
+    },
+    mnesia:write(database_state, UpdatedDatabase, write),
+
+    {UpdatedDatabase, UpdatedRelation}.
+
 %% @doc Create a new database state.
 %%
 %% Initializes an empty database with no relations. The database starts with:
@@ -513,7 +588,20 @@ create_database(Name) ->
 	generator = undefined,
 	membership_criteria = #{test => fun(#{value := V}) -> is_atom(V) end},
 	cardinality = aleph_zero
-       }
+       },
+      #domain{
+	name = term,
+	schema = #{value => term},
+	generator = undefined,
+	membership_criteria = #{test => fun(_) -> true end},
+	cardinality = aleph_zero
+       },
+      constraint:less_than(term, aleph_zero),
+      constraint:less_than_or_equal(term, aleph_zero),
+      constraint:greater_than(term, aleph_zero),
+      constraint:greater_than_or_equal(term, aleph_zero),
+      constraint:equal(term, aleph_zero),
+      constraint:not_equal(term, aleph_zero)
     ],
     Folder = fun (Elem, AccDB) ->
 		     {NextDB, _} = operations:create_immutable_relation(AccDB, Elem),
@@ -569,31 +657,47 @@ create_immutable_relation(Database, Specification)
     Generator = Specification#domain.generator,
     MembershipCriteria = Specification#domain.membership_criteria,
     Cardinality = Specification#domain.cardinality,
-
     F = fun() ->
         RelationHash = hash({Name, Schema, undefined}),
-
         NewRelation = #relation{
             hash = RelationHash,
             name = Name,
-            tree = undefined,           % Immutable relations have no merkle tree
+            tree = undefined, % Immutable 'relations' have no merkle tree
             schema = Schema,
-            constraints = constraint:empty_constraints(),  % No constraints by default
+            constraints = constraint:empty_constraints(), % TODO: No constraints unless by domain extension
             cardinality = Cardinality,
             generator = Generator,
             membership_criteria = MembershipCriteria,
             provenance = build_base_provenance(Schema, Name), % Base relation provenance
-            lineage = {base, Name}      % Base relation lineage
+            lineage = {base, Name} % Base relation lineage
         },
         mnesia:write(relation, NewRelation, write),
-
-        %% Update database relations map
         NewRelations = maps:put(Name, RelationHash, Database#database_state.relations),
-
-        %% Update database tree
         NewTree = merklet:insert({atom_to_binary(Name), RelationHash}, Database#database_state.tree),
         {_,NewHash,_,_} = NewTree,
+        UpdatedDatabase = #database_state{
+            name = Database#database_state.name,
+            hash = NewHash,
+            tree = NewTree,
+            relations = NewRelations,
+            timestamp = erlang:timestamp()
+        },
+        mnesia:write(database_state, UpdatedDatabase, write),
+        {UpdatedDatabase, NewRelation}
+    end,
+    {atomic, Result} = mnesia:transaction(F),
+    Result;
 
+create_immutable_relation(Database, Specification)
+  when is_record(Database, database_state)
+       andalso is_record(Specification, relation) ->
+    F = fun() ->
+        RelationHash = hash({Specification#relation.name, Specification#relation.schema, undefined}),
+        UpdatedRelation = Specification#relation{hash = RelationHash},
+        mnesia:write(relation, UpdatedRelation, write),
+        NewRelations = maps:put(Specification#relation.name, RelationHash, Database#database_state.relations),
+        NewTree = merklet:insert({atom_to_binary(Specification#relation.name), RelationHash}, Database#database_state.tree),
+        {_,NewHash,_,_} = NewTree,
         UpdatedDatabase = #database_state{
             name = Database#database_state.name,
             hash = NewHash,
@@ -603,7 +707,7 @@ create_immutable_relation(Database, Specification)
         },
         mnesia:write(database_state, UpdatedDatabase, write),
 
-        {UpdatedDatabase, NewRelation}
+        {UpdatedDatabase, Specification}
     end,
     {atomic, Result} = mnesia:transaction(F),
     Result.
