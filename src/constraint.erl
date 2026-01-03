@@ -1002,22 +1002,6 @@ max_cardinality(_, continuum) -> continuum;
 max_cardinality(aleph_zero, _) -> aleph_zero;
 max_cardinality(_, aleph_zero) -> aleph_zero.
 
-%% Convert constraints to a membership test function
-constraints_to_test([], _BaseDomain) ->
-    fun(_) -> true end;
-constraints_to_test(Constraints, _BaseDomain) ->
-    fun(Tuple) ->
-        lists:all(
-            fun(Constraint) ->
-                case evaluate_constraint(Constraint, Tuple) of
-                    {ok, true} -> true;
-                    _ -> false
-                end
-            end,
-            Constraints
-        )
-    end.
-
 %% Evaluate a relational constraint
 evaluate_constraint({member_of, RelName, Binding}, Context) when is_atom(RelName) ->
     %% Get the relation and test membership
@@ -1158,18 +1142,3 @@ atom_domain() ->
         },
         cardinality = aleph_zero
     }.
-
-%% Compute cardinality for constrained domains
-constrained_cardinality(_BaseDomain, []) ->
-    aleph_zero;
-constrained_cardinality(_BaseDomain, Constraints) ->
-    %% Analyze constraints to determine if finite
-    case lists:any(fun is_finitely_constraining/1, Constraints) of
-        true -> {finite, unknown};  % Finite but unknown size
-        false -> aleph_zero
-    end.
-
-is_finitely_constraining({member_of, equal, _}) -> true;
-is_finitely_constraining({'and', Cs}) -> lists:any(fun is_finitely_constraining/1, Cs);
-is_finitely_constraining({'or', Cs}) -> lists:all(fun is_finitely_constraining/1, Cs);
-is_finitely_constraining(_) -> false.
