@@ -118,9 +118,8 @@ create_tuple(Database, RelationName, Tuple) when is_map(Tuple), is_record(Databa
     %% Check if relation is immutable before attempting insert
     CurrentRelationHash = maps:get(RelationName, Database#database_state.relations),
     [RelationRecord] = mnesia:dirty_read(relation, CurrentRelationHash),
-
     %% Validate tuple against relation schema before insertion
-    case constraint:validate_tuple(Tuple, RelationRecord) of
+    case constraint:validate_tuple(Database, Tuple, RelationRecord) of
         ok ->
             create_tuple_internal(Database, RelationName, Tuple, RelationRecord);
         {error, Reason} ->
@@ -380,18 +379,7 @@ retract_relation(Database, Name, Transact) ->
 %% @see create_database/1
 %% @see create_tuple/3
 %% @see retract_relation/2
-create_relation(Database, Name, Definition) when is_record(Database, database_state) ->
-    %% Validate schema before creating relation
-    case constraint:validate_schema(Definition) of
-        {error, Reason} ->
-            {error, {invalid_schema, Reason}};
-        ok ->
-            create_relation_internal(Database, Name, Definition)
-    end.
-
-%% @private
-%% Internal function for relation creation after schema validation
-create_relation_internal(Database, Name, Definition) ->
+create_relation(Database, Name, Definition) ->
     F = fun() ->
         %% Create relation with empty tree
         %% The meaning of a relation needs to be attached to its name
@@ -414,7 +402,7 @@ create_relation_internal(Database, Name, Definition) ->
         end,
 
         %% Build membership criteria from schema (1OPiC declarations)
-        MembershipCriteria = constraint:build_membership_criteria(Definition),
+        MembershipCriteria = constraint:build_membership_criteria(Database, Definition),
 
         NewRelation = #relation{
             hash = RelationHash,
@@ -478,54 +466,54 @@ create_relation_internal(Database, Name, Definition) ->
 %% @see create_relation/3
 create_database(Name) ->
     DB = #database_state{
-        name = Name,
-        hash = <<>>,
-        tree = undefined,
-        relations = #{},
-        timestamp = erlang:timestamp()
-    },
+	    name = Name,
+	    hash = <<>>,
+	    tree = undefined,
+	    relations = #{},
+	    timestamp = erlang:timestamp()
+	   },
     %% Standard immutable relations (domains and their predicates)
+    %% TODO: Since 1OP constraints were added, the constraints passed to the base models now must be supported.
+    %% The idea is to have the generators be able to produce the constrained subsets
     StandardTypeRelations = [
-        %% Boolean domain - finite, immutable
-        #domain{
-            name = boolean,
-            schema = #{value => boolean},
-            generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:boolean(#{})) end) end,
-            membership_criteria = #{value => {in, [true, false]}},
-            cardinality = {finite, 2}
-        },
-        %% Natural numbers - infinite, immutable
-        #domain{
-            name = natural,
-            schema = #{value => natural},
-            generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:natural(#{})) end) end,
-            membership_criteria = #{value => {'and', {gte, 0}, is_integer}},
-            cardinality = aleph_zero
-        },
-        %% Integers - infinite, immutable
-        #domain{
-            name = integer,
-            schema = #{value => integer},
-            generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:integer(#{})) end) end,
-            membership_criteria = #{value => is_integer},
-            cardinality = aleph_zero
-        },
-        %% Rationals - infinite, immutable
-        #domain{
-            name = rational,
-            schema = #{numerator => integer, denominator => integer},
-            generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:rational(#{})) end) end,
-            membership_criteria = #{denominator => {neq, 0}},
-            cardinality = aleph_zero
-        }
-        %% Reals - TODO: implement
-        %% #domain{
-        %%     name = reals,
-        %%     schema = #{value => reals},
-        %%     generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:reals(#{})) end) end,
-        %%     membership_criteria = #{value => is_float},
-        %%     cardinality = continuum
-        %% }
+     #domain{
+	name = integer,
+	schema = #{value => integer},
+	generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:integer(#{})) end) end,
+	membership_criteria = #{test => fun(#{value := V}) -> is_integer(V) end},
+	cardinality = aleph_zero
+       },
+     #domain{
+	name = natural,
+	schema = #{value => natural},
+	generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:natural(#{})) end) end,
+	membership_criteria = #{test => fun(#{value := V}) -> is_integer(V) andalso V >= 0 end},
+	cardinality = aleph_zero
+       },
+     #domain{
+	name = rational,
+	schema = #{numerator => integer, denominator => integer},
+	generator = fun() -> spawn(fun() -> generator_iterator_loop(generators:rational(#{})) end) end,
+	membership_criteria = #{test => fun(#{numerator := N, denominator := D}) ->
+						is_integer(N) andalso is_integer(D) andalso D /= 0
+					end
+			       },
+	cardinality = aleph_zero
+       },
+     #domain{
+	name = string,
+	schema = #{value => string},
+	generator = undefined,
+	membership_criteria = #{test => fun(#{value := V}) -> is_list(V) orelse is_binary(V) end},
+	cardinality = aleph_zero
+       },
+     #domain{
+	name = atom,
+	schema = #{value => atom},
+	generator = undefined,
+	membership_criteria = #{test => fun(#{value := V}) -> is_atom(V) end},
+	cardinality = aleph_zero
+       }
     ],
     Folder = fun (Elem, AccDB) ->
 		     {NextDB, _} = operations:create_immutable_relation(AccDB, Elem),
