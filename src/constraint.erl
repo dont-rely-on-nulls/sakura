@@ -548,26 +548,26 @@ build_membership_criteria(Database, Schema) ->
 %%% Convenience functions for building relational constraints.
 %%% These create constraints in the form expected by create_1op/3.
 
-%% @doc Create a "less than" constraint: value < X
+%% @doc Create a "less than" constraint: value &lt; X
 %%
 %% Expressed relationally as: (value, X) ∈ less_than
 -spec lt(term()) -> relational_constraint().
 lt(Value) ->
     {member_of, less_than, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a "less than or equal" constraint: value <= X
+%% @doc Create a "less than or equal" constraint: value &lt;= X
 -spec lte(term()) -> relational_constraint().
 lte(Value) ->
     {member_of, less_than_or_equal, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a "greater than" constraint: value > X
+%% @doc Create a "greater than" constraint: value &gt; X
 %%
 %% Expressed relationally as: (X, value) ∈ less_than
 -spec gt(term()) -> relational_constraint().
 gt(Value) ->
     {member_of, less_than, #{left => Value, right => {var, value}}}.
 
-%% @doc Create a "greater than or equal" constraint: value >= X
+%% @doc Create a "greater than or equal" constraint: value &gt;= X
 -spec gte(term()) -> relational_constraint().
 gte(Value) ->
     {member_of, less_than_or_equal, #{left => Value, right => {var, value}}}.
@@ -582,7 +582,7 @@ eq(Value) ->
 neq(Value) ->
     {member_of, not_equal, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a range constraint: Min <= value < Max
+%% @doc Create a range constraint: Min &lt;= value &lt; Max
 %%
 %% This is a conjunction of two relational constraints:
 %% (Min, value) ∈ less_than_or_equal AND (value, Max) ∈ less_than
