@@ -10,7 +10,7 @@
     constraints,           % #relation_constraints{} - all constraint types (1OP, 2OP, 3OP)
     cardinality,           % {finite, N} | aleph_zero | continuum
     generator,             % Generator function (immutable only), undefined for tree-based
-    membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership test
+    membership_criteria,   % #{attribute_name => constraint:relational_constraint()} - domain membership test
     provenance,            % attribute_provenance() - maps attribute to source relation
     lineage                % lineage_op() - operation tree showing derivation
 }).
@@ -23,7 +23,7 @@
     name,                  % Atom - relation name
     schema,                % #{attribute_name => relation_name}
     generator,             % {module, function} - tuple generator
-    membership_criteria,   % #{attribute_name => constraint_spec()} - domain membership
+    membership_criteria,   % #{attribute_name => constraint:relational_constraint()} - domain membership
     cardinality            % {finite, N} | aleph_zero | continuum
 }).
 
@@ -48,23 +48,7 @@
                      | aleph_zero                    % Countably infinite (ℵ₀)
                      | continuum.                    % Uncountably infinite (2^ℵ₀)
 
-%%% Constraint Types
-
--type constraint_spec() ::
-    {eq, term()}                          % Equality: attr = value
-  | {neq, term()}                         % Inequality: attr ≠ value
-  | {lt, number()}                        % Less than: attr < value
-  | {lte, number()}                       % Less than or equal: attr ≤ value
-  | {gt, number()}                        % Greater than: attr > value
-  | {gte, number()}                       % Greater than or equal: attr ≥ value
-  | {in, [term()]}                        % Membership: attr ∈ list
-  | {range, number(), number()}           % Range: attr ∈ [min, max]
-  | {member_of, atom()}                   % Type constraint: attr ∈ Relation
-  | {'and', [term()]}
-  | is_integer
-  | is_float.
-
--type constraints() :: #{atom() => constraint_spec()}.
+-type constraints() :: #{atom() => constraint:relational_constraint()}.
 
 -type boundedness_constraints() :: #{atom() => constraints()}.
 

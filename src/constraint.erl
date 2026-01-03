@@ -3,12 +3,13 @@
 -include("../include/operations.hrl").
 
 -export([
-    less_than/1,
-    less_than_or_equal/1,
-    greater_than/1,
-    greater_than_or_equal/1,
-    equal/1,
-    not_equal/1,
+    example/0,
+    less_than/2,
+    less_than_or_equal/2,
+    greater_than/2,
+    greater_than_or_equal/2,
+    equal/2,
+    not_equal/2,
     member/2,
     member/3,
     'not'/2,
@@ -17,15 +18,11 @@
     create_1op/3,
     derive_1op/2,
     declare_1opic/3,
-    validate_1opic/3,
-    resolve/3,
-    validate_tuple/2,
-    validate_tuple_against_schema/2,
-    validate_schema/1,
-    build_membership_criteria/1,
-    register_domain/1,
-    unregister_domain/1,
-    list_domains/0,
+    validate_1opic/4,
+    resolve/4,
+    validate_tuple/3,
+    validate_tuple_against_schema/3,
+    build_membership_criteria/2,
     lt/1,       % value < X
     lte/1,      % value <= X
     gt/1,       % value > X
@@ -39,7 +36,8 @@
     filter_constraints/2,          % Keep only constraints for given attributes
     rename_constraint_attrs/2,     % Update attribute names in constraints
     infer_constraints_from_pred/2, % Extract constraints from predicate
-    add_attribute_constraint/3     % Add an attribute constraint to constraints
+    add_attribute_constraint/3,    % Add an attribute constraint to constraints
+    get_domain_from_db/2
 ]).
 
 -type relational_constraint() ::
@@ -56,113 +54,116 @@
 
 -export_type([relational_constraint/0, binding/0]).
 
--spec less_than(atom()) -> #relation{}.
-less_than(DomainName) ->
+-spec less_than(atom(), cardinality()) -> #relation{}.
+less_than(DomainName, Cardinality) ->
     #relation{
         hash = undefined,  % Computed lazily if needed
-        name = list_to_atom("less_than_" ++ atom_to_list(DomainName)),
+        name = less_than,
         tree = undefined,  % Generator-based, not stored
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '<', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L < R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("less_than_" ++ atom_to_list(DomainName))}
+        lineage = {base, less_than}
     }.
 
--spec less_than_or_equal(atom()) -> #relation{}.
-less_than_or_equal(DomainName) ->
+-spec less_than_or_equal(atom(), cardinality()) -> #relation{}.
+less_than_or_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("less_than_or_equal_" ++ atom_to_list(DomainName)),
+        name = less_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '=<', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L =< R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("less_than_or_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, less_than_or_equal}
     }.
 
--spec greater_than(atom()) -> #relation{}.
-greater_than(DomainName) ->
+-spec greater_than(atom(), cardinality()) -> #relation{}.
+greater_than(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("greater_than_" ++ atom_to_list(DomainName)),
+        name = greater_than,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '>', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L > R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("greater_than_" ++ atom_to_list(DomainName))}
+        lineage = {base, greater_than}
     }.
 
--spec greater_than_or_equal(atom()) -> #relation{}.
-greater_than_or_equal(DomainName) ->
+-spec greater_than_or_equal(atom(), cardinality()) -> #relation{}.
+greater_than_or_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("greater_than_or_equal_" ++ atom_to_list(DomainName)),
+        name = greater_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '>=', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L >= R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("greater_than_or_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, greater_than_or_equal}
     }.
 
--spec equal(atom()) -> #relation{}.
-equal(DomainName) ->
+-spec equal(atom(), cardinality()) -> #relation{}.
+equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("equal_" ++ atom_to_list(DomainName)),
+        name = equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
         %% The diagonal has the same cardinality as the domain itself
-        cardinality = domain_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '==', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L == R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, equal}
     }.
 
--spec not_equal(atom()) -> #relation{}.
-not_equal(DomainName) ->
+-spec not_equal(atom(), cardinality()) -> #relation{}.
+not_equal(DomainName, Cardinality) ->
     #relation{
         hash = undefined,
-        name = list_to_atom("not_equal_" ++ atom_to_list(DomainName)),
+        name = not_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
         constraints = #{},
-        cardinality = comparison_cardinality(DomainName),
+        cardinality = Cardinality,
         generator = {comparison, '/=', DomainName},
         membership_criteria = #{
             intension => fun(#{left := L, right := R}) -> L /= R end
         },
         provenance = undefined,
-        lineage = {base, list_to_atom("not_equal_" ++ atom_to_list(DomainName))}
+        lineage = {base, not_equal}
     }.
 
 -spec member(map(), #domain{} | #relation{}) -> boolean().
 member(Tuple, #relation{membership_criteria = #{intension := Intension}}) ->
     %% Generator-based relation with intension predicate (e.g., less_than)
     Intension(Tuple);
+member(Tuple, #relation{membership_criteria = #{test := TestFun}}) ->
+    %% Domain relation with test function (e.g., integer, string, atom domains)
+    TestFun(Tuple);
 member(_Tuple, #relation{tree = undefined, generator = Generator}) when Generator =/= undefined ->
     %% Generator-based relation without explicit intension - would need enumeration
     %% This is a fallback; ideally all generator relations have an intension
@@ -360,22 +361,22 @@ declare_1opic(AttributeName, #domain{name = DomainName}, Schema) ->
 %%
 %% Checks that the value is a member of the domain (1OP) that the
 %% attribute (1OPiC) draws from.
--spec validate_1opic(atom(), term(), map()) -> true | {false, term()}.
-validate_1opic(AttributeName, Value, Schema) ->
+-spec validate_1opic(#database_state{}, atom(), term(), map()) -> true | {false, term()}.
+validate_1opic(Database, AttributeName, Value, Schema) ->
     case maps:get(AttributeName, Schema, undefined) of
         undefined ->
             {false, {unknown_attribute, AttributeName}};
         DomainName ->
-            %% Get the domain and test membership
-            case get_domain(DomainName) of
+            %% Get the domain from database using version hash
+            case get_domain_from_db(Database, DomainName) of
                 {ok, Domain} ->
                     Tuple = #{value => Value},
                     case member(Tuple, Domain) of
                         true -> true;
                         false -> {false, {not_in_domain, Value, DomainName}}
                     end;
-                {error, Reason} ->
-                    {false, {domain_not_found, DomainName, Reason}}
+                {error, not_found} ->
+                    {false, {domain_not_found, DomainName}}
             end
     end.
 
@@ -383,22 +384,21 @@ validate_1opic(AttributeName, Value, Schema) ->
 
 %% @doc Resolve constraints for a relation against given values.
 %%
+%% @param Database The database state for version-aware constraint evaluation
 %% @param Type The type of resolution (domain, relation, etc.)
 %% @param RelationOrDomain The relation or domain
 %% @param Values The values to check
 %% @returns Resolution result
--spec resolve(atom(), #domain{} | #relation{}, map()) ->
+-spec resolve(#database_state{}, atom(), #domain{} | #relation{}, map()) ->
     {ok, boolean()} | {error, term()}.
-resolve(domain, #domain{} = Domain, Values) ->
+resolve(_Database, domain, #domain{} = Domain, Values) ->
     Result = member(Values, Domain),
     {ok, Result};
-resolve(relation, #relation{} = Relation, Values) ->
+resolve(_Database, relation, #relation{} = Relation, Values) ->
     Result = member(Values, Relation),
     {ok, Result};
-resolve(constraint, Constraint, Binding) ->
-    evaluate_constraint(Constraint, Binding).
-
-%%% Tuple and Schema Validation (for operations.erl integration)
+resolve(Database, constraint, Constraint, Binding) ->
+    evaluate_constraint(Database, Constraint, Binding).
 
 %% @doc Validate a tuple against a relation's schema and constraints.
 %%
@@ -407,25 +407,25 @@ resolve(constraint, Constraint, Binding) ->
 %% 2. Each attribute value is a member of its declared domain
 %% 3. Each attribute value satisfies its 1OP constraints (if any)
 %%
+%% @param Database The database state for version-aware domain lookups
 %% @param Tuple The tuple map to validate
 %% @param Relation The relation with schema and constraints
 %% @returns ok | {error, Reason}
--spec validate_tuple(map(), #relation{}) -> ok | {error, term()}.
-validate_tuple(Tuple, #relation{schema = Schema, constraints = Constraints}) ->
-    case validate_tuple_against_schema(Tuple, Schema) of
+-spec validate_tuple(#database_state{}, map(), #relation{}) -> ok | {error, term()}.
+validate_tuple(Database, Tuple, #relation{schema = Schema, constraints = Constraints}) ->
+    case validate_tuple_against_schema(Database, Tuple, Schema) of
         ok ->
             %% Also validate against attribute constraints (1OPs)
-            validate_tuple_against_constraints(Tuple, Constraints);
+            validate_tuple_against_constraints(Database, Tuple, Constraints);
         Error ->
             Error
     end.
 
--spec validate_tuple_against_schema(map(), map()) -> ok | {error, term()}.
-validate_tuple_against_schema(Tuple, Schema) ->
+-spec validate_tuple_against_schema(#database_state{}, map(), map()) -> ok | {error, term()}.
+validate_tuple_against_schema(Database, Tuple, Schema) ->
     %% Check all schema attributes are present and valid
     SchemaAttrs = maps:keys(Schema),
     TupleAttrs = maps:keys(Tuple),
-
     %% Check for missing attributes
     Missing = SchemaAttrs -- TupleAttrs,
     case Missing of
@@ -435,7 +435,7 @@ validate_tuple_against_schema(Tuple, Schema) ->
             case Extra of
                 [] ->
                     %% Validate each attribute against its domain
-                    validate_all_attributes(Tuple, Schema);
+                    validate_all_attributes(Database, Tuple, Schema);
                 _ ->
                     {error, {extra_attributes, Extra}}
             end;
@@ -443,14 +443,14 @@ validate_tuple_against_schema(Tuple, Schema) ->
             {error, {missing_attributes, Missing}}
     end.
 
--spec validate_all_attributes(map(), map()) -> ok | {error, term()}.
-validate_all_attributes(Tuple, Schema) ->
+-spec validate_all_attributes(#database_state{}, map(), map()) -> ok | {error, term()}.
+validate_all_attributes(Database, Tuple, Schema) ->
     Results = maps:fold(
         fun(AttrName, Value, Acc) ->
             case Acc of
                 {error, _} = Err -> Err;
                 ok ->
-                    case validate_1opic(AttrName, Value, Schema) of
+                    case validate_1opic(Database, AttrName, Value, Schema) of
                         true -> ok;
                         {false, Reason} -> {error, {invalid_attribute, AttrName, Reason}}
                     end
@@ -461,16 +461,16 @@ validate_all_attributes(Tuple, Schema) ->
     ),
     Results.
 
--spec validate_tuple_against_constraints(map(), #relation_constraints{} | undefined) -> ok | {error, term()}.
-validate_tuple_against_constraints(_Tuple, undefined) ->
+-spec validate_tuple_against_constraints(#database_state{}, map(), #relation_constraints{} | undefined) -> ok | {error, term()}.
+validate_tuple_against_constraints(_Database, _Tuple, undefined) ->
     %% No constraints defined
     ok;
-validate_tuple_against_constraints(Tuple, #relation_constraints{attribute_constraints = AttrConstraints}) ->
+validate_tuple_against_constraints(Database, Tuple, #relation_constraints{attribute_constraints = AttrConstraints}) ->
     %% Validate each attribute against its constraint
-    validate_attribute_constraints(Tuple, AttrConstraints).
+    validate_attribute_constraints(Database, Tuple, AttrConstraints).
 
--spec validate_attribute_constraints(map(), #{atom() => #attribute_constraint{}}) -> ok | {error, term()}.
-validate_attribute_constraints(Tuple, AttrConstraints) when is_map(AttrConstraints) ->
+-spec validate_attribute_constraints(#database_state{}, map(), #{atom() => #attribute_constraint{}}) -> ok | {error, term()}.
+validate_attribute_constraints(Database, Tuple, AttrConstraints) when is_map(AttrConstraints) ->
     maps:fold(
         fun(AttrName, #attribute_constraint{domain = Domain, constraints = Constraints}, Acc) ->
             case Acc of
@@ -482,7 +482,7 @@ validate_attribute_constraints(Tuple, AttrConstraints) when is_map(AttrConstrain
                             ok;
                         Value ->
                             %% Validate: value ∈ domain AND additional constraints
-                            validate_attribute_constraint(AttrName, Value, Domain, Constraints)
+                            validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints)
                     end
             end
         end,
@@ -490,67 +490,52 @@ validate_attribute_constraints(Tuple, AttrConstraints) when is_map(AttrConstrain
         AttrConstraints
     ).
 
--spec validate_attribute_constraint(atom(), term(), atom(), [relational_constraint()]) -> ok | {error, term()}.
-validate_attribute_constraint(AttrName, Value, Domain, Constraints) ->
+-spec validate_attribute_constraint(#database_state{}, atom(), term(), atom(), [relational_constraint()]) -> ok | {error, term()}.
+validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints) ->
     %% Step 1: Check domain membership
-    case get_domain(Domain) of
+    case get_domain_from_db(Database, Domain) of
         {ok, DomainRec} ->
             ValueTuple = #{value => Value},
             case member(ValueTuple, DomainRec) of
                 true ->
                     %% Step 2: Apply additional constraints
-                    validate_additional_constraints(AttrName, Value, Constraints);
+                    validate_additional_constraints(Database, AttrName, Value, Constraints);
                 false ->
                     {error, {not_in_domain, AttrName, Value, Domain}}
             end;
-        {error, _} ->
+        {error, not_found} ->
             {error, {unknown_domain, AttrName, Domain}}
     end.
 
--spec validate_additional_constraints(atom(), term(), [relational_constraint()]) -> ok | {error, term()}.
-validate_additional_constraints(_AttrName, _Value, []) ->
+-spec validate_additional_constraints(#database_state{}, atom(), term(), [relational_constraint()]) -> ok | {error, term()}.
+validate_additional_constraints(_Database, _AttrName, _Value, []) ->
     %% No additional constraints
     ok;
-validate_additional_constraints(AttrName, Value, Constraints) ->
+validate_additional_constraints(Database, AttrName, Value, Constraints) ->
     %% Evaluate each constraint
     Context = #{value => Value},
-    Results = [evaluate_constraint(C, Context) || C <- Constraints],
+    Results = [evaluate_constraint(Database, C, Context) || C <- Constraints],
     case lists:all(fun({ok, true}) -> true; (_) -> false end, Results) of
         true -> ok;
         false -> {error, {constraint_violation, AttrName, Value, Constraints}}
     end.
 
--spec validate_schema(map()) -> ok | {error, term()}.
-validate_schema(Schema) ->
-    Results = maps:fold(
-        fun(AttrName, DomainName, Acc) ->
-            case Acc of
-                {error, _} = Err -> Err;
-                ok ->
-                    case get_domain(DomainName) of
-                        {ok, _Domain} -> ok;
-                        {error, _} -> {error, {unknown_domain, AttrName, DomainName}}
-                    end
-            end
-        end,
-        ok,
-        Schema
-    ),
-    Results.
-
--spec build_membership_criteria(map()) -> map().
-build_membership_criteria(Schema) ->
+-spec build_membership_criteria(#database_state{}, map()) -> map().
+build_membership_criteria(Database, Schema) ->
     maps:fold(
         fun(AttrName, DomainName, Acc) ->
-            case get_domain(DomainName) of
+	    %% Get domain from DB using version hash
+	    %% Domains are stored in the DB through operations:create_immutable_relation (see operations.erl:531)
+	    case get_domain_from_db(Database, DomainName) of
                 {ok, Domain} ->
-                    Test = case Domain#domain.membership_criteria of
+                    %% Domains are stored as #relation{} records, not #domain{}
+                    Test = case Domain#relation.membership_criteria of
                         #{test := TestFun} -> TestFun;
                         _ -> fun(_) -> true end
                     end,
                     Acc#{AttrName => #{domain => DomainName, test => Test}};
-                {error, _} ->
-                    %% Unknown domain - use permissive test
+                {error, not_found} ->
+                    %% Unknown domain, default to permissive test
                     Acc#{AttrName => #{domain => DomainName, test => fun(_) -> true end}}
             end
         end,
@@ -558,78 +543,31 @@ build_membership_criteria(Schema) ->
         Schema
     ).
 
-%%% Domain Registry
-%%%
-%%% A simple ETS-based registry for custom 1OPs (domains).
-%%% This allows users to define new domains and have them recognized
-%%% by the constraint system.
-
-%% @doc Register a custom domain (1OP) in the registry.
-%%
-%% After registration, the domain can be used in schemas and will be
-%% recognized by validate_schema/1 and validate_1opic/3.
-%%
-%% @param Domain The #domain{} record to register
-%% @returns ok
--spec register_domain(#domain{}) -> ok.
-register_domain(#domain{name = Name} = Domain) ->
-    ensure_registry_exists(),
-    ets:insert(domain_registry, {Name, Domain}),
-    ok.
-
--spec unregister_domain(atom()) -> ok.
-unregister_domain(Name) ->
-    ensure_registry_exists(),
-    ets:delete(domain_registry, Name),
-    ok.
-
--spec list_domains() -> [atom()].
-list_domains() ->
-    ensure_registry_exists(),
-    BuiltIn = [integer, natural, boolean, rational, string, atom],
-    Custom = [Name || {Name, _} <- ets:tab2list(domain_registry)],
-    BuiltIn ++ Custom.
-
-ensure_registry_exists() ->
-    case ets:whereis(domain_registry) of
-        undefined ->
-            ets:new(domain_registry, [named_table, public, set]);
-        _ ->
-            ok
-    end.
-
-lookup_domain(Name) ->
-    ensure_registry_exists(),
-    case ets:lookup(domain_registry, Name) of
-        [{Name, Domain}] -> {ok, Domain};
-        [] -> get_builtin_domain(Name)
-    end.
-
 %%% Constraint Builders
 %%%
 %%% Convenience functions for building relational constraints.
 %%% These create constraints in the form expected by create_1op/3.
 
-%% @doc Create a "less than" constraint: value < X
+%% @doc Create a "less than" constraint: value &lt; X
 %%
 %% Expressed relationally as: (value, X) ∈ less_than
 -spec lt(term()) -> relational_constraint().
 lt(Value) ->
     {member_of, less_than, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a "less than or equal" constraint: value <= X
+%% @doc Create a "less than or equal" constraint: value &lt;= X
 -spec lte(term()) -> relational_constraint().
 lte(Value) ->
     {member_of, less_than_or_equal, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a "greater than" constraint: value > X
+%% @doc Create a "greater than" constraint: value &gt; X
 %%
 %% Expressed relationally as: (X, value) ∈ less_than
 -spec gt(term()) -> relational_constraint().
 gt(Value) ->
     {member_of, less_than, #{left => Value, right => {var, value}}}.
 
-%% @doc Create a "greater than or equal" constraint: value >= X
+%% @doc Create a "greater than or equal" constraint: value &gt;= X
 -spec gte(term()) -> relational_constraint().
 gte(Value) ->
     {member_of, less_than_or_equal, #{left => Value, right => {var, value}}}.
@@ -644,7 +582,7 @@ eq(Value) ->
 neq(Value) ->
     {member_of, not_equal, #{left => {var, value}, right => Value}}.
 
-%% @doc Create a range constraint: Min <= value < Max
+%% @doc Create a range constraint: Min &lt;= value &lt; Max
 %%
 %% This is a conjunction of two relational constraints:
 %% (Min, value) ∈ less_than_or_equal AND (value, Max) ∈ less_than
@@ -723,7 +661,6 @@ merge_constraints(#relation_constraints{attribute_constraints = AttrConstraints1
         AttrConstraints1,
         AttrConstraints2
     ),
-
     #relation_constraints{
         attribute_constraints = MergedAttrConstraints,
         tuple_constraints = TupleConstraints1 ++ TupleConstraints2,
@@ -861,27 +798,6 @@ op_to_constraint(neq, Value) -> neq(Value);
 op_to_constraint(between, {Min, Max}) -> between(Min, Max);
 op_to_constraint(_, _Value) -> {'and', []}.  % No-op constraint
 
-%%% Internal trash functions
-
-%% Determine cardinality for comparison relations
-comparison_cardinality(boolean) ->
-    {finite, 1};  % Only (false, true) for less_than
-comparison_cardinality(natural) ->
-    aleph_zero;   % Countably infinite pairs
-comparison_cardinality(integer) ->
-    aleph_zero;
-comparison_cardinality(rational) ->
-    continuum;    % Uncountably infinite
-comparison_cardinality(_) ->
-    aleph_zero.   % Default assumption
-
-%% Get cardinality of a base domain
-domain_cardinality(boolean) -> {finite, 2};
-domain_cardinality(natural) -> aleph_zero;
-domain_cardinality(integer) -> aleph_zero;
-domain_cardinality(rational) -> continuum;
-domain_cardinality(_) -> aleph_zero.
-
 %% Validate tuple against criteria map
 validate_tuple_against_criteria(Tuple, Criteria) when is_map(Criteria) ->
     maps:fold(
@@ -1002,62 +918,46 @@ max_cardinality(_, continuum) -> continuum;
 max_cardinality(aleph_zero, _) -> aleph_zero;
 max_cardinality(_, aleph_zero) -> aleph_zero.
 
-%% Convert constraints to a membership test function
-constraints_to_test([], _BaseDomain) ->
-    fun(_) -> true end;
-constraints_to_test(Constraints, _BaseDomain) ->
-    fun(Tuple) ->
-        lists:all(
-            fun(Constraint) ->
-                case evaluate_constraint(Constraint, Tuple) of
-                    {ok, true} -> true;
-                    _ -> false
-                end
-            end,
-            Constraints
-        )
-    end.
-
 %% Evaluate a relational constraint
-evaluate_constraint({member_of, RelName, Binding}, Context) when is_atom(RelName) ->
-    %% Get the relation and test membership
+evaluate_constraint(Database, {member_of, RelName, Binding}, Context) when is_atom(RelName) ->
+    %% Get the relation from the database using version hash
     BoundBinding = bind_variables(Binding, Context),
-    case get_comparison_relation(RelName) of
+    case get_domain_from_db(Database, RelName) of
         {ok, Relation} ->
             {ok, member(BoundBinding, Relation)};
-        {error, _} = Err ->
-            Err
+        {error, not_found} ->
+            {error, {relation_not_found, RelName}}
     end;
-evaluate_constraint({member_of, #domain{} = Rel, Binding}, Context) ->
+evaluate_constraint(_Database, {member_of, #domain{} = Rel, Binding}, Context) ->
+    %% Inline domain record - no database lookup needed
     BoundBinding = bind_variables(Binding, Context),
     {ok, member(BoundBinding, Rel)};
-evaluate_constraint({'not', Constraint, Universe}, Context) ->
-    case evaluate_constraint(Constraint, Context) of
+evaluate_constraint(Database, {'not', Constraint, Universe}, Context) ->
+    case evaluate_constraint(Database, Constraint, Context) of
         {ok, true} -> {ok, false};
         {ok, false} ->
             %% Must also be in universe
-            case evaluate_constraint({member_of, Universe, Context}, Context) of
+            case evaluate_constraint(Database, {member_of, Universe, Context}, Context) of
                 {ok, true} -> {ok, true};
                 _ -> {ok, false}
             end;
         Error -> Error
     end;
-evaluate_constraint({'and', Constraints}, Context) ->
-    Results = [evaluate_constraint(C, Context) || C <- Constraints],
+evaluate_constraint(Database, {'and', Constraints}, Context) ->
+    Results = [evaluate_constraint(Database, C, Context) || C <- Constraints],
     case lists:all(fun({ok, true}) -> true; (_) -> false end, Results) of
         true -> {ok, true};
         false -> {ok, false}
     end;
-evaluate_constraint({'or', Constraints}, Context) ->
-    Results = [evaluate_constraint(C, Context) || C <- Constraints],
+evaluate_constraint(Database, {'or', Constraints}, Context) ->
+    Results = [evaluate_constraint(Database, C, Context) || C <- Constraints],
     case lists:any(fun({ok, true}) -> true; (_) -> false end, Results) of
         true -> {ok, true};
         false -> {ok, false}
     end;
-evaluate_constraint(_, _) ->
+evaluate_constraint(_Database, _, _) ->
     {error, unsupported_constraint}.
 
-%% Bind variables in a binding using context
 bind_variables(Binding, Context) ->
     maps:map(
         fun(_K, {var, VarName}) ->
@@ -1068,108 +968,32 @@ bind_variables(Binding, Context) ->
         Binding
     ).
 
-%% Get a comparison relation by name
-get_comparison_relation(less_than) -> {ok, less_than(integer)};
-get_comparison_relation(less_than_or_equal) -> {ok, less_than_or_equal(integer)};
-get_comparison_relation(greater_than) -> {ok, greater_than(integer)};
-get_comparison_relation(greater_than_or_equal) -> {ok, greater_than_or_equal(integer)};
-get_comparison_relation(equal) -> {ok, equal(integer)};
-get_comparison_relation(not_equal) -> {ok, not_equal(integer)};
-get_comparison_relation(Name) -> {error, {unknown_relation, Name}}.
-
-%% Get a domain by name - checks registry first, then built-in
-get_domain(Name) ->
-    lookup_domain(Name).
-
-%% Get built-in domain by name
-get_builtin_domain(integer) -> {ok, integer_domain()};
-get_builtin_domain(natural) -> {ok, natural_domain()};
-get_builtin_domain(boolean) -> {ok, boolean_domain()};
-get_builtin_domain(rational) -> {ok, rational_domain()};
-get_builtin_domain(string) -> {ok, string_domain()};
-get_builtin_domain(atom) -> {ok, atom_domain()};
-get_builtin_domain(Name) -> {error, {unknown_domain, Name}}.
-
-%% Built-in domain definitions
-integer_domain() ->
-    #domain{
-        name = integer,
-        schema = #{value => integer},
-        generator = {primitive, integer},
-        membership_criteria = #{
-            test => fun(#{value := V}) -> is_integer(V) end
-        },
-        cardinality = aleph_zero
-    }.
-
-natural_domain() ->
-    #domain{
-        name = natural,
-        schema = #{value => natural},
-        generator = {primitive, natural},
-        membership_criteria = #{
-            test => fun(#{value := V}) -> is_integer(V) andalso V >= 0 end
-        },
-        cardinality = aleph_zero
-    }.
-
-boolean_domain() ->
-    #domain{
-        name = boolean,
-        schema = #{value => boolean},
-        generator = {primitive, boolean},
-        membership_criteria = #{
-            test => fun(#{value := V}) -> V =:= true orelse V =:= false end
-        },
-        cardinality = {finite, 2}
-    }.
-
-rational_domain() ->
-    #domain{
-        name = rational,
-        schema = #{numerator => integer, denominator => integer},
-        generator = {primitive, rational},
-        membership_criteria = #{
-            test => fun(#{numerator := N, denominator := D}) ->
-                is_integer(N) andalso is_integer(D) andalso D /= 0
-            end
-        },
-        cardinality = aleph_zero
-    }.
-
-string_domain() ->
-    #domain{
-        name = string,
-        schema = #{value => string},
-        generator = {primitive, string},
-        membership_criteria = #{
-            test => fun(#{value := V}) -> is_list(V) orelse is_binary(V) end
-        },
-        cardinality = aleph_zero
-    }.
-
-atom_domain() ->
-    #domain{
-        name = atom,
-        schema = #{value => atom},
-        generator = {primitive, atom},
-        membership_criteria = #{
-            test => fun(#{value := V}) -> is_atom(V) end
-        },
-        cardinality = aleph_zero
-    }.
-
-%% Compute cardinality for constrained domains
-constrained_cardinality(_BaseDomain, []) ->
-    aleph_zero;
-constrained_cardinality(_BaseDomain, Constraints) ->
-    %% Analyze constraints to determine if finite
-    case lists:any(fun is_finitely_constraining/1, Constraints) of
-        true -> {finite, unknown};  % Finite but unknown size
-        false -> aleph_zero
+%% @doc Get domain/relation from database by name, using version hash
+%% This replaces the old get_domain/1 function with version-aware lookup
+-spec get_domain_from_db(#database_state{}, atom()) ->
+    {ok, #relation{}} | {error, not_found}.
+get_domain_from_db(Database, DomainName) ->
+    case maps:find(DomainName, Database#database_state.relations) of
+        {ok, DomainHash} ->
+	    io:format("~p~n", [DomainName]),
+            [Domain] = mnesia:dirty_read(relation, DomainHash),
+            {ok, Domain};
+        error ->
+            {error, not_found}
     end.
 
-is_finitely_constraining({member_of, equal, _}) -> true;
-is_finitely_constraining({'and', Cs}) -> lists:any(fun is_finitely_constraining/1, Cs);
-is_finitely_constraining({'or', Cs}) -> lists:all(fun is_finitely_constraining/1, Cs);
-is_finitely_constraining(_) -> false.
+example() ->
+    main:setup(),
+    DB = operations:create_database(test_db),
+    maps:keys(DB#database_state.relations),
+    {DB1, _} = operations:create_relation(DB, employees, #{id => integer, name => string, age => integer, salary => integer}),
+    IdConstraint = constraint:create_1op(id, integer, [constraint:gt(0)]),
+    AgeConstraint = constraint:create_1op(age, integer, [constraint:gte(18), constraint:lt(70)]),
+    SalaryConstraint = constraint:create_1op(salary, integer, [constraint:between(30000, 200000)]),
+    C1 = constraint:add_attribute_constraint(undefined, id, IdConstraint),
+    C2 = constraint:add_attribute_constraint(C1, age, AgeConstraint),
+    C3 = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
+    {DB2, _UpdatedRel} = operations:update_relation_constraints(DB1, employees, C3),
+    {DB3, _} = operations:create_tuple(DB2, employees, #{id => 1, name => "Alice", age => 30, salary => 75000}),
+    {DB4, _} = operations:create_tuple(DB3, employees, #{id => -1, name => "Alice", age => 30, salary => 75000}),
+    {_DB5, _} = operations:create_tuple(DB4, employees, #{id => 1, name => "Alice", age => 30, salary => 3005000}).
