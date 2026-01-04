@@ -23,12 +23,12 @@
     validate_tuple/3,
     validate_tuple_against_schema/3,
     build_membership_criteria/2,
-    lt/1,       % value < X
-    lte/1,      % value <= X
-    gt/1,       % value > X
-    gte/1,      % value >= X
-    eq/1,       % value = X
-    neq/1,      % value != X
+    lt/2,       % value < X
+    lte/2,      % value <= X
+    gt/2,       % value > X
+    gte/2,      % value >= X
+    eq/2,       % value = X
+    neq/2,      % value != X
     between/2,  % Min <= value < Max
     %% Constraint Propagation
     empty_constraints/0,           % Create empty #relation_constraints{}
@@ -132,9 +132,9 @@ equal(DomainName, Cardinality) ->
         constraints = #{},
         %% The diagonal has the same cardinality as the domain itself
         cardinality = Cardinality,
-        generator = {comparison, '==', DomainName},
+        generator = {comparison, '=:=', DomainName},
         membership_criteria = #{
-            intension => fun(#{left := L, right := R}) -> L == R end
+            intension => fun(#{left := L, right := R}) -> L =:= R end
         },
         provenance = undefined,
         lineage = {base, equal}
@@ -551,44 +551,44 @@ build_membership_criteria(Database, Schema) ->
 %% @doc Create a "less than" constraint: value &lt; X
 %%
 %% Expressed relationally as: (value, X) ∈ less_than
--spec lt(term()) -> relational_constraint().
-lt(Value) ->
-    {member_of, less_than, #{left => {var, value}, right => Value}}.
+-spec lt(term(), term()) -> relational_constraint().
+lt(Left, Right) ->
+    {member_of, less_than, #{left => Left, right => Right}}.
 
 %% @doc Create a "less than or equal" constraint: value &lt;= X
--spec lte(term()) -> relational_constraint().
-lte(Value) ->
-    {member_of, less_than_or_equal, #{left => {var, value}, right => Value}}.
+-spec lte(term(), term()) -> relational_constraint().
+lte(Left, Right) ->
+    {member_of, less_than_or_equal, #{left => Left, right => Right}}.
 
 %% @doc Create a "greater than" constraint: value &gt; X
 %%
-%% Expressed relationally as: (X, value) ∈ less_than
--spec gt(term()) -> relational_constraint().
-gt(Value) ->
-    {member_of, less_than, #{left => Value, right => {var, value}}}.
+%% Expressed relationally as: (X, value) ∈ greater_than
+-spec gt(term(), term()) -> relational_constraint().
+gt(Left, Right) ->
+    {member_of, greater_than, #{left => Left, right => Right}}.
 
 %% @doc Create a "greater than or equal" constraint: value &gt;= X
--spec gte(term()) -> relational_constraint().
-gte(Value) ->
-    {member_of, less_than_or_equal, #{left => Value, right => {var, value}}}.
+-spec gte(term(), term()) -> relational_constraint().
+gte(Left, Right) ->
+    {member_of, greater_than_or_equal, #{left => Left, right => Right}}.
 
 %% @doc Create an "equal" constraint: value = X
--spec eq(term()) -> relational_constraint().
-eq(Value) ->
-    {member_of, equal, #{left => {var, value}, right => Value}}.
+-spec eq(term(), term()) -> relational_constraint().
+eq(Left, Right) ->
+    {member_of, equal, #{left => Left, right => Right}}.
 
 %% @doc Create a "not equal" constraint: value != X
--spec neq(term()) -> relational_constraint().
-neq(Value) ->
-    {member_of, not_equal, #{left => {var, value}, right => Value}}.
+-spec neq(term(), term()) -> relational_constraint().
+neq(Left, Right) ->
+    {member_of, not_equal, #{left => Left, right => Right}}.
 
 %% @doc Create a range constraint: Min &lt;= value &lt; Max
 %%
 %% This is a conjunction of two relational constraints:
-%% (Min, value) ∈ less_than_or_equal AND (value, Max) ∈ less_than
+%% (Min, value) ∈ greater_than_or_equal AND (value, Max) ∈ less_than
 -spec between(term(), term()) -> relational_constraint().
 between(Min, Max) ->
-    {'and', [gte(Min), lt(Max)]}.
+    {'and', [gte({var,value}, Min), lt({var, value}, Max)]}.
 
 %%% Constraint Propagation
 %%%
@@ -788,13 +788,12 @@ rename_vars_in_constraint({'not', Constraint, Universe}, Mappings) ->
 rename_vars_in_constraint(Other, _Mappings) ->
     Other.
 
-%% Helper: convert declarative operator to relational constraint
-op_to_constraint(lt, Value) -> lt(Value);
-op_to_constraint(lte, Value) -> lte(Value);
-op_to_constraint(gt, Value) -> gt(Value);
-op_to_constraint(gte, Value) -> gte(Value);
-op_to_constraint(eq, Value) -> eq(Value);
-op_to_constraint(neq, Value) -> neq(Value);
+op_to_constraint(lt, Value) -> lt({var, value}, Value);
+op_to_constraint(lte, Value) -> lte({var, value}, Value);
+op_to_constraint(gt, Value) -> gt({var, value}, Value);
+op_to_constraint(gte, Value) -> gte({var, value}, Value);
+op_to_constraint(eq, Value) -> eq({var, value}, Value);
+op_to_constraint(neq, Value) -> neq({var, value}, Value);
 op_to_constraint(between, {Min, Max}) -> between(Min, Max);
 op_to_constraint(_, _Value) -> {'and', []}.  % No-op constraint
 
@@ -987,8 +986,8 @@ example() ->
     DB = operations:create_database(test_db),
     maps:keys(DB#database_state.relations),
     {DB1, _} = operations:create_relation(DB, employees, #{id => integer, name => string, age => integer, salary => integer}),
-    IdConstraint = constraint:create_1op(id, integer, [constraint:gt(0)]),
-    AgeConstraint = constraint:create_1op(age, integer, [constraint:gte(18), constraint:lt(70)]),
+    IdConstraint = constraint:create_1op(id, integer, [constraint:gt({var, value}, 0)]),
+    AgeConstraint = constraint:create_1op(age, integer, [constraint:gte({var, value}, 18), constraint:lt({var,value}, 70)]),
     SalaryConstraint = constraint:create_1op(salary, integer, [constraint:between(30000, 200000)]),
     C1 = constraint:add_attribute_constraint(undefined, id, IdConstraint),
     C2 = constraint:add_attribute_constraint(C1, age, AgeConstraint),
