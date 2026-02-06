@@ -1,8 +1,8 @@
-#+TITLE: Domino
+#+TITLE: Sakura
 
 * About
 
-Domino is an *Extended Relational Database Engine* based on E. F. Codd's
+Sakura is an *Extended Relational Database Engine* based on E. F. Codd's
 RM/T (Relational Model/Tasmania, 1979). It implements relational algebra
 in its strict, theoretical form while extending it to capture more of the
 meaning of data through semantic modeling concepts.
@@ -24,7 +24,7 @@ from a domain. All operations are defined on entire relations as sets,
 with no recourse to the compromises typical of SQL or other practical
 implementations.
 
-** What Makes Domino Extended?
+** What Makes Sakura Extended?
 
 *** Content-Addressed Storage
 Entities are identified by system-controlled *surrogates* — cryptographic
@@ -94,7 +94,7 @@ and a concrete realization of Codd's vision for semantic data modeling.
 ** Why RM/T?
 
 Most database systems today are compromises — they sacrifice theoretical
-purity for practical performance. Domino takes a different approach:
+purity for practical performance. Sakura takes a different approach:
 implement the theory *correctly* first, then optimize. RM/T provides:
 
 - *Atomic Semantics* — What constitutes a minimal meaningful unit?

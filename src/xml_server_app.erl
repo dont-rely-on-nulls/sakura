@@ -11,9 +11,9 @@ start() ->
 
 %% @doc Start XML server on specified port.
 start(Port) ->
-    % Initialize Domino
+    % Initialize Sakura
     main:setup(),
-    io:format("~nDomino initialized~n"),
+    io:format("~nSakura initialized~n"),
 
     % Create example database
     DB = repl:example_db(),
@@ -23,6 +23,6 @@ start(Port) ->
 
     io:format("~nXML Server ready!~n"),
     io:format("Connect with: nc localhost ~p~n", [Port]),
-    io:format("Or run Emacs client: M-x domino-run-examples~n~n"),
+    io:format("Or run Emacs client: M-x sakura-run-examples~n~n"),
 
     ok.

@@ -1,5 +1,5 @@
 {
-  description = "Domino's flakes";
+  description = "Sakura's flakes";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -20,7 +20,7 @@
           erlangLatest = pkgs.erlang_28; 
           
           rebar_config = builtins.readFile ./rebar.config;
-          match = builtins.match ".*release,.+domino, \"([0-9.]+)\".*" rebar_config;
+          match = builtins.match ".*release,.+sakura, \"([0-9.]+)\".*" rebar_config;
           pversion = builtins.head match;
         in {
           # This sets `pkgs` to a nixpkgs with allowUnfree option set.
@@ -39,7 +39,7 @@
                 };
               in
               pkgs.beamPackages.rebar3Relx {
-                pname = "domino";
+                pname = "sakura";
                 version = pversion;
                 src = pkgs.lib.cleanSource ./.;
                 releaseType = "release";

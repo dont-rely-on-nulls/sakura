@@ -1,6 +1,6 @@
 %%% @doc Extended Relational Database Operations (RM/T)
 %%%
-%%% This module implements core database operations for Domino, an extended
+%%% This module implements core database operations for Sakura, an extended
 %%% relational database engine based on E. F. Codd's RM/T (1979).
 %%%
 %%% == Architecture ==
