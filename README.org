@@ -2,121 +2,138 @@
 
 * About
 
-Sakura is an *Extended Relational Database Engine* based on E. F. Codd's
-RM/T (Relational Model/Tasmania, 1979). It implements relational algebra
-in its strict, theoretical form while extending it to capture more of the
-meaning of data through semantic modeling concepts.
+Sakura is a semantic-relational algebra engine inspired by
+E. F. Codd's RM/T and D. McGoveran's (as understood by Fabian Pascal)
+SRDM. It models relations in both intension and extension, providing
+their manipulation as first-class elements of an algebra.
 
-** Theoretical Foundation
+* Motivation
 
-The engine builds upon two seminal works by E. F. Codd:
+We believe the relational model was not ever fully implemented. The
+fundamental necessity of expressing intent and binding meaning
+enclosed to a conceptual model in data is seldom achieved by any
+self-claimed relational database vendor. The emergence of different
+physically concerned paradigms in the industry demonstrate not only a
+large scale amnesia about fundamentals, but also a lethal
+manifestation of problems that should not exist otherwise. The
+relational data model as an applied theory is an universally rich and
+concrete approach to reality that bases itself greatly in
+moderate-realism applied to mathematics, as described in =An
+Aristotelian Realist Philosophy of Mathematics: Mathematics as the
+Science of Quantity and Structure= by J. Franklin. We believe that
+unleashing the full potential of the relational model as refined over
+the years despite overwhelming disregard of the industry as a whole,
+will promote efficiency to a new scale never seen, that was very much
+so cut short by relational pretenders and theoretically unsound
+approaches. Our goal is to eliminate the application-database
+distinction, while maintaining a clear separation between a first
+order predicate logic algebra engine and a higher order predicate
+logic decision engine (application) via an embedded data sublanguage
+with Sakura as a possible auxiliary runtime.
 
-1. *"A Relational Model of Data for Large Shared Data Banks"* (1970) —
-   The foundation of relational theory
-2. *"Extending the Database Relational Model to Capture More Meaning"* (1979) —
-   RM/T extensions for semantic modeling
+* Current State
 
-** Core Principles
+** What Works Today
 
-A relation is modeled as a set of tuples, each tuple being a set of
-attributes. Each attribute is a pairing of a name with a value drawn
-from a domain. All operations are defined on entire relations as sets,
-with no recourse to the compromises typical of SQL or other practical
-implementations.
+- Base finite relations: create, insert, retract, clear
+- Built-in immutable/generated domains on database creation:
+  =integer=, =natural=, =rational=, =string=, =atom=, =term=
+- Query DSL in =query_planner= and =repl=:
+  - base relation scan (using relation atom)
+  - =select=, =project=, =join=, =theta_join=, =sort=, =take=, =rename=
+  - =materialize= (plan-level, with caveats)
+- Volcano-style iterator execution model (process-per-operator)
+- Visual output modes in =visualizer= (table/tree/nested views)
+- XML TCP server protocol commands: =QUERY=, =NEXT=, =CLOSE=
 
-** What Makes Sakura Extended?
+** Known Gaps / Reliability Risks
 
-*** Content-Addressed Storage
-Entities are identified by system-controlled *surrogates* — cryptographic
-hashes (SHA-256) that provide permanent, unique identification. This
-enables:
-- Automatic deduplication
-- Immutable versioning
-- Merkle tree-based diffing
-- Distributed synchronization
+- Lack of constraints greater than 1OPs;
+- =repl:start/0= is destructive: it calls =main:setup/0=, which recreates schema;
+- =xml_server= =SCHEMA= path is currently fragile with constraints representation;
+- Constraint/intension representation is not yet fully normalized across modules;
+- Planner contains dual compilation styles (iterator path + relation path);
+- Blocking operators (for example =sort=) over infinite relations can time out unless bounded with =take= first;
+- There is currently no substantial automated test suite in-repo despite CI hooks;
 
-*** Entity Types (RM/T)
-Three fundamental entity classifications:
-- *Kernel Entities* — Independent entities (e.g., Employee, Supplier)
-- *Characteristic Entities* — Multi-valued properties (e.g., Job History)
-- *Associative Entities* — Relationships as first-class entities
+See =docs/reliability_roadmap.org= for the detailed remediation plan.
 
-*** Four Dimensions of Molecular Semantics
-1. *Cartesian Aggregation* — Properties, characteristics, and associations
-2. *Generalization* — Subtyping and inheritance hierarchies
-3. *Cover Aggregation* — Collections and groupings (e.g., teams, convoys)
-4. *Event Precedence* — Temporal ordering of events
+* Architecture (High Level)
 
-*** Immutable Architecture
-All data structures are immutable. Every modification creates a new version
-with a new hash, enabling:
-- Temporal queries
-- Audit trails
-- Safe concurrent access
-- Version control for data
+- =src/operations.erl= :: core storage/versioning and iterator primitives
+- =src/constraint.erl= :: domain constraints, inference, validation
+- =src/generators.erl= :: infinite relation generators
+- =src/relational_operators.erl= :: pure relation-to-relation algebra operators
+- =src/query_planner.erl= :: tuple DSL parsing/validation/execution planning
+- =src/repl.erl= :: shell-facing query convenience API
+- =src/xml_server.erl= :: TCP/XML query interface
+- =src/visualizer.erl= :: renderers for result tuples
 
-** Current Implementation
+Data model records are defined in =include/operations.hrl=.
 
-*** What's Built
-- Content-addressed storage with SHA-256 surrogates
-- E-relations for entity type management
-- P-relations for immediate properties
-- Merkle tree integration for efficient versioning
-- Volcano iterator model for lazy evaluation
-- Transactional ACID operations via Mnesia
-- Comprehensive EUnit test suite
+* Query DSL
 
-*** What's Planned
-- Full relational algebra operators (σ, π, ⋈, ∪, ∩, −)
-- Characteristic entities and CG-relation
-- Associative entities and AG-relation
-- Generalization hierarchies (UGI/AGI)
-- Cover aggregation (KG-relation)
-- Event precedence (US/AS/UP/AP)
-- Extended operators (OUTER JOIN, MAYBE operators)
-- RM/T catalog relations
-- Null value handling (three-valued logic)
-- Infinite relations (aleph₀)
-- High-level query language
+Plans are Erlang tuples:
 
-** Design Philosophy
+- base relation: =employees=
+- selection: ={select, employees, fun(T) -> maps:get(age, T) > 30 end}=
+- projection: ={project, employees, [name, age]}=
+- equijoin: ={join, employees, departments, dept_id}=
+- theta join: ={theta_join, Left, Right, Pred2}=
+- sort: ={sort, Plan, Comparator2}=
+- take: ={take, Plan, N}=
+- rename: ={rename, old_attr, new_attr, Plan}=
 
-The engine is intended as a study in correctness and semantic richness:
-each operation is executed in a manner consistent with the classical
-definition of relational algebra, while the RM/T extensions provide a
-framework for capturing more meaning about entities, their properties,
-and their relationships.
+* Running
 
-It is a platform for exploring the consequences of relational theory in
-a low-level programming context, providing both a tool for experimentation
-and a concrete realization of Codd's vision for semantic data modeling.
+** Compile
 
-** Why RM/T?
+#+begin_src sh
+rebar3 compile
+#+end_src
 
-Most database systems today are compromises — they sacrifice theoretical
-purity for practical performance. Sakura takes a different approach:
-implement the theory *correctly* first, then optimize. RM/T provides:
+** REPL
 
-- *Atomic Semantics* — What constitutes a minimal meaningful unit?
-- *Molecular Semantics* — What larger clusters constitute meaningful units?
-- *Systematic Design* — Principled approach to database schema design
-- *Intelligent Behavior* — System understands more about data meaning
+#+begin_src erlang
+repl:start().
+DB = repl:example_db().
+repl:q(DB, employees).
+repl:q(DB, {take, {sort, employees,
+                  fun(A,B) -> maps:get(age,A) =< maps:get(age,B) end}, 3}).
+#+end_src
 
-** Documentation
+** XML Server (manual)
 
-See =docs/= directory:
-- =code.org= — Comprehensive code documentation
-- =features.org= — Feature roadmap and RM/T extensions
-- =ci.org= — Continuous integration setup
+Start server from Erlang shell, then send line commands over TCP:
 
-** References
+- =QUERY <plan>=
+- =NEXT <session_id> <n>=
+- =CLOSE <session_id>=
 
-- Codd, E. F. (1970). "A Relational Model of Data for Large Shared Data Banks."
-  /Communications of the ACM/ 13(6): 377-387.
-- Codd, E. F. (1979). "Extending the Database Relational Model to Capture More Meaning."
-  /ACM Transactions on Database Systems/ 4(4): 397-434.
-- Date, C. J. & Darwen, H. "Foundation for Future Database Systems: The Third Manifesto."
+* Design Intent
 
-** License
+Sakura aims to treat relations as algebraic manipulation units with both:
 
-See LICENSE file.
+- extension (actual tuples, finite or generated)
+- intension (schema + constraints + derivation meaning)
+
+The current engine already exposes the extension side robustly for
+many operations, despite the lack of constraints greater than 1OP.
+The main active work is making intension handling fully consistent and
+reliable across planners/operators/protocols.
+
+* Roadmap and Docs
+
+- =docs/reliability_roadmap.org= :: precise reliability + correctness roadmap
+- =docs/code.org= :: code-oriented notes
+- =docs/features.org= :: feature notes (may contain older planning context)
+- =docs/constraints.org= :: constraint model notes
+
+* References
+
+- Codd, E. F. (1970), "A Relational Model of Data for Large Shared Data Banks"
+- Codd, E. F. (1979), "Extending the Database Relational Model to Capture More Meaning"
+
+* License
+
+See =LICENSE=.
