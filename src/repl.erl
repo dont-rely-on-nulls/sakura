@@ -1,4 +1,4 @@
-%%% @doc Interactive REPL Helper for Domino Query Planner
+%%% @doc Interactive REPL Helper for Sakura Query Planner
 %%%
 %%% Provides convenience functions for working with the query planner
 %%% in the Erlang shell (REPL). Includes utilities for pretty-printing
@@ -69,7 +69,7 @@
 
 %%% Public API
 
-%% @doc Start the Domino system and initialize Mnesia.
+%% @doc Start the Sakura system and initialize Mnesia.
 %%
 %% Call this first when starting a new REPL session.
 %%
@@ -78,7 +78,7 @@
 start() ->
     main:setup(),
     io:format("~n~s~n", [banner()]),
-    io:format("Domino REPL started. Type repl:help() for usage.~n~n"),
+    io:format("Sakura REPL started. Type repl:help() for usage.~n~n"),
     ok.
 
 %% @doc Create an example database with sample data.
@@ -243,7 +243,7 @@ pretty(Results) ->
 -spec help() -> ok.
 help() ->
     io:format("~n~s~n~n", [banner()]),
-    io:format("Domino Query REPL - Lisp-inspired tuple-based query language~n~n"),
+    io:format("Sakura Query REPL - Lisp-inspired tuple-based query language~n~n"),
     io:format("Quick Start:~n"),
     io:format("  repl:start().                  %% Initialize system~n"),
     io:format("  DB = repl:example_db().        %% Create example database~n"),
@@ -321,6 +321,6 @@ help() ->
 
 banner() ->
     "========================================\n"
-    "  Domino - Extended Relational DB\n"
+    "  Sakura - Extended Relational DB\n"
     "  Tasmania / RM/T Implementation\n"
     "========================================".

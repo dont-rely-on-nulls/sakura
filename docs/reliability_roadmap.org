@@ -1,0 +1,223 @@
+#+TITLE: Sakura Reliability Roadmap (Precise)
+
+* Scope
+
+Build Sakura into a correct and efficient first-order predicate logic (FOPL)
+relational algebra engine where relations are first-class values with:
+
+- *Extension* :: denotation as a tuple set (finite stored set or generated stream)
+- *Intension* :: logical meaning (schema + normalized constraints + derivation)
+
+* Formal Position on Issue =#48=
+
+Issue =#48= is *not* semantic redundancy.
+
+- =constraint:create_1op/3= is an attribute-constraint *definition* constructor.
+- =constraint:add_attribute_constraint/3= is a relation-level *binding* operation.
+
+They are distinct layers. The defect is API ambiguity and weak invariants.
+
+- [ ] Require key/record coherence: key =:= =#attribute_constraint.attribute=.
+- [ ] Provide one canonical "declare and bind" path to prevent invalid states.
+
+* Relation Contract (Non-Negotiable)
+
+** C1 Representation Contract
+
+- [ ] Exactly one extension mode per relation:
+  - finite stored: =tree =/= undefined= and =generator= is factory for tree iterator
+  - generated: =tree == undefined= and =generator= is mandatory
+- [ ] Intension is always =#relation_constraints{}=, never raw =#{}=.
+- [ ] =membership_criteria= is either removed (Issue =#47=) or treated as a derived cache from constraints, never a second source of truth.
+
+** C2 Identity Contract
+
+- [ ] Relation hash function is canonical and identical across all mutation paths.
+- [ ] Hash input includes the same semantic fields in the same order, with explicit versioned format.
+- [ ] Any relation update that changes intension or extension must change hash deterministically.
+
+** C3 Algebraic Closure Contract
+
+- [ ] Every algebra operator returns a relation with valid extension + intension.
+- [ ] Constraint propagation rules are explicit and tested per operator.
+- [ ] Result schema and constraints are compatible and normalized.
+
+* Current Critical Correctness Gaps
+
+- [ ] Non-canonical relation hash updates in =src/operations.erl=.
+- [ ] Split semantics between =constraints= and =membership_criteria=.
+- [ ] Mixed constraints shapes (=#relation_constraints{}= and raw maps).
+- [ ] Placeholder substitution search in =constraint:find_satisfying_substitution/4=.
+- [ ] Derived infinite/finite relations not consistently honoring constraints (=#13=, =#14=).
+- [ ] Dual planner paths with mismatched behavior in =src/query_planner.erl=.
+- [ ] Iterator close protocol mismatch (=stop= vs =close= forms).
+- [ ] XML schema endpoint assumes map constraints and crashes.
+
+* Workstreams
+
+** W0 Safety and Determinism (P0)
+
+- [ ] Fix =xml_server= SCHEMA serialization for record constraints (=src/xml_server.erl=).
+- [ ] Replace ad-hoc prints with =logger= (=#39=), remove debug output in constraint lookup.
+- [ ] Make =repl:start/0= non-destructive; add explicit destructive reset command.
+- [ ] Standardize iterator termination protocol across all iterator loops.
+- [ ] Normalize constraints type in all constructors (planner/operators/operations).
+
+*Acceptance criteria*
+
+- [ ] No SCHEMA crash under any built-in relation set.
+- [ ] No unsolicited stdout noise during normal queries.
+- [ ] No relation loss on default REPL startup.
+- [ ] No orphan iterator processes after collect/close paths.
+
+** W1 FOPL Semantics Core (P1)
+
+- [ ] Implement full variable binding search and substitution for partial constraints.
+- [ ] Define and enforce formula AST for =and/or/not/exists/forall=.
+- [ ] Separate logical membership from physical storage existence checks.
+- [ ] Decide and document two-valued logic policy (no NULL) or explicit three-valued policy.
+- [ ] Complete 1OPiC modeling (=#42=) and baseline 1OP constraints (=#28=).
+
+*Acceptance criteria*
+
+- [ ] Quantified constraints produce correct truth values on finite fixtures.
+- [ ] Membership equivalence tests pass for stored vs generated extension of same intension.
+- [ ] Constraint violation diagnostics identify failing attribute/formula branch.
+
+** W2 Constraint Model Consistency (P1)
+
+- [ ] Resolve =#48= with scope-safe API (define vs bind) and strict invariant checks.
+- [ ] Implement relation creation with constraints in one call (=#15=).
+- [ ] Decide fate of =membership_criteria= (=#47=): remove or strict derivation cache.
+- [ ] Add migration helper to convert legacy constraint maps to =#relation_constraints{}=.
+- [ ] Establish extension/intension introspection API for debugging and tooling.
+
+*Acceptance criteria*
+
+- [ ] No public path can construct mismatched attribute constraint key/record pairs.
+- [ ] New relation creation API supports schema + constraints atomically.
+- [ ] Intension is serialized/deserialized in one normalized shape everywhere.
+
+** W3 Planner Unification (P1)
+
+- [ ] Remove dual compile paths; keep one logical -> rewrite -> physical pipeline.
+- [ ] Add semantic validation (schema compatibility, attribute existence, constraint shape).
+- [ ] Add rewrite rules: projection pruning, predicate pushdown, limited join reordering.
+- [ ] Add typed planner errors for REPL/XML consumers.
+
+*Acceptance criteria*
+
+- [ ] Same query plan always yields same output schema and row semantics across interfaces.
+- [ ] Planner rejects invalid plans with stable machine-readable reasons.
+
+** W4 Algebra Completeness and Performance (P2)
+
+- [ ] Implement union/intersection/difference with strict compatibility checks.
+- [ ] Implement semijoin/antijoin/division.
+- [ ] Add hash join and merge join; keep nested loop fallback.
+- [ ] Enforce bounded execution preconditions for blocking operators over infinite relations.
+- [ ] Improve tuple hash retrieval path performance (=#7=).
+
+*Acceptance criteria*
+
+- [ ] Algebra law regression tests pass for finite relations (where laws apply).
+- [ ] Join strategy selection is observable and benchmarked.
+- [ ] Infinite + blocking plans fail fast with actionable diagnostics unless bounded.
+
+** W5 Versioning and Updatable Views (P2)
+
+- [ ] Implement branch metadata and lineage (=#43=).
+- [ ] Implement fast-forward merge semantics and conflict checks (=#44=).
+- [ ] Implement provenance-safe updatable ephemeral views (=#26=).
+
+*Acceptance criteria*
+
+- [ ] Branch/merge operations are deterministic and test-covered.
+- [ ] Updatable views reject ambiguous write-back paths.
+
+** W6 Interfaces and Hardening (P2)
+
+- [ ] Replace XML =erl_eval= execution with safe parsed DSL/AST.
+- [ ] Version protocol responses and provide structured errors.
+- [ ] Add explain-analyze metrics (rows, time, strategy, spills/materialization).
+- [ ] Add visualizer mode for relation semantics (schema, constraints, lineage, extension mode).
+- [ ] Integrate or deprecate =relation.erl= helper model.
+
+*Acceptance criteria*
+
+- [ ] No arbitrary code execution path through external query interface.
+- [ ] Interface responses are stable under malformed input and concurrency.
+
+* GitHub Issue Mapping
+
+** Core reliability and semantics
+
+- [ ] =#39= logging
+- [ ] =#15= define constraints at finite relation creation
+- [ ] =#14= derived finite from infinite honors/inherits constraints
+- [ ] =#13= derived infinite honors constraints
+- [ ] =#7= tuple hash retrieval performance
+
+** Constraint/data model
+
+- [ ] =#48= clarify define/bind API and enforce invariants
+- [ ] =#47= remove/replace membership_criteria split
+- [ ] =#42= proper 1OPiC model
+- [ ] =#28 #29 #30 #31= 1st/2nd/3rd/4th order property constraints
+
+** Versioning and updates
+
+- [ ] =#43= branching
+- [ ] =#44= fast-forward merge
+- [ ] =#26= updatable views
+
+** Optional research tracks
+
+- [ ] =#45= nullary relations vs booleans
+- [ ] =#40= state monad
+- [ ] =#41= C node for hot loops
+- [ ] =#19= chessboard integration
+
+* Verification Matrix (Must Exist in CI)
+
+- [ ] Unit tests: constraints AST eval, membership semantics, hash determinism
+- [ ] Property tests: algebra laws, hash stability, propagation invariants
+- [ ] Integration tests: REPL flows, XML QUERY/NEXT/CLOSE/SCHEMA, malformed inputs
+- [ ] Performance tests: join algorithms, bounded infinite queries, Merkle hash retrieval
+- [ ] Concurrency tests: iterator lifecycle and server session cleanup
+
+* Milestones and Exit Criteria
+
+** M1 (Safety Baseline)
+
+- Deliver W0
+- Close target issues: =#39 #15 #14 #13 #7=
+- Exit: no destructive default startup, no XML schema crash, no protocol-level iterator leaks
+
+** M2 (Semantic Correctness)
+
+- Deliver W1 + W2
+- Close target issues: =#48 #47 #42 #28= (with foundations for =#29 #30 #31=)
+- Exit: extension/intension invariants hold across create/query/derive flows
+
+** M3 (Planner and Performance)
+
+- Deliver W3 + W4
+- Exit: unified planner, bounded infinite behavior, measurable join improvements
+
+** M4 (Versioned Workflows)
+
+- Deliver W5 + W6
+- Close target issues: =#43 #44 #26=
+- Exit: deterministic branch/merge and safe updatable views with stable interfaces
+
+* Execution Order
+
+1. W0 Safety and Determinism
+2. W1 FOPL Semantics Core
+3. W2 Constraint Model Consistency
+4. W3 Planner Unification
+5. W4 Algebra Completeness and Performance
+6. W5 Versioning and Updatable Views
+7. W6 Interfaces and Hardening
+8. Optional research tracks (=#45 #40 #41 #19=)
