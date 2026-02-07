@@ -37,6 +37,9 @@
     between/2,  % Min <= value < Max
     create_2op/2,
     add_tuple_constraint/2,
+    remove_tuple_constraint/2,
+    rename_tuple_constraint/3,
+    list_tuple_constraints/1,
     %% Constraint Propagation
     empty_constraints/0,           % Create empty #relation_constraints{}
     merge_constraints/2,           % Merge two constraint records (AND semantics)
@@ -44,6 +47,9 @@
     rename_constraint_attrs/2,     % Update attribute names in constraints
     infer_constraints_from_pred/2, % Extract constraints from predicate
     add_attribute_constraint/3,    % Add an attribute constraint to constraints
+    remove_attribute_constraint/3,
+    rename_attribute_constraint/4,
+    list_attribute_constraints/2,
     get_domain_from_db/2
 ]).
 
@@ -912,10 +918,10 @@ extract_quantifier_value(TupleValueMap) when is_map(TupleValueMap) ->
             {error, non_unary_quantifier_relation}
     end.
 
--spec validate_attribute_constraints(#database_state{}, map(), #{atom() => #attribute_constraint{}}) -> ok | {error, term()}.
+-spec validate_attribute_constraints(#database_state{}, map(), #{atom() => [#attribute_constraint{}]}) -> ok | {error, term()}.
 validate_attribute_constraints(Database, Tuple, AttrConstraints) when is_map(AttrConstraints) ->
     maps:fold(
-        fun(AttrName, #attribute_constraint{domain = Domain, constraints = Constraints}, Acc) ->
+        fun(AttrName, AttrConstraintList, Acc) ->
             case Acc of
                 {error, _} = Err -> Err;
                 ok ->
@@ -924,14 +930,26 @@ validate_attribute_constraints(Database, Tuple, AttrConstraints) when is_map(Att
                             %% Attribute not in tuple - schema validation should catch this
                             ok;
                         Value ->
-                            %% Validate: value ∈ domain AND additional constraints
-                            validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints)
+                            validate_attribute_constraint_list(Database, AttrName, Value, AttrConstraintList)
                     end
             end
         end,
         ok,
         AttrConstraints
     ).
+
+-spec validate_attribute_constraint_list(#database_state{}, atom(), term(), [#attribute_constraint{}]) -> ok | {error, term()}.
+validate_attribute_constraint_list(_Database, _AttrName, _Value, []) ->
+    ok;
+validate_attribute_constraint_list(Database, AttrName, Value, [#attribute_constraint{name = ConstraintName,
+                                                                                      domain = Domain,
+                                                                                      constraints = Constraints} | Rest]) ->
+    case validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints) of
+        ok ->
+            validate_attribute_constraint_list(Database, AttrName, Value, Rest);
+        {error, Reason} ->
+            {error, {attribute_constraint_violation, ConstraintName, AttrName, Reason}}
+    end.
 
 -spec validate_attribute_constraint(#database_state{}, atom(), term(), atom(), [relational_constraint()]) -> ok | {error, term()}.
 validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints) ->
@@ -1055,36 +1073,144 @@ empty_constraints() ->
 %% @param AttrName The attribute name
 %% @param AttrConstraint The #attribute_constraint{} to add
 %% @returns Updated #relation_constraints{}
--spec add_attribute_constraint(#relation_constraints{} | undefined, atom(), #attribute_constraint{}) -> #relation_constraints{}.
+-spec add_attribute_constraint(#relation_constraints{} | undefined, atom(), #attribute_constraint{}) ->
+    {ok, #relation_constraints{}} | {error, term()}.
 add_attribute_constraint(undefined, AttrName, #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
-    #relation_constraints{
-        attribute_constraints = #{AttrName => AttrConstraint},
-        tuple_constraints = [],
-        multi_tuple_constraints = []
-    };
+    add_attribute_constraint(empty_constraints(), AttrName, AttrConstraint);
 add_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
                          AttrName,
                          #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
-    Constraints#relation_constraints{
-        attribute_constraints = AttrConstraints#{AttrName => AttrConstraint}
-    }.
+    case AttrConstraint#attribute_constraint.attribute =:= AttrName of
+        false ->
+            {error, {attribute_constraint_key_mismatch,
+                     AttrName,
+                     AttrConstraint#attribute_constraint.attribute}};
+        true ->
+            ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
+            case has_attribute_constraint_name(ExistingForAttr, Name) orelse has_attribute_constraint_name_globally(AttrConstraints, Name) of
+                true ->
+                    {error, {duplicate_constraint_name, Name}};
+                false ->
+                    UpdatedForAttr = [AttrConstraint | ExistingForAttr],
+                    {ok, Constraints#relation_constraints{
+                        attribute_constraints = AttrConstraints#{AttrName => UpdatedForAttr}
+                    }}
+            end
+    end.
+
+-spec remove_attribute_constraint(#relation_constraints{} | undefined, atom(), atom()) ->
+    {ok, #relation_constraints{}} | {error, term()}.
+remove_attribute_constraint(undefined, _AttrName, _ConstraintName) ->
+    {error, constraints_not_defined};
+remove_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
+                            AttrName,
+                            ConstraintName) ->
+    ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
+    case ExistingForAttr of
+        [] ->
+            {error, {attribute_constraint_not_found, AttrName, ConstraintName}};
+        _ ->
+            Remaining = [C || C <- ExistingForAttr,
+                              C#attribute_constraint.name =/= ConstraintName],
+            case length(Remaining) =:= length(ExistingForAttr) of
+                true ->
+                    {error, {attribute_constraint_not_found, AttrName, ConstraintName}};
+                false ->
+                    UpdatedAttrConstraints = case Remaining of
+                        [] -> maps:remove(AttrName, AttrConstraints);
+                        _ -> AttrConstraints#{AttrName => Remaining}
+                    end,
+                    {ok, Constraints#relation_constraints{attribute_constraints = UpdatedAttrConstraints}}
+            end
+    end.
+
+-spec rename_attribute_constraint(#relation_constraints{} | undefined, atom(), atom(), atom()) ->
+    {ok, #relation_constraints{}} | {error, term()}.
+rename_attribute_constraint(undefined, _AttrName, _OldName, _NewName) ->
+    {error, constraints_not_defined};
+rename_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
+                            AttrName,
+                            OldName,
+                            NewName) when is_atom(NewName) ->
+    ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
+    case has_attribute_constraint_name_globally(AttrConstraints, NewName) of
+        true when NewName =/= OldName ->
+            {error, {duplicate_constraint_name, NewName}};
+        _ ->
+            {Found, Renamed} = rename_attribute_constraint_in_list(ExistingForAttr, OldName, NewName, false, []),
+            case Found of
+                false ->
+                    {error, {attribute_constraint_not_found, AttrName, OldName}};
+                true ->
+                    {ok, Constraints#relation_constraints{
+                        attribute_constraints = AttrConstraints#{AttrName => Renamed}
+                    }}
+            end
+    end.
+
+-spec list_attribute_constraints(#relation_constraints{} | undefined, atom()) -> [#attribute_constraint{}].
+list_attribute_constraints(undefined, _AttrName) ->
+    [];
+list_attribute_constraints(#relation_constraints{attribute_constraints = AttrConstraints}, AttrName) ->
+    lists:reverse(maps:get(AttrName, AttrConstraints, [])).
 
 %% @doc Add a tuple constraint to a constraints record.
 %%
 %% Tuple constraints are kept separate for lifecycle management and are
 %% evaluated as an implicit conjunction over the whole list.
--spec add_tuple_constraint(#relation_constraints{} | undefined, #tuple_constraint{}) -> #relation_constraints{}.
+-spec add_tuple_constraint(#relation_constraints{} | undefined, #tuple_constraint{}) ->
+    {ok, #relation_constraints{}} | {error, term()}.
 add_tuple_constraint(undefined, #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
-    #relation_constraints{
-        attribute_constraints = #{},
-        tuple_constraints = [TupleConstraint],
-        multi_tuple_constraints = []
-    };
+    add_tuple_constraint(empty_constraints(), TupleConstraint);
 add_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints,
                      #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
-    Constraints#relation_constraints{
-        tuple_constraints = [TupleConstraint | TupleConstraints]
-    }.
+    case has_tuple_constraint_name(TupleConstraints, Name) of
+        true ->
+            {error, {duplicate_constraint_name, Name}};
+        false ->
+            {ok, Constraints#relation_constraints{
+                tuple_constraints = [TupleConstraint | TupleConstraints]
+            }}
+    end.
+
+-spec remove_tuple_constraint(#relation_constraints{} | undefined, atom()) ->
+    {ok, #relation_constraints{}} | {error, term()}.
+remove_tuple_constraint(undefined, _ConstraintName) ->
+    {error, constraints_not_defined};
+remove_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints, ConstraintName) ->
+    Remaining = [C || C <- TupleConstraints, C#tuple_constraint.name =/= ConstraintName],
+    case length(Remaining) =:= length(TupleConstraints) of
+        true ->
+            {error, {tuple_constraint_not_found, ConstraintName}};
+        false ->
+            {ok, Constraints#relation_constraints{tuple_constraints = Remaining}}
+    end.
+
+-spec rename_tuple_constraint(#relation_constraints{} | undefined, atom(), atom()) ->
+    {ok, #relation_constraints{}} | {error, term()}.
+rename_tuple_constraint(undefined, _OldName, _NewName) ->
+    {error, constraints_not_defined};
+rename_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints,
+                        OldName,
+                        NewName) when is_atom(NewName) ->
+    case has_tuple_constraint_name(TupleConstraints, NewName) andalso NewName =/= OldName of
+        true ->
+            {error, {duplicate_constraint_name, NewName}};
+        false ->
+            {Found, Renamed} = rename_tuple_constraint_in_list(TupleConstraints, OldName, NewName, false, []),
+            case Found of
+                false ->
+                    {error, {tuple_constraint_not_found, OldName}};
+                true ->
+                    {ok, Constraints#relation_constraints{tuple_constraints = Renamed}}
+            end
+    end.
+
+-spec list_tuple_constraints(#relation_constraints{} | undefined) -> [#tuple_constraint{}].
+list_tuple_constraints(undefined) ->
+    [];
+list_tuple_constraints(#relation_constraints{tuple_constraints = TupleConstraints}) ->
+    lists:reverse(TupleConstraints).
 
 %% @doc Merge two constraint records with AND semantics.
 %%
@@ -1107,22 +1233,9 @@ merge_constraints(#relation_constraints{attribute_constraints = AttrConstraints1
                   #relation_constraints{attribute_constraints = AttrConstraints2,
                                         tuple_constraints = TupleConstraints2,
                                         multi_tuple_constraints = MultiTupleConstraints2}) ->
-    %% Merge attribute constraints
-    MergedAttrConstraints = maps:fold(
-        fun(Attr, Constraint2, Acc) ->
-            case maps:get(Attr, Acc, undefined) of
-                undefined ->
-                    %% Attribute only in C2
-                    Acc#{Attr => Constraint2};
-                Constraint1 ->
-                    %% Attribute in both - merge constraints
-                    MergedConstraint = derive_1op(Constraint1, Constraint2#attribute_constraint.constraints),
-                    Acc#{Attr => MergedConstraint}
-            end
-        end,
-        AttrConstraints1,
-        AttrConstraints2
-    ),
+    %% Merge attribute constraints preserving all named constraints and
+    %% rejecting duplicates by name.
+    MergedAttrConstraints = merge_attribute_constraints_map(AttrConstraints1, AttrConstraints2),
     #relation_constraints{
         attribute_constraints = MergedAttrConstraints,
         tuple_constraints = TupleConstraints1 ++ TupleConstraints2,
@@ -1158,15 +1271,18 @@ rename_constraint_attrs(undefined, _RenameMappings) ->
     empty_constraints();
 rename_constraint_attrs(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints, RenameMappings) ->
     RenamedAttrConstraints = maps:fold(
-        fun(OldAttr, #attribute_constraint{constraints = Cs} = AttrConstraint, Acc) ->
+        fun(OldAttr, ConstraintList, Acc) ->
             NewAttr = maps:get(OldAttr, RenameMappings, OldAttr),
-            %% Also rename variable references inside constraint terms
-            RenamedConstraints = [rename_vars_in_constraint(C, RenameMappings) || C <- Cs],
-            RenamedConstraint = AttrConstraint#attribute_constraint{
-                attribute = NewAttr,
-                constraints = RenamedConstraints
-            },
-            Acc#{NewAttr => RenamedConstraint}
+            RenamedList = [begin
+                               Cs = AttrConstraint#attribute_constraint.constraints,
+                               RenamedConstraints = [rename_vars_in_constraint(C, RenameMappings) || C <- Cs],
+                               AttrConstraint#attribute_constraint{
+                                   attribute = NewAttr,
+                                   constraints = RenamedConstraints
+                               }
+                           end || AttrConstraint <- ConstraintList],
+            Existing = maps:get(NewAttr, Acc, []),
+            Acc#{NewAttr => RenamedList ++ Existing}
         end,
         #{},
         AttrConstraints
@@ -1201,14 +1317,15 @@ infer_constraints_from_pred({attr, AttrName, Op, Value}, Schema) ->
             %% Attribute not in schema - cannot create constraint
             empty_constraints();
         _ ->
+            ConstraintName = list_to_atom(atom_to_list(AttrName) ++ "_" ++ atom_to_list(Op)),
             AttrConstraint = #attribute_constraint{
-                name = AttrName,
+                name = ConstraintName,
                 attribute = AttrName,
                 domain = Domain,
                 constraints = [Constraint]
             },
             #relation_constraints{
-                attribute_constraints = #{AttrName => AttrConstraint},
+                attribute_constraints = #{AttrName => [AttrConstraint]},
                 tuple_constraints = [],
                 multi_tuple_constraints = []
             }
@@ -1230,6 +1347,58 @@ infer_constraints_from_pred({'or', _Predicates}, _Schema) ->
 infer_constraints_from_pred(_, _Schema) ->
     %% Unknown format
     empty_constraints().
+
+has_attribute_constraint_name(ConstraintList, Name) ->
+    lists:any(fun(#attribute_constraint{name = N}) -> N =:= Name end, ConstraintList).
+
+has_attribute_constraint_name_globally(AttrConstraints, Name) ->
+    maps:fold(
+      fun(_Attr, ConstraintList, Acc) ->
+          Acc orelse has_attribute_constraint_name(ConstraintList, Name)
+      end,
+      false,
+      AttrConstraints).
+
+has_tuple_constraint_name(TupleConstraints, Name) ->
+    lists:any(fun(#tuple_constraint{name = N}) -> N =:= Name end, TupleConstraints).
+
+rename_attribute_constraint_in_list([], _OldName, _NewName, Found, Acc) ->
+    {Found, lists:reverse(Acc)};
+rename_attribute_constraint_in_list([#attribute_constraint{name = OldName} = C | Rest],
+                                    OldName,
+                                    NewName,
+                                    _Found,
+                                    Acc) ->
+    rename_attribute_constraint_in_list(Rest,
+                                        OldName,
+                                        NewName,
+                                        true,
+                                        [C#attribute_constraint{name = NewName} | Acc]);
+rename_attribute_constraint_in_list([C | Rest], OldName, NewName, Found, Acc) ->
+    rename_attribute_constraint_in_list(Rest, OldName, NewName, Found, [C | Acc]).
+
+rename_tuple_constraint_in_list([], _OldName, _NewName, Found, Acc) ->
+    {Found, lists:reverse(Acc)};
+rename_tuple_constraint_in_list([#tuple_constraint{name = OldName} = C | Rest], OldName, NewName, _Found, Acc) ->
+    rename_tuple_constraint_in_list(Rest, OldName, NewName, true, [C#tuple_constraint{name = NewName} | Acc]);
+rename_tuple_constraint_in_list([C | Rest], OldName, NewName, Found, Acc) ->
+    rename_tuple_constraint_in_list(Rest, OldName, NewName, Found, [C | Acc]).
+
+merge_attribute_constraints_map(AttrConstraints1, AttrConstraints2) ->
+    maps:fold(
+      fun(Attr, ConstraintList2, Acc) ->
+          Existing = maps:get(Attr, Acc, []),
+          ExistingNames = [N || #attribute_constraint{name = N} <- Existing],
+          NewNames = [N || #attribute_constraint{name = N} <- ConstraintList2],
+          case lists:any(fun(Name) -> lists:member(Name, ExistingNames) end, NewNames) of
+              true ->
+                  error({duplicate_constraint_name, Attr, ExistingNames, NewNames});
+              false ->
+                  Acc#{Attr => Existing ++ ConstraintList2}
+          end
+      end,
+      AttrConstraints1,
+      AttrConstraints2).
 
 %% Helper: rename variable references inside a constraint term
 rename_vars_in_constraint({member_of, RelName, Binding}, Mappings) ->
@@ -1460,9 +1629,9 @@ example_1op() ->
     IdConstraint = constraint:create_1op(id_positive, id, integer, [constraint:gt({var, value}, 0)]),
     AgeConstraint = constraint:create_1op(age_range, age, integer, [constraint:gte({var, value}, 18), constraint:lt({var,value}, 70)]),
     SalaryConstraint = constraint:create_1op(salary_range, salary, integer, [constraint:between(30000, 200000)]),
-    C1 = constraint:add_attribute_constraint(undefined, id, IdConstraint),
-    C2 = constraint:add_attribute_constraint(C1, age, AgeConstraint),
-    C3 = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
+    {ok, C1} = constraint:add_attribute_constraint(undefined, id, IdConstraint),
+    {ok, C2} = constraint:add_attribute_constraint(C1, age, AgeConstraint),
+    {ok, C3} = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
     {DB2, _UpdatedRel} = operations:update_relation_constraints(DB1, employees, C3),
     {DB3, _} = operations:create_tuple(DB2, employees, #{id => 1, name => "Alice", age => 30, salary => 75000}),
     {DB4, _} = operations:create_tuple(DB3, employees, #{id => -1, name => "Alice", age => 30, salary => 75000}),
@@ -1482,7 +1651,7 @@ example_2op() ->
          ]}}
     ]),
 
-    Constraints = add_tuple_constraint(undefined, TupleConstraint),
+    {ok, Constraints} = add_tuple_constraint(undefined, TupleConstraint),
     {DB2, _} = operations:update_relation_constraints(DB1, employees, Constraints),
 
     %% a=10, b=3, c=4 -> exists s=7, so 10 > 7 is true

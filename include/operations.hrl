@@ -43,7 +43,7 @@
 
 %% Relation constraints - holds all types of constraints for a relation
 -record(relation_constraints, {
-    attribute_constraints :: #{atom() => #attribute_constraint{}},  % 1OPs - attribute constraints
+    attribute_constraints :: #{atom() => [#attribute_constraint{}]}, % 1OPs - per-attribute named constraints
     tuple_constraints :: [#tuple_constraint{}],                     % 2OPs - inter-attribute constraints
     multi_tuple_constraints :: [term()]                             % 3OPs - multi-tuple constraints (future)
 }).
