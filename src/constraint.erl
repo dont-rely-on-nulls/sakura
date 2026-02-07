@@ -48,8 +48,8 @@
   | {'not', relational_constraint(), domain()}  % NOT P within universe D
   | {'and', [relational_constraint()]}          % P1 AND P2 AND ...
   | {'or', [relational_constraint()]}           % P1 OR P2 OR ...
-  | {exists, atom(), relational_constraint()}   % EXISTS x: P(x)
-  | {forall, atom(), domain(), relational_constraint()}. % FORALL x in D: P(x)
+  | {exists, atom(), relation_name(), relational_constraint()}   % EXISTS x in R: P(x)
+  | {forall, atom(), relation_name(), relational_constraint()}.  % FORALL x in R: P(x)
 
 -type relation_name() :: atom().
 -type domain() :: atom() | #domain{}.
@@ -478,9 +478,191 @@ validate_all_attributes(Database, Tuple, Schema) ->
 validate_tuple_against_constraints(_Database, _Tuple, undefined) ->
     %% No constraints defined
     ok;
-validate_tuple_against_constraints(Database, Tuple, #relation_constraints{attribute_constraints = AttrConstraints}) ->
+validate_tuple_against_constraints(Database, Tuple,
+                                   #relation_constraints{attribute_constraints = AttrConstraints,
+                                                         tuple_constraints = TupleConstraints}) ->
     %% Validate each attribute against its constraint
-    validate_attribute_constraints(Database, Tuple, AttrConstraints).
+    case validate_attribute_constraints(Database, Tuple, AttrConstraints) of
+        ok ->
+            validate_tuple_constraints(Database, Tuple, lists:reverse(TupleConstraints));
+        {error, _} = AttrError ->
+            AttrError
+    end.
+
+-spec validate_tuple_constraints(#database_state{}, map(), [#tuple_constraint{}]) -> ok | {error, term()}.
+validate_tuple_constraints(_Database, _Tuple, []) ->
+    ok;
+validate_tuple_constraints(Database, Tuple, TupleConstraints) ->
+    Violations = lists:foldl(
+        fun(#tuple_constraint{name = Name, constraints = Constraints}, Acc) ->
+            {Satisfied, Diagnostics} = evaluate_constraint_list(Database, Constraints, Tuple),
+            case Satisfied of
+                true -> Acc;
+                false ->
+                    [#{
+                        constraint_name => Name,
+                        formulas => Constraints,
+                        diagnostics => Diagnostics
+                    } | Acc]
+            end
+        end,
+        [],
+        TupleConstraints
+    ),
+    case Violations of
+        [] -> ok;
+        _ -> {error, {tuple_constraint_violations, lists:reverse(Violations)}}
+    end.
+
+-spec evaluate_constraint_list(#database_state{}, [term()], map()) -> {boolean(), [map()]}. 
+evaluate_constraint_list(_Database, [], _Context) ->
+    {true, []};
+evaluate_constraint_list(Database, Constraints, Context) ->
+    {AllTrue, DiagnosticsRev} = lists:foldl(
+        fun(ConstraintTerm, {AccTrue, AccDiags}) ->
+            {Result, Diags} = evaluate_constraint_with_diagnostics(Database, ConstraintTerm, Context),
+            {AccTrue andalso Result, lists:reverse(Diags) ++ AccDiags}
+        end,
+        {true, []},
+        Constraints
+    ),
+    {AllTrue, lists:reverse(DiagnosticsRev)}.
+
+-spec evaluate_constraint_with_diagnostics(#database_state{}, term(), map()) -> {boolean(), [map()]}. 
+evaluate_constraint_with_diagnostics(Database, {member_of, RelName, Binding}, Context) when is_atom(RelName) ->
+    BoundBinding = bind_variables(Binding, Context),
+    case get_domain_from_db(Database, RelName) of
+        {ok, Relation} ->
+            case member(BoundBinding, Relation) of
+                true -> {true, []};
+                false ->
+                    {false, [#{kind => member_of_false,
+                               relation => RelName,
+                               binding => BoundBinding}]};
+                {error, Reason} ->
+                    {false, [#{kind => member_of_error,
+                               relation => RelName,
+                               binding => BoundBinding,
+                               reason => Reason}]}
+            end;
+        {error, not_found} ->
+            {false, [#{kind => relation_not_found,
+                       relation => RelName,
+                       binding => BoundBinding}]}
+    end;
+evaluate_constraint_with_diagnostics(_Database, {member_of, #domain{} = Rel, Binding}, Context) ->
+    BoundBinding = bind_variables(Binding, Context),
+    case member(BoundBinding, Rel) of
+        true -> {true, []};
+        false -> {false, [#{kind => member_of_false, relation => get_name(Rel), binding => BoundBinding}]};
+        {error, Reason} ->
+            {false, [#{kind => member_of_error,
+                       relation => get_name(Rel),
+                       binding => BoundBinding,
+                       reason => Reason}]}
+    end;
+evaluate_constraint_with_diagnostics(Database, {'and', Constraints}, Context) ->
+    evaluate_constraint_list(Database, Constraints, Context);
+evaluate_constraint_with_diagnostics(Database, {'or', Constraints}, Context) ->
+    {AnyTrue, DiagnosticsRev} = lists:foldl(
+        fun(ConstraintTerm, {AccTrue, AccDiags}) ->
+            {Result, Diags} = evaluate_constraint_with_diagnostics(Database, ConstraintTerm, Context),
+            {AccTrue orelse Result, lists:reverse(Diags) ++ AccDiags}
+        end,
+        {false, []},
+        Constraints
+    ),
+    {AnyTrue, lists:reverse(DiagnosticsRev)};
+evaluate_constraint_with_diagnostics(Database, {'not', Constraint}, Context) ->
+    {Result, Diagnostics} = evaluate_constraint_with_diagnostics(Database, Constraint, Context),
+    {not Result, Diagnostics};
+evaluate_constraint_with_diagnostics(Database, {'not', Constraint, _Universe}, Context) ->
+    {Result, Diagnostics} = evaluate_constraint_with_diagnostics(Database, Constraint, Context),
+    {not Result, Diagnostics};
+evaluate_constraint_with_diagnostics(Database, {exists, VarName, QuantifierRel, Constraint}, Context)
+  when is_atom(VarName), is_atom(QuantifierRel) ->
+    evaluate_quantifier_with_diagnostics(Database, exists, VarName, QuantifierRel, Constraint, Context);
+evaluate_constraint_with_diagnostics(Database, {forall, VarName, QuantifierRel, Constraint}, Context)
+  when is_atom(VarName), is_atom(QuantifierRel) ->
+    evaluate_quantifier_with_diagnostics(Database, forall, VarName, QuantifierRel, Constraint, Context);
+evaluate_constraint_with_diagnostics(_Database, Constraint, _Context) ->
+    {false, [#{kind => unsupported_constraint, constraint => Constraint}]}.
+
+-spec evaluate_quantifier_with_diagnostics(#database_state{}, exists | forall, atom(), atom(), term(), map()) -> {boolean(), [map()]}. 
+evaluate_quantifier_with_diagnostics(Database, Quantifier, VarName, QuantifierRel, Constraint, Context) ->
+    case get_domain_from_db(Database, QuantifierRel) of
+        {error, not_found} ->
+            {false, [#{kind => quantifier_relation_not_found,
+                       quantifier => Quantifier,
+                       variable => VarName,
+                       relation => QuantifierRel}]};
+        {ok, Relation} ->
+            case Relation#relation.cardinality of
+                {finite, _} ->
+                    evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context);
+                Infinity ->
+                    {false, [#{kind => unbounded_quantifier,
+                               quantifier => Quantifier,
+                               variable => VarName,
+                               relation => QuantifierRel,
+                               cardinality => Infinity}]}
+            end
+    end.
+
+-spec evaluate_finite_quantifier(#database_state{}, exists | forall, atom(), atom(), term(), map()) -> {boolean(), [map()]}. 
+evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context) ->
+    Iterator = operations:get_tuples_iterator(Database, QuantifierRel),
+    case operations:collect_all(Iterator) of
+        {error, Reason, _Partial} ->
+            {false, [#{kind => quantifier_iteration_error,
+                       quantifier => Quantifier,
+                       variable => VarName,
+                       relation => QuantifierRel,
+                       reason => Reason}]};
+        Tuples when is_list(Tuples) ->
+            evaluate_quantifier_tuples(Database, Quantifier, VarName, Constraint, Context, Tuples)
+    end.
+
+-spec evaluate_quantifier_tuples(#database_state{}, exists | forall, atom(), term(), map(), [map()]) -> {boolean(), [map()]}. 
+evaluate_quantifier_tuples(_Database, exists, _VarName, _Constraint, _Context, []) ->
+    {false, []};
+evaluate_quantifier_tuples(_Database, forall, _VarName, _Constraint, _Context, []) ->
+    {true, []};
+evaluate_quantifier_tuples(Database, Quantifier, VarName, Constraint, Context, Tuples) ->
+    {ResultsRev, DiagnosticsRev} = lists:foldl(
+        fun(TupleValueMap, {AccResults, AccDiags}) ->
+            case extract_quantifier_value(TupleValueMap) of
+                {ok, QuantifiedValue} ->
+                    ScopedContext = Context#{VarName => QuantifiedValue},
+                    {Result, Diags} = evaluate_constraint_with_diagnostics(Database, Constraint, ScopedContext),
+                    {[Result | AccResults], lists:reverse(Diags) ++ AccDiags};
+                {error, Reason} ->
+                    {[false | AccResults], [#{kind => invalid_quantifier_tuple,
+                                              variable => VarName,
+                                              tuple => TupleValueMap,
+                                              reason => Reason} | AccDiags]}
+            end
+        end,
+        {[], []},
+        Tuples
+    ),
+    Results = lists:reverse(ResultsRev),
+    Diagnostics = lists:reverse(DiagnosticsRev),
+    case Quantifier of
+        exists -> {lists:any(fun(X) -> X end, Results), Diagnostics};
+        forall -> {lists:all(fun(X) -> X end, Results), Diagnostics}
+    end.
+
+-spec extract_quantifier_value(map()) -> {ok, term()} | {error, term()}.
+extract_quantifier_value(TupleValueMap) when is_map(TupleValueMap) ->
+    case maps:to_list(TupleValueMap) of
+        [{_Attr, Value}] ->
+            {ok, Value};
+        [] ->
+            {error, empty_tuple};
+        _ ->
+            {error, non_unary_quantifier_relation}
+    end.
 
 -spec validate_attribute_constraints(#database_state{}, map(), #{atom() => #attribute_constraint{}}) -> ok | {error, term()}.
 validate_attribute_constraints(Database, Tuple, AttrConstraints) when is_map(AttrConstraints) ->
@@ -559,7 +741,7 @@ build_membership_criteria(Database, Schema) ->
 %%% Constraint Builders
 %%%
 %%% Convenience functions for building relational constraints.
-%%% These create constraints in the form expected by create_1op/3.
+%%% These create constraints in the form expected by create_1op/4.
 
 %% @doc Create a "less than" constraint: value &lt; X
 %%
@@ -987,6 +1169,15 @@ evaluate_constraint(Database, {'or', Constraints}, Context) ->
         true -> {ok, true};
         false -> {ok, false}
     end;
+evaluate_constraint(Database, {'not', Constraint}, Context) ->
+    {Result, _Diagnostics} = evaluate_constraint_with_diagnostics(Database, {'not', Constraint}, Context),
+    {ok, Result};
+evaluate_constraint(Database, {exists, VarName, QuantifierRel, Constraint}, Context) ->
+    {Result, _Diagnostics} = evaluate_constraint_with_diagnostics(Database, {exists, VarName, QuantifierRel, Constraint}, Context),
+    {ok, Result};
+evaluate_constraint(Database, {forall, VarName, QuantifierRel, Constraint}, Context) ->
+    {Result, _Diagnostics} = evaluate_constraint_with_diagnostics(Database, {forall, VarName, QuantifierRel, Constraint}, Context),
+    {ok, Result};
 evaluate_constraint(_Database, _, _) ->
     {error, unsupported_constraint}.
 
@@ -1033,7 +1224,7 @@ example_1op() ->
 example_2op() ->
     create_2op(tuple_gt_sum,
     [
-        {exists, s,
+        {exists, s, integer,
          {'and', [
              {member_of, plus, #{a => {var, b}, b => {var, c}, sum => {var, s}}},
              {member_of, greater_than, #{left => {var, a}, right => {var, s}}}
