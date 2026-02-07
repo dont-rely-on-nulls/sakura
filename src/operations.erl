@@ -601,7 +601,11 @@ create_database(Name) ->
       constraint:greater_than(term, aleph_zero),
       constraint:greater_than_or_equal(term, aleph_zero),
       constraint:equal(term, aleph_zero),
-      constraint:not_equal(term, aleph_zero)
+      constraint:not_equal(term, aleph_zero),
+      constraint:plus(integer, aleph_zero),
+      constraint:times(integer, aleph_zero),
+      constraint:minus(integer, aleph_zero),
+      constraint:divide(integer, aleph_zero)
     ],
     Folder = fun (Elem, AccDB) ->
 		     {NextDB, _} = operations:create_immutable_relation(AccDB, Elem),
