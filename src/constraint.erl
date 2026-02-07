@@ -627,12 +627,7 @@ evaluate_constraint_with_diagnostics(Database, {member_of, RelName, Binding}, Co
                 false ->
                     {false, [#{kind => member_of_false,
                                relation => RelName,
-                               binding => BoundBinding}]};
-                {error, Reason} ->
-                    {false, [#{kind => member_of_error,
-                               relation => RelName,
-                               binding => BoundBinding,
-                               reason => Reason}]}
+                               binding => BoundBinding}]}
             end;
         {error, not_found} ->
             {false, [#{kind => relation_not_found,
@@ -643,12 +638,7 @@ evaluate_constraint_with_diagnostics(_Database, {member_of, #domain{} = Rel, Bin
     BoundBinding = bind_variables(Binding, Context),
     case member(BoundBinding, Rel) of
         true -> {true, []};
-        false -> {false, [#{kind => member_of_false, relation => get_name(Rel), binding => BoundBinding}]};
-        {error, Reason} ->
-            {false, [#{kind => member_of_error,
-                       relation => get_name(Rel),
-                       binding => BoundBinding,
-                       reason => Reason}]}
+        false -> {false, [#{kind => member_of_false, relation => get_name(Rel), binding => BoundBinding}]}
     end;
 evaluate_constraint_with_diagnostics(Database, {'and', Constraints}, Context) ->
     evaluate_constraint_list(Database, Constraints, Context);
