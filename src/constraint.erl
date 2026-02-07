@@ -3,7 +3,8 @@
 -include("../include/operations.hrl").
 
 -export([
-    example/0,
+    example_1op/0,
+    example_2op/0,
     less_than/2,
     less_than_or_equal/2,
     greater_than/2,
@@ -15,7 +16,7 @@
     'not'/2,
     'and'/2,
     'or'/2,
-    create_1op/3,
+    create_1op/4,
     derive_1op/2,
     declare_1opic/3,
     validate_1opic/4,
@@ -30,6 +31,8 @@
     eq/2,       % value = X
     neq/2,      % value != X
     between/2,  % Min <= value < Max
+    create_2op/2,
+    add_tuple_constraint/2,
     %% Constraint Propagation
     empty_constraints/0,           % Create empty #relation_constraints{}
     merge_constraints/2,           % Merge two constraint records (AND semantics)
@@ -300,13 +303,22 @@ member(Binding, Relation, Substitution) ->
 %% 1. Get the attribute value from a tuple
 %% 2. Check if value ∈ domain (using domain's membership criteria)
 %% 3. Apply additional constraints specified here
--spec create_1op(atom(), atom(), [relational_constraint()]) -> #attribute_constraint{}.
-create_1op(AttributeName, Domain, Constraints) ->
+-spec create_1op(atom(), atom(), atom(), [relational_constraint()]) -> #attribute_constraint{}.
+create_1op(Name, AttributeName, Domain, Constraints) ->
     #attribute_constraint{
+        name = Name,
         attribute = AttributeName,
         domain = Domain,
         constraints = Constraints
     }.
+
+%% @doc Create a tuple-level constraint (2OP) as a conjunction list.
+%%
+%% Tuple constraints are evaluated in addition to all attribute constraints.
+%% Each entry in this list is a formula term that must hold for the tuple.
+-spec create_2op(atom(), [term()]) -> #tuple_constraint{}.
+create_2op(Name, Constraints) when is_list(Constraints) ->
+    #tuple_constraint{name = Name, constraints = Constraints}.
 
 %% @doc Derive a 1OP constraint from another 1OP constraint by adding constraints.
 %%
@@ -317,6 +329,7 @@ create_1op(AttributeName, Domain, Constraints) ->
 derive_1op(#attribute_constraint{} = Parent1OPConstraint, AdditionalConstraints) ->
     AllConstraints = Parent1OPConstraint#attribute_constraint.constraints ++ AdditionalConstraints,
     #attribute_constraint{
+        name = Parent1OPConstraint#attribute_constraint.name,
         attribute = Parent1OPConstraint#attribute_constraint.attribute,
         domain = Parent1OPConstraint#attribute_constraint.domain,
         constraints = AllConstraints
@@ -613,15 +626,34 @@ empty_constraints() ->
 %% @param AttrConstraint The #attribute_constraint{} to add
 %% @returns Updated #relation_constraints{}
 -spec add_attribute_constraint(#relation_constraints{} | undefined, atom(), #attribute_constraint{}) -> #relation_constraints{}.
-add_attribute_constraint(undefined, AttrName, AttrConstraint) ->
+add_attribute_constraint(undefined, AttrName, #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
     #relation_constraints{
         attribute_constraints = #{AttrName => AttrConstraint},
         tuple_constraints = [],
         multi_tuple_constraints = []
     };
-add_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints, AttrName, AttrConstraint) ->
+add_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
+                         AttrName,
+                         #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
     Constraints#relation_constraints{
         attribute_constraints = AttrConstraints#{AttrName => AttrConstraint}
+    }.
+
+%% @doc Add a tuple constraint to a constraints record.
+%%
+%% Tuple constraints are kept separate for lifecycle management and are
+%% evaluated as an implicit conjunction over the whole list.
+-spec add_tuple_constraint(#relation_constraints{} | undefined, #tuple_constraint{}) -> #relation_constraints{}.
+add_tuple_constraint(undefined, #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
+    #relation_constraints{
+        attribute_constraints = #{},
+        tuple_constraints = [TupleConstraint],
+        multi_tuple_constraints = []
+    };
+add_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints,
+                     #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
+    Constraints#relation_constraints{
+        tuple_constraints = [TupleConstraint | TupleConstraints]
     }.
 
 %% @doc Merge two constraint records with AND semantics.
@@ -740,6 +772,7 @@ infer_constraints_from_pred({attr, AttrName, Op, Value}, Schema) ->
             empty_constraints();
         _ ->
             AttrConstraint = #attribute_constraint{
+                name = AttrName,
                 attribute = AttrName,
                 domain = Domain,
                 constraints = [Constraint]
@@ -981,14 +1014,14 @@ get_domain_from_db(Database, DomainName) ->
             {error, not_found}
     end.
 
-example() ->
+example_1op() ->
     main:setup(),
     DB = operations:create_database(test_db),
     maps:keys(DB#database_state.relations),
     {DB1, _} = operations:create_relation(DB, employees, #{id => integer, name => string, age => integer, salary => integer}),
-    IdConstraint = constraint:create_1op(id, integer, [constraint:gt({var, value}, 0)]),
-    AgeConstraint = constraint:create_1op(age, integer, [constraint:gte({var, value}, 18), constraint:lt({var,value}, 70)]),
-    SalaryConstraint = constraint:create_1op(salary, integer, [constraint:between(30000, 200000)]),
+    IdConstraint = constraint:create_1op(id_positive, id, integer, [constraint:gt({var, value}, 0)]),
+    AgeConstraint = constraint:create_1op(age_range, age, integer, [constraint:gte({var, value}, 18), constraint:lt({var,value}, 70)]),
+    SalaryConstraint = constraint:create_1op(salary_range, salary, integer, [constraint:between(30000, 200000)]),
     C1 = constraint:add_attribute_constraint(undefined, id, IdConstraint),
     C2 = constraint:add_attribute_constraint(C1, age, AgeConstraint),
     C3 = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
@@ -996,3 +1029,13 @@ example() ->
     {DB3, _} = operations:create_tuple(DB2, employees, #{id => 1, name => "Alice", age => 30, salary => 75000}),
     {DB4, _} = operations:create_tuple(DB3, employees, #{id => -1, name => "Alice", age => 30, salary => 75000}),
     {_DB5, _} = operations:create_tuple(DB4, employees, #{id => 1, name => "Alice", age => 30, salary => 3005000}).
+
+example_2op() ->
+    create_2op(tuple_gt_sum,
+    [
+        {exists, s,
+         {'and', [
+             {member_of, plus, #{a => {var, b}, b => {var, c}, sum => {var, s}}},
+             {member_of, greater_than, #{left => {var, a}, right => {var, s}}}
+         ]}}
+    ]).

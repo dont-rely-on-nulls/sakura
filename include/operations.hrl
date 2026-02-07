@@ -30,15 +30,21 @@
 %% Attribute constraint (1OP - 1st Order Property)
 %% Constrains values of a specific attribute in a relation
 -record(attribute_constraint, {
+    name :: atom(),                % Stable identifier for lifecycle ops
     attribute :: atom(),              % Attribute name (e.g., salary)
     domain :: atom() | #relation{},   % Domain or relation this attribute draws from
     constraints :: [term()]           % Additional relational constraints beyond domain membership
 }).
 
+-record(tuple_constraint, {
+    name :: atom(),                % Stable identifier for lifecycle ops
+    constraints :: [term()]
+}).
+
 %% Relation constraints - holds all types of constraints for a relation
 -record(relation_constraints, {
     attribute_constraints :: #{atom() => #attribute_constraint{}},  % 1OPs - attribute constraints
-    tuple_constraints :: [term()],                                   % 2OPs - inter-attribute constraints (future)
+    tuple_constraints :: [#tuple_constraint{}],                     % 2OPs - inter-attribute constraints
     multi_tuple_constraints :: [term()]                             % 3OPs - multi-tuple constraints (future)
 }).
 
@@ -101,4 +107,3 @@
   | {sort, fun(), lineage_op()}                         % Sort operation
   | {take, pos_integer(), lineage_op()}                 % Limit operation
   | {aggregate, atom(), atom(), lineage_op()}.          % Aggregation (future)
-
