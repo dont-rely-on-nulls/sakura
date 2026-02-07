@@ -11,6 +11,10 @@
     greater_than_or_equal/2,
     equal/2,
     not_equal/2,
+    plus/2,
+    times/2,
+    minus/2,
+    divide/2,
     member/2,
     member/3,
     'not'/2,
@@ -158,6 +162,85 @@ not_equal(DomainName, Cardinality) ->
         },
         provenance = undefined,
         lineage = {base, not_equal}
+    }.
+
+-spec plus(atom(), cardinality()) -> #relation{}.
+plus(DomainName, Cardinality) ->
+    #relation{
+        hash = undefined,
+        name = plus,
+        tree = undefined,
+        schema = #{a => DomainName, b => DomainName, sum => DomainName},
+        constraints = #{},
+        cardinality = Cardinality,
+        generator = {arithmetic, plus, DomainName},
+        membership_criteria = #{
+            intension => fun(#{a := A, b := B, sum := S}) ->
+                is_number(A) andalso is_number(B) andalso is_number(S) andalso (A + B =:= S)
+            end
+        },
+        provenance = undefined,
+        lineage = {base, plus}
+    }.
+
+-spec times(atom(), cardinality()) -> #relation{}.
+times(DomainName, Cardinality) ->
+    #relation{
+        hash = undefined,
+        name = times,
+        tree = undefined,
+        schema = #{a => DomainName, b => DomainName, product => DomainName},
+        constraints = #{},
+        cardinality = Cardinality,
+        generator = {arithmetic, times, DomainName},
+        membership_criteria = #{
+            intension => fun(#{a := A, b := B, product := P}) ->
+                is_number(A) andalso is_number(B) andalso is_number(P) andalso (A * B =:= P)
+            end
+        },
+        provenance = undefined,
+        lineage = {base, times}
+    }.
+
+-spec minus(atom(), cardinality()) -> #relation{}.
+minus(DomainName, Cardinality) ->
+    #relation{
+        hash = undefined,
+        name = minus,
+        tree = undefined,
+        schema = #{a => DomainName, b => DomainName, difference => DomainName},
+        constraints = #{},
+        cardinality = Cardinality,
+        generator = {arithmetic, minus, DomainName},
+        membership_criteria = #{
+            intension => fun(#{a := A, b := B, difference := D}) ->
+                is_number(A) andalso is_number(B) andalso is_number(D) andalso (A - B =:= D)
+            end
+        },
+        provenance = undefined,
+        lineage = {base, minus}
+    }.
+
+-spec divide(atom(), cardinality()) -> #relation{}.
+divide(DomainName, Cardinality) ->
+    #relation{
+        hash = undefined,
+        name = divide,
+        tree = undefined,
+        schema = #{a => DomainName, b => DomainName, quotient => DomainName, remainder => DomainName},
+        constraints = #{},
+        cardinality = Cardinality,
+        generator = {arithmetic, divide, DomainName},
+        membership_criteria = #{
+            intension => fun(#{a := A, b := B, quotient := Q, remainder := R}) ->
+                is_integer(A) andalso is_integer(B) andalso is_integer(Q) andalso is_integer(R)
+                andalso B =/= 0
+                andalso (A div B =:= Q)
+                andalso (A rem B =:= R)
+            end
+        },
+        provenance = undefined,
+        lineage = {base, divide}
     }.
 
 -spec member(map(), #domain{} | #relation{}) -> boolean().
@@ -596,18 +679,183 @@ evaluate_quantifier_with_diagnostics(Database, Quantifier, VarName, QuantifierRe
                        quantifier => Quantifier,
                        variable => VarName,
                        relation => QuantifierRel}]};
-        {ok, Relation} ->
+        {ok, Relation} = QuantifierRelationResult ->
             case Relation#relation.cardinality of
                 {finite, _} ->
                     evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context);
                 Infinity ->
-                    {false, [#{kind => unbounded_quantifier,
-                               quantifier => Quantifier,
-                               variable => VarName,
-                               relation => QuantifierRel,
-                               cardinality => Infinity}]}
+                    case try_unbounded_quantifier_by_inference(Database,
+                                                               Quantifier,
+                                                               VarName,
+                                                               Constraint,
+                                                               Context,
+                                                               QuantifierRelationResult) of
+                        {ok, Result, Diagnostics} ->
+                            {Result, Diagnostics};
+                        not_applicable ->
+                            {false, [#{kind => unbounded_quantifier,
+                                       quantifier => Quantifier,
+                                       variable => VarName,
+                                       relation => QuantifierRel,
+                                       cardinality => Infinity}]}
+                    end
             end
     end.
+
+-spec try_unbounded_quantifier_by_inference(#database_state{}, exists | forall, atom(), term(), map(), {ok, #relation{}}) ->
+    {ok, boolean(), [map()]} | not_applicable.
+try_unbounded_quantifier_by_inference(_Database, forall, _VarName, _Constraint, _Context, _QuantifierRelationResult) ->
+    not_applicable;
+try_unbounded_quantifier_by_inference(Database,
+                                      exists,
+                                      VarName,
+                                      Constraint,
+                                      Context,
+                                      {ok, QuantifierRelation}) ->
+    Candidates = infer_candidates_for_var(Constraint, VarName, Context),
+    case Candidates of
+        [] ->
+            not_applicable;
+        _ ->
+            ValidCandidates = [Candidate || Candidate <- lists:usort(Candidates),
+                                            quantified_value_member(Candidate, QuantifierRelation)],
+            case ValidCandidates of
+                [] ->
+                    {ok, false, [#{kind => inferred_candidates_outside_quantifier_domain,
+                                   variable => VarName,
+                                   candidates => Candidates,
+                                   relation => QuantifierRelation#relation.name}]};
+                _ ->
+                    evaluate_quantifier_candidates(Database, exists, VarName, Constraint, Context, ValidCandidates)
+            end
+    end.
+
+-spec evaluate_quantifier_candidates(#database_state{}, exists | forall, atom(), term(), map(), [term()]) ->
+    {ok, boolean(), [map()]}. 
+evaluate_quantifier_candidates(Database, Quantifier, VarName, Constraint, Context, Candidates) ->
+    {Result, Diagnostics} = evaluate_quantifier_tuples(Database,
+                                                       Quantifier,
+                                                       VarName,
+                                                       Constraint,
+                                                       Context,
+                                                       [#{value => Candidate} || Candidate <- Candidates]),
+    {ok, Result, [#{kind => quantified_by_inference, variable => VarName, candidates => Candidates} | Diagnostics]}.
+
+-spec quantified_value_member(term(), #relation{}) -> boolean().
+quantified_value_member(Value, #relation{schema = Schema} = Relation) ->
+    case maps:keys(Schema) of
+        [OnlyAttr] ->
+            case member(#{OnlyAttr => Value}, Relation) of
+                true -> true;
+                _ -> false
+            end;
+        _ ->
+            false
+    end.
+
+-spec infer_candidates_for_var(term(), atom(), map()) -> [term()].
+infer_candidates_for_var({'and', Constraints}, VarName, Context) ->
+    lists:flatmap(fun(C) -> infer_candidates_for_var(C, VarName, Context) end, Constraints);
+infer_candidates_for_var({'or', Constraints}, VarName, Context) ->
+    lists:flatmap(fun(C) -> infer_candidates_for_var(C, VarName, Context) end, Constraints);
+infer_candidates_for_var({'not', _Constraint}, _VarName, _Context) ->
+    [];
+infer_candidates_for_var({exists, _InnerVar, _QuantifierRel, _InnerConstraint}, _VarName, _Context) ->
+    [];
+infer_candidates_for_var({forall, _InnerVar, _QuantifierRel, _InnerConstraint}, _VarName, _Context) ->
+    [];
+infer_candidates_for_var({member_of, RelName, Binding}, VarName, Context) when is_atom(RelName), is_map(Binding) ->
+    infer_candidates_from_member(RelName, Binding, VarName, Context);
+infer_candidates_for_var(_, _VarName, _Context) ->
+    [].
+
+-spec infer_candidates_from_member(atom(), map(), atom(), map()) -> [term()].
+infer_candidates_from_member(plus, Binding, VarName, Context) ->
+    infer_arith_candidates(Binding, VarName, Context,
+                           [#{target => sum, left => a, right => b, op => plus},
+                            #{target => a, left => sum, right => b, op => minus},
+                            #{target => b, left => sum, right => a, op => minus}]);
+infer_candidates_from_member(minus, Binding, VarName, Context) ->
+    infer_arith_candidates(Binding, VarName, Context,
+                           [#{target => difference, left => a, right => b, op => minus},
+                            #{target => a, left => difference, right => b, op => plus},
+                            #{target => b, left => a, right => difference, op => minus}]);
+infer_candidates_from_member(times, Binding, VarName, Context) ->
+    infer_arith_candidates(Binding, VarName, Context,
+                           [#{target => product, left => a, right => b, op => times}]);
+infer_candidates_from_member(equal, Binding, VarName, Context) ->
+    infer_equality_candidates(Binding, VarName, Context);
+infer_candidates_from_member(_RelName, _Binding, _VarName, _Context) ->
+    [].
+
+-spec infer_equality_candidates(map(), atom(), map()) -> [term()].
+infer_equality_candidates(Binding, VarName, Context) ->
+    Left = maps:get(left, Binding, undefined),
+    Right = maps:get(right, Binding, undefined),
+    case {is_target_var(Left, VarName), is_target_var(Right, VarName)} of
+        {true, false} ->
+            case resolve_binding_value(Right, Context) of
+                {ok, Value} -> [Value];
+                error -> []
+            end;
+        {false, true} ->
+            case resolve_binding_value(Left, Context) of
+                {ok, Value} -> [Value];
+                error -> []
+            end;
+        _ ->
+            []
+    end.
+
+-spec infer_arith_candidates(map(), atom(), map(), [map()]) -> [term()].
+infer_arith_candidates(Binding, VarName, Context, Specs) ->
+    lists:flatmap(
+      fun(#{target := Target, left := LeftKey, right := RightKey, op := Op}) ->
+          TargetBinding = maps:get(Target, Binding, undefined),
+          case is_target_var(TargetBinding, VarName) of
+              false -> [];
+              true ->
+                  LeftBinding = maps:get(LeftKey, Binding, undefined),
+                  RightBinding = maps:get(RightKey, Binding, undefined),
+                  case {resolve_binding_value(LeftBinding, Context), resolve_binding_value(RightBinding, Context)} of
+                      {{ok, LeftValue}, {ok, RightValue}} ->
+                          case apply_binary_op(Op, LeftValue, RightValue) of
+                              {ok, Candidate} -> [Candidate];
+                              error -> []
+                          end;
+                      _ ->
+                          []
+                  end
+          end
+      end,
+      Specs).
+
+-spec is_target_var(term(), atom()) -> boolean().
+is_target_var({var, Name}, VarName) -> Name =:= VarName;
+is_target_var(_, _) -> false.
+
+-spec resolve_binding_value(term(), map()) -> {ok, term()} | error.
+resolve_binding_value({var, Name}, Context) ->
+    case maps:find(Name, Context) of
+        {ok, Value} when Value =/= undefined -> {ok, Value};
+        _ -> error
+    end;
+resolve_binding_value({const, Value}, _Context) ->
+    {ok, Value};
+resolve_binding_value(Value, _Context) when Value =:= undefined ->
+    error;
+resolve_binding_value(Value, _Context) ->
+    {ok, Value}.
+
+-spec apply_binary_op(atom(), term(), term()) -> {ok, term()} | error.
+apply_binary_op(plus, Left, Right) when is_number(Left), is_number(Right) ->
+    {ok, Left + Right};
+apply_binary_op(minus, Left, Right) when is_number(Left), is_number(Right) ->
+    {ok, Left - Right};
+apply_binary_op(times, Left, Right) when is_number(Left), is_number(Right) ->
+    {ok, Left * Right};
+apply_binary_op(_, _, _) ->
+    error.
 
 -spec evaluate_finite_quantifier(#database_state{}, exists | forall, atom(), atom(), term(), map()) -> {boolean(), [map()]}. 
 evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context) ->
@@ -1198,7 +1446,6 @@ bind_variables(Binding, Context) ->
 get_domain_from_db(Database, DomainName) ->
     case maps:find(DomainName, Database#database_state.relations) of
         {ok, DomainHash} ->
-	    io:format("~p~n", [DomainName]),
             [Domain] = mnesia:dirty_read(relation, DomainHash),
             {ok, Domain};
         error ->
@@ -1222,11 +1469,26 @@ example_1op() ->
     {_DB5, _} = operations:create_tuple(DB4, employees, #{id => 1, name => "Alice", age => 30, salary => 3005000}).
 
 example_2op() ->
-    create_2op(tuple_gt_sum,
+    main:setup(),
+    DB = operations:create_database(test_db),
+    {DB1, _} = operations:create_relation(DB, employees, #{a => integer, b => integer, c => integer}),
+
+    TupleConstraint = create_2op(a_gt_b_plus_c,
     [
         {exists, s, integer,
          {'and', [
              {member_of, plus, #{a => {var, b}, b => {var, c}, sum => {var, s}}},
              {member_of, greater_than, #{left => {var, a}, right => {var, s}}}
          ]}}
-    ]).
+    ]),
+
+    Constraints = add_tuple_constraint(undefined, TupleConstraint),
+    {DB2, _} = operations:update_relation_constraints(DB1, employees, Constraints),
+
+    %% a=10, b=3, c=4 -> exists s=7, so 10 > 7 is true
+    {DB3, _} = operations:create_tuple(DB2, employees, #{a => 10, b => 3, c => 4}),
+
+    %% a=6, b=3, c=4 -> s=7, so 6 > 7 is false
+    Rejected = operations:create_tuple(DB3, employees, #{a => 6, b => 3, c => 4}),
+
+    #{accepted => #{a => 10, b => 3, c => 4}, rejected => Rejected}.
