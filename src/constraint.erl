@@ -3,8 +3,6 @@
 -include("../include/operations.hrl").
 
 -export([
-    example_1op/0,
-    example_2op/0,
     less_than/2,
     less_than_or_equal/2,
     greater_than/2,
@@ -20,61 +18,62 @@
     'not'/2,
     'and'/2,
     'or'/2,
-    create_1op/4,
-    derive_1op/2,
-    declare_1opic/3,
-    validate_1opic/4,
     resolve/4,
     validate_tuple/3,
     validate_tuple_against_schema/3,
     build_membership_criteria/2,
-    lt/2,       % value < X
-    lte/2,      % value <= X
-    gt/2,       % value > X
-    gte/2,      % value >= X
-    eq/2,       % value = X
-    neq/2,      % value != X
-    between/2,  % Min <= value < Max
-    create_2op/2,
-    add_tuple_constraint/2,
-    remove_tuple_constraint/2,
-    rename_tuple_constraint/3,
-    list_tuple_constraints/1,
-    %% Constraint Propagation
-    empty_constraints/0,           % Create empty #relation_constraints{}
-    merge_constraints/2,           % Merge two constraint records (AND semantics)
-    filter_constraints/2,          % Keep only constraints for given attributes
-    rename_constraint_attrs/2,     % Update attribute names in constraints
-    infer_constraints_from_pred/2, % Extract constraints from predicate
-    add_attribute_constraint/3,    % Add an attribute constraint to constraints
-    remove_attribute_constraint/3,
-    rename_attribute_constraint/4,
-    list_attribute_constraints/2,
+    lt/2,
+    lte/2,
+    gt/2,
+    gte/2,
+    eq/2,
+    neq/2,
+    between/2,
+    example_supertype_exclusive_constraints/0,
+    example_order_item_references_constraints/0,
+    example_manager_constraints/0,
+    example_ticket_status_exclusive_constraints/0,
+    example_weak_entity_dependency_constraints/0,
+    example_department_has_employee_constraints/0,
+    example_symmetry_antisymmetry_constraints/0,
+    run_example_supertype_exclusive/0,
+    run_example_order_item_references/0,
+    run_example_manager_constraints/0,
+    run_example_ticket_status_exclusive/0,
+    run_example_weak_entity_dependency/0,
+    run_example_department_has_employee/0,
+    run_example_symmetry_antisymmetry/0,
+    run_all_examples/0,
+    empty_constraints/0,
+    merge_constraints/2,
+    filter_constraints/2,
+    rename_constraint_attrs/2,
+    infer_constraints_from_pred/2,
     get_domain_from_db/2
 ]).
 
 -type relational_constraint() ::
-    {member_of, relation_name(), binding()}     % (x, y, ...) in R
-  | {'not', relational_constraint(), domain()}  % NOT P within universe D
-  | {'and', [relational_constraint()]}          % P1 AND P2 AND ...
-  | {'or', [relational_constraint()]}           % P1 OR P2 OR ...
-  | {exists, atom(), relation_name(), relational_constraint()}   % EXISTS x in R: P(x)
-  | {forall, atom(), relation_name(), relational_constraint()}.  % FORALL x in R: P(x)
+    {member_of, relation_name() | #relation{} | #domain{}, binding()}
+  | {'not', relational_constraint()}
+  | {'not', relational_constraint(), relation_name()}
+  | {'and', [relational_constraint()]}
+  | {'or', [relational_constraint()]}
+  | {exists, atom(), relation_name(), relational_constraint()}
+  | {forall, atom(), relation_name(), relational_constraint()}.
 
 -type relation_name() :: atom().
--type domain() :: atom() | #domain{}.
--type binding() :: #{atom() => term() | {var, atom()}}.
+-type binding() :: #{atom() => term() | {var, atom()} | {const, term()}}.
 
 -export_type([relational_constraint/0, binding/0]).
 
 -spec less_than(atom(), cardinality()) -> #relation{}.
 less_than(DomainName, Cardinality) ->
     #relation{
-        hash = undefined,  % Computed lazily if needed
+        hash = undefined,
         name = less_than,
-        tree = undefined,  % Generator-based, not stored
+        tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '<', DomainName},
         membership_criteria = #{
@@ -91,7 +90,7 @@ less_than_or_equal(DomainName, Cardinality) ->
         name = less_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '=<', DomainName},
         membership_criteria = #{
@@ -108,7 +107,7 @@ greater_than(DomainName, Cardinality) ->
         name = greater_than,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '>', DomainName},
         membership_criteria = #{
@@ -125,7 +124,7 @@ greater_than_or_equal(DomainName, Cardinality) ->
         name = greater_than_or_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '>=', DomainName},
         membership_criteria = #{
@@ -142,8 +141,7 @@ equal(DomainName, Cardinality) ->
         name = equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
-        %% The diagonal has the same cardinality as the domain itself
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '=:=', DomainName},
         membership_criteria = #{
@@ -160,7 +158,7 @@ not_equal(DomainName, Cardinality) ->
         name = not_equal,
         tree = undefined,
         schema = #{left => DomainName, right => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {comparison, '/=', DomainName},
         membership_criteria = #{
@@ -177,7 +175,7 @@ plus(DomainName, Cardinality) ->
         name = plus,
         tree = undefined,
         schema = #{a => DomainName, b => DomainName, sum => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {arithmetic, plus, DomainName},
         membership_criteria = #{
@@ -196,7 +194,7 @@ times(DomainName, Cardinality) ->
         name = times,
         tree = undefined,
         schema = #{a => DomainName, b => DomainName, product => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {arithmetic, times, DomainName},
         membership_criteria = #{
@@ -215,7 +213,7 @@ minus(DomainName, Cardinality) ->
         name = minus,
         tree = undefined,
         schema = #{a => DomainName, b => DomainName, difference => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {arithmetic, minus, DomainName},
         membership_criteria = #{
@@ -234,7 +232,7 @@ divide(DomainName, Cardinality) ->
         name = divide,
         tree = undefined,
         schema = #{a => DomainName, b => DomainName, quotient => DomainName, remainder => DomainName},
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = Cardinality,
         generator = {arithmetic, divide, DomainName},
         membership_criteria = #{
@@ -251,55 +249,70 @@ divide(DomainName, Cardinality) ->
 
 -spec member(map(), #domain{} | #relation{}) -> boolean().
 member(Tuple, #relation{membership_criteria = #{intension := Intension}}) ->
-    %% Generator-based relation with intension predicate (e.g., less_than)
     Intension(Tuple);
 member(Tuple, #relation{membership_criteria = #{test := TestFun}}) ->
-    %% Domain relation with test function (e.g., integer, string, atom domains)
     TestFun(Tuple);
+member(Tuple, #relation{hash = RelationHash, tree = Tree}) when Tree =/= undefined ->
+    BindingHashes = binding_to_hashes(Tuple),
+    TupleHashes = operations:hashes_from_tuple(RelationHash),
+    lists:any(
+      fun(TupleHash) ->
+          tuple_hash_matches_binding(TupleHash, BindingHashes)
+      end,
+      TupleHashes);
 member(_Tuple, #relation{tree = undefined, generator = Generator}) when Generator =/= undefined ->
-    %% Generator-based relation without explicit intension - would need enumeration
-    %% This is a fallback; ideally all generator relations have an intension
-    {error, {no_intension, requires_enumeration}};
-member(Tuple, #relation{} = Relation) ->
-    %% Stored relation - check actual membership in the tree
-    relation_contains(Tuple, Relation);
+    false;
+member(_Tuple, #relation{}) ->
+    false;
 member(Tuple, #domain{membership_criteria = #{test := TestFun}}) ->
-    %% Domain (1OP) with a test function
     TestFun(Tuple);
 member(Tuple, #domain{membership_criteria = Criteria}) when is_map(Criteria) ->
-    %% Domain with attribute-level criteria
     validate_tuple_against_criteria(Tuple, Criteria).
 
--spec member(binding(), #domain{} | #relation{}, map()) ->
-    {true, map()} | false.
+binding_to_hashes(Binding) when is_map(Binding) ->
+    maps:map(
+      fun(_Attr, Value) ->
+          operations:value_hash(Value)
+      end,
+      Binding).
+
+tuple_hash_matches_binding(TupleHash, BindingHashes) ->
+    [#tuple{attribute_map = AttributeMap}] = mnesia:dirty_read(tuple, TupleHash),
+    tuple_matches_binding_hashes(BindingHashes, AttributeMap).
+
+tuple_matches_binding_hashes(BindingHashes, TupleAttributeMap)
+  when is_map(BindingHashes), is_map(TupleAttributeMap) ->
+    maps:fold(
+      fun(Key, ValueHash, Acc) ->
+          Acc andalso maps:get(Key, TupleAttributeMap, undefined) =:= ValueHash
+      end,
+      true,
+      BindingHashes).
+
+-spec member(binding(), #domain{} | #relation{}, map()) -> {true, map()} | false.
 member(Binding, Relation, Substitution) ->
     BoundTuple = apply_substitution(Binding, Substitution),
-    %% We also gotta look at th remaining variables
     case find_variables(BoundTuple) of
         [] ->
-            %% For the fully bound, apply the direct membership test
             case member(BoundTuple, Relation) of
                 true -> {true, Substitution};
                 false -> false
             end;
-        Variables ->
-            %% In the scenario we have actual variables, we need to search for satisfying values
-            %% which requires enumeration through the generator
-            find_satisfying_substitution(BoundTuple, Variables, Relation, Substitution)
+        _ ->
+            false
     end.
 
 -spec 'not'(#relation{}, #relation{}) -> #relation{}.
 'not'(R, Universe) ->
     RName = get_name(R),
     UniverseName = get_name(Universe),
-    ResultName = list_to_atom("not_" ++ atom_to_list(RName) ++
-                              "_in_" ++ atom_to_list(UniverseName)),
+    ResultName = list_to_atom("not_" ++ atom_to_list(RName) ++ "_in_" ++ atom_to_list(UniverseName)),
     #relation{
         hash = undefined,
         name = ResultName,
         tree = undefined,
         schema = get_schema(R),
-        constraints = #{},
+        constraints = empty_constraints(),
         cardinality = complement_cardinality(R, Universe),
         generator = {complement, R, Universe},
         membership_criteria = #{
@@ -321,14 +334,13 @@ member(Binding, Relation, Substitution) ->
         true ->
             R1Name = get_name(R1),
             R2Name = get_name(R2),
-            ResultName = list_to_atom(atom_to_list(R1Name) ++
-                                      "_and_" ++ atom_to_list(R2Name)),
+            ResultName = list_to_atom(atom_to_list(R1Name) ++ "_and_" ++ atom_to_list(R2Name)),
             #relation{
                 hash = undefined,
                 name = ResultName,
                 tree = undefined,
                 schema = merge_schemas(Schema1, Schema2),
-                constraints = #{},
+                constraints = empty_constraints(),
                 cardinality = intersection_cardinality(R1, R2),
                 generator = {intersection, R1, R2},
                 membership_criteria = #{
@@ -341,14 +353,6 @@ member(Binding, Relation, Substitution) ->
             }
     end.
 
-%% @doc Union of two relations (logical OR).
-%%
-%% Returns a relation containing tuples that are in R1 OR R2 (or both).
-%% Requires compatible schemas.
-%%
-%% @param R1 First relation
-%% @param R2 Second relation
-%% @returns A new relation representing the union
 -spec 'or'(#relation{}, #relation{}) -> #relation{}.
 'or'(R1, R2) ->
     Schema1 = get_schema(R1),
@@ -359,14 +363,13 @@ member(Binding, Relation, Substitution) ->
         true ->
             R1Name = get_name(R1),
             R2Name = get_name(R2),
-            ResultName = list_to_atom(atom_to_list(R1Name) ++
-                                      "_or_" ++ atom_to_list(R2Name)),
+            ResultName = list_to_atom(atom_to_list(R1Name) ++ "_or_" ++ atom_to_list(R2Name)),
             #relation{
                 hash = undefined,
                 name = ResultName,
                 tree = undefined,
                 schema = merge_schemas(Schema1, Schema2),
-                constraints = #{},
+                constraints = empty_constraints(),
                 cardinality = union_cardinality(R1, R2),
                 generator = {union, R1, R2},
                 membership_criteria = #{
@@ -379,145 +382,19 @@ member(Binding, Relation, Substitution) ->
             }
     end.
 
-%%% 1OP Constraint Operations (Attribute Constraints)
-
-%% @doc Create a constraint for a 1st Order Property (attribute constraint).
-%%
-%% A 1OP is a property (attribute) of an entity. This function creates a CONSTRAINT
-%% for that 1OP which:
-%% 1. Specifies which domain (or relation) the attribute draws values from
-%% 2. Applies additional constraints beyond domain membership
-%%
-%% The validation process for a 1OP constraint:
-%% 1. Get the attribute value from a tuple
-%% 2. Check if value ∈ domain (using domain's membership criteria)
-%% 3. Apply additional constraints specified here
--spec create_1op(atom(), atom(), atom(), [relational_constraint()]) -> #attribute_constraint{}.
-create_1op(Name, AttributeName, Domain, Constraints) ->
-    #attribute_constraint{
-        name = Name,
-        attribute = AttributeName,
-        domain = Domain,
-        constraints = Constraints
-    }.
-
-%% @doc Create a tuple-level constraint (2OP) as a conjunction list.
-%%
-%% Tuple constraints are evaluated in addition to all attribute constraints.
-%% Each entry in this list is a formula term that must hold for the tuple.
--spec create_2op(atom(), [term()]) -> #tuple_constraint{}.
-create_2op(Name, Constraints) when is_list(Constraints) ->
-    #tuple_constraint{name = Name, constraints = Constraints}.
-
-%% @doc Derive a 1OP constraint from another 1OP constraint by adding constraints.
-%%
-%% Creates a new attribute constraint by adding additional constraints to an
-%% existing 1OP constraint. The derived constraint applies all parent constraints
-%% plus the additional ones.
--spec derive_1op(#attribute_constraint{}, [relational_constraint()]) -> #attribute_constraint{}.
-derive_1op(#attribute_constraint{} = Parent1OPConstraint, AdditionalConstraints) ->
-    AllConstraints = Parent1OPConstraint#attribute_constraint.constraints ++ AdditionalConstraints,
-    #attribute_constraint{
-        name = Parent1OPConstraint#attribute_constraint.name,
-        attribute = Parent1OPConstraint#attribute_constraint.attribute,
-        domain = Parent1OPConstraint#attribute_constraint.domain,
-        constraints = AllConstraints
-    }.
-
-%%% 1OPiC (1st Order Property in Context) Operations
-%%%
-%%% A 1OPiC is an attribute - a 1OP that assumes a specific meaning within
-%%% the context of a particular relation (entity group).
-%%%
-%%% Key insight: The SAME 1OP (domain) can manifest as MULTIPLE 1OPiCs with
-%%% DIFFERENT meanings in the same or different relations.
-%%%
-%%% Example:
-%%%   - 1OP: `compensation` (the abstract property of monetary compensation)
-%%%   - 1OPiC: `salary` in employees (base pay - one meaning of compensation)
-%%%   - 1OPiC: `commission` in employees (variable pay - another meaning)
-%%%
-%%% Both `salary` and `commission` draw values from `compensation`, but they
-%%% have distinct semantic meanings in the context of the employees relation.
-%%%
-%%% At the logical level:
-%%%   - 1OP = Domain (value set)
-%%%   - 1OPiC = Attribute (contextualized appearance of a domain)
-%%%   - Schema entry `#{salary => compensation}` declares the 1OPiC relationship
-
-%% @doc Declare a 1OPiC (attribute) in a relation schema.
-%%
-%% A 1OPiC is a 1OP in a specific context - an attribute that:
-%% 1. Draws its values from a specific domain (1OP)
-%% 2. Has a particular meaning in this relation's context
-%%
-%% Multiple attributes can draw from the same domain but represent
-%%% different meanings (e.g., salary and commission both from compensation).
--spec declare_1opic(atom(), atom() | #domain{}, map()) -> map().
-declare_1opic(AttributeName, Domain1OP, Schema) when is_atom(Domain1OP) ->
-    Schema#{AttributeName => Domain1OP};
-declare_1opic(AttributeName, #domain{name = DomainName}, Schema) ->
-    Schema#{AttributeName => DomainName}.
-
-%% @doc Validate that a value satisfies its 1OPiC's domain constraints.
-%%
-%% Checks that the value is a member of the domain (1OP) that the
-%% attribute (1OPiC) draws from.
--spec validate_1opic(#database_state{}, atom(), term(), map()) -> true | {false, term()}.
-validate_1opic(Database, AttributeName, Value, Schema) ->
-    case maps:get(AttributeName, Schema, undefined) of
-        undefined ->
-            {false, {unknown_attribute, AttributeName}};
-        DomainName ->
-            %% Get the domain from database using version hash
-            case get_domain_from_db(Database, DomainName) of
-                {ok, Domain} ->
-                    Tuple = #{value => Value},
-                    case member(Tuple, Domain) of
-                        true -> true;
-                        false -> {false, {not_in_domain, Value, DomainName}}
-                    end;
-                {error, not_found} ->
-                    {false, {domain_not_found, DomainName}}
-            end
-    end.
-
-%%% Constraint Resolution
-
-%% @doc Resolve constraints for a relation against given values.
-%%
-%% @param Database The database state for version-aware constraint evaluation
-%% @param Type The type of resolution (domain, relation, etc.)
-%% @param RelationOrDomain The relation or domain
-%% @param Values The values to check
-%% @returns Resolution result
--spec resolve(#database_state{}, atom(), #domain{} | #relation{}, map()) ->
+-spec resolve(#database_state{}, atom(), #domain{} | #relation{} | relational_constraint(), map()) ->
     {ok, boolean()} | {error, term()}.
 resolve(_Database, domain, #domain{} = Domain, Values) ->
-    Result = member(Values, Domain),
-    {ok, Result};
+    {ok, member(Values, Domain)};
 resolve(_Database, relation, #relation{} = Relation, Values) ->
-    Result = member(Values, Relation),
-    {ok, Result};
+    {ok, member(Values, Relation)};
 resolve(Database, constraint, Constraint, Binding) ->
     evaluate_constraint(Database, Constraint, Binding).
 
-%% @doc Validate a tuple against a relation's schema and constraints.
-%%
-%% Checks that:
-%% 1. All required attributes are present
-%% 2. Each attribute value is a member of its declared domain
-%% 3. Each attribute value satisfies its 1OP constraints (if any)
-%%
-%% @param Database The database state for version-aware domain lookups
-%% @param Tuple The tuple map to validate
-%% @param Relation The relation with schema and constraints
-%% @returns ok | {error, Reason}
 -spec validate_tuple(#database_state{}, map(), #relation{}) -> ok | {error, term()}.
 validate_tuple(Database, Tuple, #relation{schema = Schema, constraints = Constraints}) ->
     case validate_tuple_against_schema(Database, Tuple, Schema) of
         ok ->
-            %% Also validate against attribute constraints (1OPs)
             validate_tuple_against_constraints(Database, Tuple, Constraints);
         Error ->
             Error
@@ -525,18 +402,14 @@ validate_tuple(Database, Tuple, #relation{schema = Schema, constraints = Constra
 
 -spec validate_tuple_against_schema(#database_state{}, map(), map()) -> ok | {error, term()}.
 validate_tuple_against_schema(Database, Tuple, Schema) ->
-    %% Check all schema attributes are present and valid
     SchemaAttrs = maps:keys(Schema),
     TupleAttrs = maps:keys(Tuple),
-    %% Check for missing attributes
     Missing = SchemaAttrs -- TupleAttrs,
     case Missing of
         [] ->
-            %% Check for extra attributes not in schema
             Extra = TupleAttrs -- SchemaAttrs,
             case Extra of
                 [] ->
-                    %% Validate each attribute against its domain
                     validate_all_attributes(Database, Tuple, Schema);
                 _ ->
                     {error, {extra_attributes, Extra}}
@@ -545,65 +418,64 @@ validate_tuple_against_schema(Database, Tuple, Schema) ->
             {error, {missing_attributes, Missing}}
     end.
 
--spec validate_all_attributes(#database_state{}, map(), map()) -> ok | {error, term()}.
 validate_all_attributes(Database, Tuple, Schema) ->
-    Results = maps:fold(
-        fun(AttrName, Value, Acc) ->
+    maps:fold(
+        fun(AttrName, DomainName, Acc) ->
             case Acc of
-                {error, _} = Err -> Err;
+                {error, _} = Err ->
+                    Err;
                 ok ->
-                    case validate_1opic(Database, AttrName, Value, Schema) of
-                        true -> ok;
-                        {false, Reason} -> {error, {invalid_attribute, AttrName, Reason}}
+                    Value = maps:get(AttrName, Tuple),
+                    case get_domain_from_db(Database, DomainName) of
+                        {ok, Domain} ->
+                            case member(#{value => Value}, Domain) of
+                                true -> ok;
+                                false -> {error, {not_in_domain, AttrName, Value, DomainName}}
+                            end;
+                        {error, not_found} ->
+                            {error, {unknown_domain, AttrName, DomainName}}
                     end
             end
         end,
         ok,
-        Tuple
-    ),
-    Results.
+        Schema
+    ).
 
--spec validate_tuple_against_constraints(#database_state{}, map(), #relation_constraints{} | undefined) -> ok | {error, term()}.
 validate_tuple_against_constraints(_Database, _Tuple, undefined) ->
-    %% No constraints defined
     ok;
-validate_tuple_against_constraints(Database, Tuple,
-                                   #relation_constraints{attribute_constraints = AttrConstraints,
-                                                         tuple_constraints = TupleConstraints}) ->
-    %% Validate each attribute against its constraint
-    case validate_attribute_constraints(Database, Tuple, AttrConstraints) of
-        ok ->
-            validate_tuple_constraints(Database, Tuple, lists:reverse(TupleConstraints));
-        {error, _} = AttrError ->
-            AttrError
+validate_tuple_against_constraints(Database, Tuple, Constraints) ->
+    Normalized = normalize_constraints(Constraints),
+    NamedConstraints = Normalized#relation_constraints.constraints,
+    case evaluate_named_constraints(Database, NamedConstraints, Tuple) of
+        {true, _Violations} ->
+            ok;
+        {false, Violations} ->
+            {error, {constraint_violations, Violations}}
     end.
 
--spec validate_tuple_constraints(#database_state{}, map(), [#tuple_constraint{}]) -> ok | {error, term()}.
-validate_tuple_constraints(_Database, _Tuple, []) ->
-    ok;
-validate_tuple_constraints(Database, Tuple, TupleConstraints) ->
-    Violations = lists:foldl(
-        fun(#tuple_constraint{name = Name, constraints = Constraints}, Acc) ->
-            {Satisfied, Diagnostics} = evaluate_constraint_list(Database, Constraints, Tuple),
-            case Satisfied of
-                true -> Acc;
-                false ->
-                    [#{
-                        constraint_name => Name,
-                        formulas => Constraints,
-                        diagnostics => Diagnostics
-                    } | Acc]
-            end
-        end,
-        [],
-        TupleConstraints
-    ),
-    case Violations of
-        [] -> ok;
-        _ -> {error, {tuple_constraint_violations, lists:reverse(Violations)}}
+evaluate_named_constraints(_Database, [], _Context) ->
+    {true, []};
+evaluate_named_constraints(Database, NamedConstraints, Context) ->
+    ViolationsRev = lists:foldl(
+      fun({Name, Formula}, Acc) ->
+          {Result, Diagnostics} = evaluate_constraint_with_diagnostics(Database, Formula, Context),
+          case Result of
+              true ->
+                  Acc;
+              false ->
+                  [#{constraint_name => Name,
+                     formula => Formula,
+                     diagnostics => Diagnostics} | Acc]
+          end
+      end,
+      [],
+      NamedConstraints),
+    case ViolationsRev of
+        [] -> {true, []};
+        _ -> {false, lists:reverse(ViolationsRev)}
     end.
 
--spec evaluate_constraint_list(#database_state{}, [term()], map()) -> {boolean(), [map()]}. 
+-spec evaluate_constraint_list(#database_state{}, [term()], map()) -> {boolean(), [map()]}.
 evaluate_constraint_list(_Database, [], _Context) ->
     {true, []};
 evaluate_constraint_list(Database, Constraints, Context) ->
@@ -617,22 +489,25 @@ evaluate_constraint_list(Database, Constraints, Context) ->
     ),
     {AllTrue, lists:reverse(DiagnosticsRev)}.
 
--spec evaluate_constraint_with_diagnostics(#database_state{}, term(), map()) -> {boolean(), [map()]}. 
-evaluate_constraint_with_diagnostics(Database, {member_of, RelName, Binding}, Context) when is_atom(RelName) ->
+-spec evaluate_constraint_with_diagnostics(#database_state{}, term(), map()) -> {boolean(), [map()]}.
+evaluate_constraint_with_diagnostics(Database, {member_of, RelName, Binding}, Context)
+  when is_atom(RelName), is_map(Binding) ->
     BoundBinding = bind_variables(Binding, Context),
     case get_domain_from_db(Database, RelName) of
         {ok, Relation} ->
             case member(BoundBinding, Relation) of
                 true -> {true, []};
                 false ->
-                    {false, [#{kind => member_of_false,
-                               relation => RelName,
-                               binding => BoundBinding}]}
+                    {false, [#{kind => member_of_false, relation => RelName, binding => BoundBinding}]}
             end;
         {error, not_found} ->
-            {false, [#{kind => relation_not_found,
-                       relation => RelName,
-                       binding => BoundBinding}]}
+            {false, [#{kind => relation_not_found, relation => RelName, binding => BoundBinding}]}
+    end;
+evaluate_constraint_with_diagnostics(_Database, {member_of, #relation{} = Rel, Binding}, Context) ->
+    BoundBinding = bind_variables(Binding, Context),
+    case member(BoundBinding, Rel) of
+        true -> {true, []};
+        false -> {false, [#{kind => member_of_false, relation => get_name(Rel), binding => BoundBinding}]}
     end;
 evaluate_constraint_with_diagnostics(_Database, {member_of, #domain{} = Rel, Binding}, Context) ->
     BoundBinding = bind_variables(Binding, Context),
@@ -667,7 +542,6 @@ evaluate_constraint_with_diagnostics(Database, {forall, VarName, QuantifierRel, 
 evaluate_constraint_with_diagnostics(_Database, Constraint, _Context) ->
     {false, [#{kind => unsupported_constraint, constraint => Constraint}]}.
 
--spec evaluate_quantifier_with_diagnostics(#database_state{}, exists | forall, atom(), atom(), term(), map()) -> {boolean(), [map()]}. 
 evaluate_quantifier_with_diagnostics(Database, Quantifier, VarName, QuantifierRel, Constraint, Context) ->
     case get_domain_from_db(Database, QuantifierRel) of
         {error, not_found} ->
@@ -675,185 +549,18 @@ evaluate_quantifier_with_diagnostics(Database, Quantifier, VarName, QuantifierRe
                        quantifier => Quantifier,
                        variable => VarName,
                        relation => QuantifierRel}]};
-        {ok, Relation} = QuantifierRelationResult ->
+        {ok, Relation} ->
             case Relation#relation.cardinality of
                 {finite, _} ->
                     evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context);
-                Infinity ->
-                    case try_unbounded_quantifier_by_inference(Database,
-                                                               Quantifier,
-                                                               VarName,
-                                                               Constraint,
-                                                               Context,
-                                                               QuantifierRelationResult) of
-                        {ok, Result, Diagnostics} ->
-                            {Result, Diagnostics};
-                        not_applicable ->
-                            {false, [#{kind => unbounded_quantifier,
-                                       quantifier => Quantifier,
-                                       variable => VarName,
-                                       relation => QuantifierRel,
-                                       cardinality => Infinity}]}
-                    end
-            end
-    end.
-
--spec try_unbounded_quantifier_by_inference(#database_state{}, exists | forall, atom(), term(), map(), {ok, #relation{}}) ->
-    {ok, boolean(), [map()]} | not_applicable.
-try_unbounded_quantifier_by_inference(_Database, forall, _VarName, _Constraint, _Context, _QuantifierRelationResult) ->
-    not_applicable;
-try_unbounded_quantifier_by_inference(Database,
-                                      exists,
-                                      VarName,
-                                      Constraint,
-                                      Context,
-                                      {ok, QuantifierRelation}) ->
-    Candidates = infer_candidates_for_var(Constraint, VarName, Context),
-    case Candidates of
-        [] ->
-            not_applicable;
-        _ ->
-            ValidCandidates = [Candidate || Candidate <- lists:usort(Candidates),
-                                            quantified_value_member(Candidate, QuantifierRelation)],
-            case ValidCandidates of
-                [] ->
-                    {ok, false, [#{kind => inferred_candidates_outside_quantifier_domain,
-                                   variable => VarName,
-                                   candidates => Candidates,
-                                   relation => QuantifierRelation#relation.name}]};
                 _ ->
-                    evaluate_quantifier_candidates(Database, exists, VarName, Constraint, Context, ValidCandidates)
+                    {false, [#{kind => unbounded_quantifier,
+                               quantifier => Quantifier,
+                               variable => VarName,
+                               relation => QuantifierRel}]}
             end
     end.
 
--spec evaluate_quantifier_candidates(#database_state{}, exists | forall, atom(), term(), map(), [term()]) ->
-    {ok, boolean(), [map()]}. 
-evaluate_quantifier_candidates(Database, Quantifier, VarName, Constraint, Context, Candidates) ->
-    {Result, Diagnostics} = evaluate_quantifier_tuples(Database,
-                                                       Quantifier,
-                                                       VarName,
-                                                       Constraint,
-                                                       Context,
-                                                       [#{value => Candidate} || Candidate <- Candidates]),
-    {ok, Result, [#{kind => quantified_by_inference, variable => VarName, candidates => Candidates} | Diagnostics]}.
-
--spec quantified_value_member(term(), #relation{}) -> boolean().
-quantified_value_member(Value, #relation{schema = Schema} = Relation) ->
-    case maps:keys(Schema) of
-        [OnlyAttr] ->
-            case member(#{OnlyAttr => Value}, Relation) of
-                true -> true;
-                _ -> false
-            end;
-        _ ->
-            false
-    end.
-
--spec infer_candidates_for_var(term(), atom(), map()) -> [term()].
-infer_candidates_for_var({'and', Constraints}, VarName, Context) ->
-    lists:flatmap(fun(C) -> infer_candidates_for_var(C, VarName, Context) end, Constraints);
-infer_candidates_for_var({'or', Constraints}, VarName, Context) ->
-    lists:flatmap(fun(C) -> infer_candidates_for_var(C, VarName, Context) end, Constraints);
-infer_candidates_for_var({'not', _Constraint}, _VarName, _Context) ->
-    [];
-infer_candidates_for_var({exists, _InnerVar, _QuantifierRel, _InnerConstraint}, _VarName, _Context) ->
-    [];
-infer_candidates_for_var({forall, _InnerVar, _QuantifierRel, _InnerConstraint}, _VarName, _Context) ->
-    [];
-infer_candidates_for_var({member_of, RelName, Binding}, VarName, Context) when is_atom(RelName), is_map(Binding) ->
-    infer_candidates_from_member(RelName, Binding, VarName, Context);
-infer_candidates_for_var(_, _VarName, _Context) ->
-    [].
-
--spec infer_candidates_from_member(atom(), map(), atom(), map()) -> [term()].
-infer_candidates_from_member(plus, Binding, VarName, Context) ->
-    infer_arith_candidates(Binding, VarName, Context,
-                           [#{target => sum, left => a, right => b, op => plus},
-                            #{target => a, left => sum, right => b, op => minus},
-                            #{target => b, left => sum, right => a, op => minus}]);
-infer_candidates_from_member(minus, Binding, VarName, Context) ->
-    infer_arith_candidates(Binding, VarName, Context,
-                           [#{target => difference, left => a, right => b, op => minus},
-                            #{target => a, left => difference, right => b, op => plus},
-                            #{target => b, left => a, right => difference, op => minus}]);
-infer_candidates_from_member(times, Binding, VarName, Context) ->
-    infer_arith_candidates(Binding, VarName, Context,
-                           [#{target => product, left => a, right => b, op => times}]);
-infer_candidates_from_member(equal, Binding, VarName, Context) ->
-    infer_equality_candidates(Binding, VarName, Context);
-infer_candidates_from_member(_RelName, _Binding, _VarName, _Context) ->
-    [].
-
--spec infer_equality_candidates(map(), atom(), map()) -> [term()].
-infer_equality_candidates(Binding, VarName, Context) ->
-    Left = maps:get(left, Binding, undefined),
-    Right = maps:get(right, Binding, undefined),
-    case {is_target_var(Left, VarName), is_target_var(Right, VarName)} of
-        {true, false} ->
-            case resolve_binding_value(Right, Context) of
-                {ok, Value} -> [Value];
-                error -> []
-            end;
-        {false, true} ->
-            case resolve_binding_value(Left, Context) of
-                {ok, Value} -> [Value];
-                error -> []
-            end;
-        _ ->
-            []
-    end.
-
--spec infer_arith_candidates(map(), atom(), map(), [map()]) -> [term()].
-infer_arith_candidates(Binding, VarName, Context, Specs) ->
-    lists:flatmap(
-      fun(#{target := Target, left := LeftKey, right := RightKey, op := Op}) ->
-          TargetBinding = maps:get(Target, Binding, undefined),
-          case is_target_var(TargetBinding, VarName) of
-              false -> [];
-              true ->
-                  LeftBinding = maps:get(LeftKey, Binding, undefined),
-                  RightBinding = maps:get(RightKey, Binding, undefined),
-                  case {resolve_binding_value(LeftBinding, Context), resolve_binding_value(RightBinding, Context)} of
-                      {{ok, LeftValue}, {ok, RightValue}} ->
-                          case apply_binary_op(Op, LeftValue, RightValue) of
-                              {ok, Candidate} -> [Candidate];
-                              error -> []
-                          end;
-                      _ ->
-                          []
-                  end
-          end
-      end,
-      Specs).
-
--spec is_target_var(term(), atom()) -> boolean().
-is_target_var({var, Name}, VarName) -> Name =:= VarName;
-is_target_var(_, _) -> false.
-
--spec resolve_binding_value(term(), map()) -> {ok, term()} | error.
-resolve_binding_value({var, Name}, Context) ->
-    case maps:find(Name, Context) of
-        {ok, Value} when Value =/= undefined -> {ok, Value};
-        _ -> error
-    end;
-resolve_binding_value({const, Value}, _Context) ->
-    {ok, Value};
-resolve_binding_value(Value, _Context) when Value =:= undefined ->
-    error;
-resolve_binding_value(Value, _Context) ->
-    {ok, Value}.
-
--spec apply_binary_op(atom(), term(), term()) -> {ok, term()} | error.
-apply_binary_op(plus, Left, Right) when is_number(Left), is_number(Right) ->
-    {ok, Left + Right};
-apply_binary_op(minus, Left, Right) when is_number(Left), is_number(Right) ->
-    {ok, Left - Right};
-apply_binary_op(times, Left, Right) when is_number(Left), is_number(Right) ->
-    {ok, Left * Right};
-apply_binary_op(_, _, _) ->
-    error.
-
--spec evaluate_finite_quantifier(#database_state{}, exists | forall, atom(), atom(), term(), map()) -> {boolean(), [map()]}. 
 evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constraint, Context) ->
     Iterator = operations:get_tuples_iterator(Database, QuantifierRel),
     case operations:collect_all(Iterator) of
@@ -867,7 +574,6 @@ evaluate_finite_quantifier(Database, Quantifier, VarName, QuantifierRel, Constra
             evaluate_quantifier_tuples(Database, Quantifier, VarName, Constraint, Context, Tuples)
     end.
 
--spec evaluate_quantifier_tuples(#database_state{}, exists | forall, atom(), term(), map(), [map()]) -> {boolean(), [map()]}. 
 evaluate_quantifier_tuples(_Database, exists, _VarName, _Constraint, _Context, []) ->
     {false, []};
 evaluate_quantifier_tuples(_Database, forall, _VarName, _Constraint, _Context, []) ->
@@ -897,7 +603,6 @@ evaluate_quantifier_tuples(Database, Quantifier, VarName, Constraint, Context, T
         forall -> {lists:all(fun(X) -> X end, Results), Diagnostics}
     end.
 
--spec extract_quantifier_value(map()) -> {ok, term()} | {error, term()}.
 extract_quantifier_value(TupleValueMap) when is_map(TupleValueMap) ->
     case maps:to_list(TupleValueMap) of
         [{_Attr, Value}] ->
@@ -908,85 +613,18 @@ extract_quantifier_value(TupleValueMap) when is_map(TupleValueMap) ->
             {error, non_unary_quantifier_relation}
     end.
 
--spec validate_attribute_constraints(#database_state{}, map(), #{atom() => [#attribute_constraint{}]}) -> ok | {error, term()}.
-validate_attribute_constraints(Database, Tuple, AttrConstraints) when is_map(AttrConstraints) ->
-    maps:fold(
-        fun(AttrName, AttrConstraintList, Acc) ->
-            case Acc of
-                {error, _} = Err -> Err;
-                ok ->
-                    case maps:get(AttrName, Tuple, undefined) of
-                        undefined ->
-                            %% Attribute not in tuple - schema validation should catch this
-                            ok;
-                        Value ->
-                            validate_attribute_constraint_list(Database, AttrName, Value, AttrConstraintList)
-                    end
-            end
-        end,
-        ok,
-        AttrConstraints
-    ).
-
--spec validate_attribute_constraint_list(#database_state{}, atom(), term(), [#attribute_constraint{}]) -> ok | {error, term()}.
-validate_attribute_constraint_list(_Database, _AttrName, _Value, []) ->
-    ok;
-validate_attribute_constraint_list(Database, AttrName, Value, [#attribute_constraint{name = ConstraintName,
-                                                                                      domain = Domain,
-                                                                                      constraints = Constraints} | Rest]) ->
-    case validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints) of
-        ok ->
-            validate_attribute_constraint_list(Database, AttrName, Value, Rest);
-        {error, Reason} ->
-            {error, {attribute_constraint_violation, ConstraintName, AttrName, Reason}}
-    end.
-
--spec validate_attribute_constraint(#database_state{}, atom(), term(), atom(), [relational_constraint()]) -> ok | {error, term()}.
-validate_attribute_constraint(Database, AttrName, Value, Domain, Constraints) ->
-    %% Step 1: Check domain membership
-    case get_domain_from_db(Database, Domain) of
-        {ok, DomainRec} ->
-            ValueTuple = #{value => Value},
-            case member(ValueTuple, DomainRec) of
-                true ->
-                    %% Step 2: Apply additional constraints
-                    validate_additional_constraints(Database, AttrName, Value, Constraints);
-                false ->
-                    {error, {not_in_domain, AttrName, Value, Domain}}
-            end;
-        {error, not_found} ->
-            {error, {unknown_domain, AttrName, Domain}}
-    end.
-
--spec validate_additional_constraints(#database_state{}, atom(), term(), [relational_constraint()]) -> ok | {error, term()}.
-validate_additional_constraints(_Database, _AttrName, _Value, []) ->
-    %% No additional constraints
-    ok;
-validate_additional_constraints(Database, AttrName, Value, Constraints) ->
-    %% Evaluate each constraint
-    Context = #{value => Value},
-    Results = [evaluate_constraint(Database, C, Context) || C <- Constraints],
-    case lists:all(fun({ok, true}) -> true; (_) -> false end, Results) of
-        true -> ok;
-        false -> {error, {constraint_violation, AttrName, Value, Constraints}}
-    end.
-
 -spec build_membership_criteria(#database_state{}, map()) -> map().
 build_membership_criteria(Database, Schema) ->
     maps:fold(
         fun(AttrName, DomainName, Acc) ->
-	    %% Get domain from DB using version hash
-	    %% Domains are stored in the DB through operations:create_immutable_relation (see operations.erl:531)
-	    case get_domain_from_db(Database, DomainName) of
+            case get_domain_from_db(Database, DomainName) of
                 {ok, Domain} ->
-                    %% Domains are stored as #relation{} records, not #domain{}
                     Test = case Domain#relation.membership_criteria of
                         #{test := TestFun} -> TestFun;
                         _ -> fun(_) -> true end
                     end,
                     Acc#{AttrName => #{domain => DomainName, test => Test}};
                 {error, not_found} ->
-                    %% Unknown domain, default to permissive test
                     Acc#{AttrName => #{domain => DomainName, test => fun(_) -> true end}}
             end
         end,
@@ -994,403 +632,372 @@ build_membership_criteria(Database, Schema) ->
         Schema
     ).
 
-%%% Constraint Builders
-%%%
-%%% Convenience functions for building relational constraints.
-%%% These create constraints in the form expected by create_1op/4.
-
-%% @doc Create a "less than" constraint: value &lt; X
-%%
-%% Expressed relationally as: (value, X) ∈ less_than
 -spec lt(term(), term()) -> relational_constraint().
 lt(Left, Right) ->
     {member_of, less_than, #{left => Left, right => Right}}.
 
-%% @doc Create a "less than or equal" constraint: value &lt;= X
 -spec lte(term(), term()) -> relational_constraint().
 lte(Left, Right) ->
     {member_of, less_than_or_equal, #{left => Left, right => Right}}.
 
-%% @doc Create a "greater than" constraint: value &gt; X
-%%
-%% Expressed relationally as: (X, value) ∈ greater_than
 -spec gt(term(), term()) -> relational_constraint().
 gt(Left, Right) ->
     {member_of, greater_than, #{left => Left, right => Right}}.
 
-%% @doc Create a "greater than or equal" constraint: value &gt;= X
 -spec gte(term(), term()) -> relational_constraint().
 gte(Left, Right) ->
     {member_of, greater_than_or_equal, #{left => Left, right => Right}}.
 
-%% @doc Create an "equal" constraint: value = X
 -spec eq(term(), term()) -> relational_constraint().
 eq(Left, Right) ->
     {member_of, equal, #{left => Left, right => Right}}.
 
-%% @doc Create a "not equal" constraint: value != X
 -spec neq(term(), term()) -> relational_constraint().
 neq(Left, Right) ->
     {member_of, not_equal, #{left => Left, right => Right}}.
 
-%% @doc Create a range constraint: Min &lt;= value &lt; Max
-%%
-%% This is a conjunction of two relational constraints:
-%% (Min, value) ∈ greater_than_or_equal AND (value, Max) ∈ less_than
 -spec between(term(), term()) -> relational_constraint().
 between(Min, Max) ->
-    {'and', [gte({var,value}, Min), lt({var, value}, Max)]}.
+    {'and', [gte({var, value}, Min), lt({var, value}, Max)]}.
 
-%%% Constraint Propagation
-%%%
-%%% These functions support propagating constraints through relational operations.
-%%% Constraints are stored in #relation_constraints{} records.
-
-%% @doc Create an empty constraints record.
-%%
-%% @returns Empty #relation_constraints{} with no constraints
 -spec empty_constraints() -> #relation_constraints{}.
 empty_constraints() ->
-    #relation_constraints{
-        attribute_constraints = #{},
-        tuple_constraints = [],
-        multi_tuple_constraints = []
+    #relation_constraints{constraints = []}.
+
+-spec example_supertype_exclusive_constraints() -> #{atom() => #relation_constraints{}}.
+example_supertype_exclusive_constraints() ->
+    #{
+        b => #relation_constraints{constraints = [
+            {b_requires_a, {member_of, a, #{id => {var, id}}}},
+            {b_excludes_c, {'not', {member_of, c, #{id => {var, id}}}}}
+        ]},
+        c => #relation_constraints{constraints = [
+            {c_requires_a, {member_of, a, #{id => {var, id}}}},
+            {c_excludes_b, {'not', {member_of, b, #{id => {var, id}}}}}
+        ]}
     }.
 
-%% @doc Add an attribute constraint to a constraints record.
-%%
-%% @param Constraints The #relation_constraints{} record or undefined
-%% @param AttrName The attribute name
-%% @param AttrConstraint The #attribute_constraint{} to add
-%% @returns Updated #relation_constraints{}
--spec add_attribute_constraint(#relation_constraints{} | undefined, atom(), #attribute_constraint{}) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-add_attribute_constraint(undefined, AttrName, #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
-    add_attribute_constraint(empty_constraints(), AttrName, AttrConstraint);
-add_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
-                         AttrName,
-                         #attribute_constraint{name = Name} = AttrConstraint) when is_atom(Name) ->
-    case AttrConstraint#attribute_constraint.attribute =:= AttrName of
-        false ->
-            {error, {attribute_constraint_key_mismatch,
-                     AttrName,
-                     AttrConstraint#attribute_constraint.attribute}};
-        true ->
-            ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
-            case has_attribute_constraint_name(ExistingForAttr, Name) orelse has_attribute_constraint_name_globally(AttrConstraints, Name) of
-                true ->
-                    {error, {duplicate_constraint_name, Name}};
-                false ->
-                    UpdatedForAttr = [AttrConstraint | ExistingForAttr],
-                    {ok, Constraints#relation_constraints{
-                        attribute_constraints = AttrConstraints#{AttrName => UpdatedForAttr}
-                    }}
-            end
-    end.
+-spec example_order_item_references_constraints() -> #relation_constraints{}.
+example_order_item_references_constraints() ->
+    #relation_constraints{constraints = [
+        {order_item_order_fk, {member_of, order, #{id => {var, order_id}}}},
+        {order_item_product_fk, {member_of, product, #{id => {var, product_id}}}}
+    ]}.
 
--spec remove_attribute_constraint(#relation_constraints{} | undefined, atom(), atom()) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-remove_attribute_constraint(undefined, _AttrName, _ConstraintName) ->
-    {error, constraints_not_defined};
-remove_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
-                            AttrName,
-                            ConstraintName) ->
-    ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
-    case ExistingForAttr of
-        [] ->
-            {error, {attribute_constraint_not_found, AttrName, ConstraintName}};
-        _ ->
-            Remaining = [C || C <- ExistingForAttr,
-                              C#attribute_constraint.name =/= ConstraintName],
-            case length(Remaining) =:= length(ExistingForAttr) of
-                true ->
-                    {error, {attribute_constraint_not_found, AttrName, ConstraintName}};
-                false ->
-                    UpdatedAttrConstraints = case Remaining of
-                        [] -> maps:remove(AttrName, AttrConstraints);
-                        _ -> AttrConstraints#{AttrName => Remaining}
-                    end,
-                    {ok, Constraints#relation_constraints{attribute_constraints = UpdatedAttrConstraints}}
-            end
-    end.
+-spec example_manager_constraints() -> #relation_constraints{}.
+example_manager_constraints() ->
+    #relation_constraints{constraints = [
+        {managed_employee_exists, {member_of, employee, #{id => {var, employee_id}}}},
+        {manager_exists, {member_of, employee, #{id => {var, manager_id}}}},
+        {no_self_management, neq({var, employee_id}, {var, manager_id})}
+    ]}.
 
--spec rename_attribute_constraint(#relation_constraints{} | undefined, atom(), atom(), atom()) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-rename_attribute_constraint(undefined, _AttrName, _OldName, _NewName) ->
-    {error, constraints_not_defined};
-rename_attribute_constraint(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints,
-                            AttrName,
-                            OldName,
-                            NewName) when is_atom(NewName) ->
-    ExistingForAttr = maps:get(AttrName, AttrConstraints, []),
-    case has_attribute_constraint_name_globally(AttrConstraints, NewName) of
-        true when NewName =/= OldName ->
-            {error, {duplicate_constraint_name, NewName}};
-        _ ->
-            {Found, Renamed} = rename_attribute_constraint_in_list(ExistingForAttr, OldName, NewName, false, []),
-            case Found of
-                false ->
-                    {error, {attribute_constraint_not_found, AttrName, OldName}};
-                true ->
-                    {ok, Constraints#relation_constraints{
-                        attribute_constraints = AttrConstraints#{AttrName => Renamed}
-                    }}
-            end
-    end.
+-spec example_ticket_status_exclusive_constraints() -> #{atom() => #relation_constraints{}}.
+example_ticket_status_exclusive_constraints() ->
+    #{
+        open_ticket => #relation_constraints{constraints = [
+            {open_excludes_closed, {'not', {member_of, closed_ticket, #{ticket_id => {var, ticket_id}}}}}
+        ]},
+        closed_ticket => #relation_constraints{constraints = [
+            {closed_excludes_open, {'not', {member_of, open_ticket, #{ticket_id => {var, ticket_id}}}}}
+        ]}
+    }.
 
--spec list_attribute_constraints(#relation_constraints{} | undefined, atom()) -> [#attribute_constraint{}].
-list_attribute_constraints(undefined, _AttrName) ->
-    [];
-list_attribute_constraints(#relation_constraints{attribute_constraints = AttrConstraints}, AttrName) ->
-    lists:reverse(maps:get(AttrName, AttrConstraints, [])).
+-spec example_weak_entity_dependency_constraints() -> #relation_constraints{}.
+example_weak_entity_dependency_constraints() ->
+    #relation_constraints{constraints = [
+        {dependent_person_fk, {member_of, person, #{id => {var, person_id}}}}
+    ]}.
 
-%% @doc Add a tuple constraint to a constraints record.
-%%
-%% Tuple constraints are kept separate for lifecycle management and are
-%% evaluated as an implicit conjunction over the whole list.
--spec add_tuple_constraint(#relation_constraints{} | undefined, #tuple_constraint{}) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-add_tuple_constraint(undefined, #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
-    add_tuple_constraint(empty_constraints(), TupleConstraint);
-add_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints,
-                     #tuple_constraint{name = Name} = TupleConstraint) when is_atom(Name) ->
-    case has_tuple_constraint_name(TupleConstraints, Name) of
-        true ->
-            {error, {duplicate_constraint_name, Name}};
-        false ->
-            {ok, Constraints#relation_constraints{
-                tuple_constraints = [TupleConstraint | TupleConstraints]
-            }}
-    end.
+-spec example_department_has_employee_constraints() -> #relation_constraints{}.
+example_department_has_employee_constraints() ->
+    #relation_constraints{constraints = [
+        {department_has_employee, {member_of, employee_dept, #{dept_id => {var, id}}}}
+    ]}.
 
--spec remove_tuple_constraint(#relation_constraints{} | undefined, atom()) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-remove_tuple_constraint(undefined, _ConstraintName) ->
-    {error, constraints_not_defined};
-remove_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints, ConstraintName) ->
-    Remaining = [C || C <- TupleConstraints, C#tuple_constraint.name =/= ConstraintName],
-    case length(Remaining) =:= length(TupleConstraints) of
-        true ->
-            {error, {tuple_constraint_not_found, ConstraintName}};
-        false ->
-            {ok, Constraints#relation_constraints{tuple_constraints = Remaining}}
-    end.
+-spec example_symmetry_antisymmetry_constraints() -> #{atom() => #relation_constraints{}}.
+example_symmetry_antisymmetry_constraints() ->
+    #{
+        married_to => #relation_constraints{constraints = [
+            {marriage_is_symmetric, {member_of, married_to, #{person_a => {var, person_b}, person_b => {var, person_a}}}}
+        ]},
+        reports_to => #relation_constraints{constraints = [
+            {reports_to_no_self, neq({var, employee_id}, {var, manager_id})},
+            {reports_to_antisymmetric,
+             {'or', [
+                 eq({var, employee_id}, {var, manager_id}),
+                 {'not', {member_of, reports_to,
+                          #{employee_id => {var, manager_id}, manager_id => {var, employee_id}}}}
+             ]}}
+        ]}
+    }.
 
--spec rename_tuple_constraint(#relation_constraints{} | undefined, atom(), atom()) ->
-    {ok, #relation_constraints{}} | {error, term()}.
-rename_tuple_constraint(undefined, _OldName, _NewName) ->
-    {error, constraints_not_defined};
-rename_tuple_constraint(#relation_constraints{tuple_constraints = TupleConstraints} = Constraints,
-                        OldName,
-                        NewName) when is_atom(NewName) ->
-    case has_tuple_constraint_name(TupleConstraints, NewName) andalso NewName =/= OldName of
-        true ->
-            {error, {duplicate_constraint_name, NewName}};
-        false ->
-            {Found, Renamed} = rename_tuple_constraint_in_list(TupleConstraints, OldName, NewName, false, []),
-            case Found of
-                false ->
-                    {error, {tuple_constraint_not_found, OldName}};
-                true ->
-                    {ok, Constraints#relation_constraints{tuple_constraints = Renamed}}
-            end
-    end.
+-spec run_example_supertype_exclusive() -> map().
+run_example_supertype_exclusive() ->
+    main:setup(),
+    DB0 = operations:create_database(example_supertype_exclusive),
+    {DB1, _} = operations:create_relation(DB0, a, #{id => integer}),
+    {DB2, _} = operations:create_relation(DB1, b, #{id => integer}),
+    {DB3, _} = operations:create_relation(DB2, c, #{id => integer}),
+    ConstraintsByRel = example_supertype_exclusive_constraints(),
+    {DB4, _} = operations:update_relation_constraints(DB3, b, maps:get(b, ConstraintsByRel)),
+    {DB5, _} = operations:update_relation_constraints(DB4, c, maps:get(c, ConstraintsByRel)),
+    {DB6, _} = operations:create_tuple(DB5, a, #{id => 1}),
+    InB = operations:create_tuple(DB6, b, #{id => 1}),
+    DBAfterB = db_after(InB),
+    InCWithB = operations:create_tuple(DBAfterB, c, #{id => 1}),
+    {DB7, _} = operations:create_tuple(DBAfterB, a, #{id => 3}),
+    InCWithAAndNoB = operations:create_tuple(DB7, c, #{id => 3}),
+    InCWithoutA = operations:create_tuple(DBAfterB, c, #{id => 2}),
+    #{accepted_in_b => InB,
+      accepted_in_c_with_a_only => InCWithAAndNoB,
+      rejected_c_overlap_b => InCWithB,
+      rejected_c_missing_a => InCWithoutA}.
 
--spec list_tuple_constraints(#relation_constraints{} | undefined) -> [#tuple_constraint{}].
-list_tuple_constraints(undefined) ->
-    [];
-list_tuple_constraints(#relation_constraints{tuple_constraints = TupleConstraints}) ->
-    lists:reverse(TupleConstraints).
+-spec run_example_order_item_references() -> map().
+run_example_order_item_references() ->
+    main:setup(),
+    DB0 = operations:create_database(example_order_item_references),
+    {DB1, _} = operations:create_relation(DB0, order, #{id => integer}),
+    {DB2, _} = operations:create_relation(DB1, product, #{id => integer}),
+    {DB3, _} = operations:create_relation(DB2, order_item, #{order_id => integer, product_id => integer}),
+    {DB4, _} = operations:update_relation_constraints(DB3, order_item, example_order_item_references_constraints()),
+    {DB5, _} = operations:create_tuple(DB4, order, #{id => 10}),
+    {DB6, _} = operations:create_tuple(DB5, product, #{id => 20}),
+    Valid = operations:create_tuple(DB6, order_item, #{order_id => 10, product_id => 20}),
+    DBAfterValid = db_after(Valid),
+    MissingOrder = operations:create_tuple(DBAfterValid, order_item, #{order_id => 999, product_id => 20}),
+    MissingProduct = operations:create_tuple(DBAfterValid, order_item, #{order_id => 10, product_id => 999}),
+    #{accepted_valid_order_item => Valid,
+      rejected_missing_order => MissingOrder,
+      rejected_missing_product => MissingProduct}.
 
-%% @doc Merge two constraint records with AND semantics.
-%%
-%% Merges attribute constraints from both records. For attributes that appear
-%% in both, combines constraints using derive_1op (conjunction).
-%%
-%% @param C1 First #relation_constraints{} or undefined
-%% @param C2 Second #relation_constraints{} or undefined
-%% @returns Merged #relation_constraints{}
+-spec run_example_manager_constraints() -> map().
+run_example_manager_constraints() ->
+    main:setup(),
+    DB0 = operations:create_database(example_manager_constraints),
+    {DB1, _} = operations:create_relation(DB0, employee, #{id => integer}),
+    {DB2, _} = operations:create_relation(DB1, manager_of, #{employee_id => integer, manager_id => integer}),
+    {DB3, _} = operations:update_relation_constraints(DB2, manager_of, example_manager_constraints()),
+    {DB4, _} = operations:create_tuple(DB3, employee, #{id => 1}),
+    {DB5, _} = operations:create_tuple(DB4, employee, #{id => 2}),
+    Valid = operations:create_tuple(DB5, manager_of, #{employee_id => 1, manager_id => 2}),
+    DBAfterValid = db_after(Valid),
+    Self = operations:create_tuple(DBAfterValid, manager_of, #{employee_id => 1, manager_id => 1}),
+    MissingEmployee = operations:create_tuple(DBAfterValid, manager_of, #{employee_id => 3, manager_id => 2}),
+    MissingManager = operations:create_tuple(DBAfterValid, manager_of, #{employee_id => 1, manager_id => 3}),
+    #{accepted_valid_manager_pair => Valid,
+      rejected_self_management => Self,
+      rejected_missing_employee => MissingEmployee,
+      rejected_missing_manager => MissingManager}.
+
+-spec run_example_ticket_status_exclusive() -> map().
+run_example_ticket_status_exclusive() ->
+    main:setup(),
+    DB0 = operations:create_database(example_ticket_status_exclusive),
+    {DB1, _} = operations:create_relation(DB0, open_ticket, #{ticket_id => integer}),
+    {DB2, _} = operations:create_relation(DB1, closed_ticket, #{ticket_id => integer}),
+    ConstraintsByRel = example_ticket_status_exclusive_constraints(),
+    {DB3, _} = operations:update_relation_constraints(DB2, open_ticket, maps:get(open_ticket, ConstraintsByRel)),
+    {DB4, _} = operations:update_relation_constraints(DB3, closed_ticket, maps:get(closed_ticket, ConstraintsByRel)),
+    Open7 = operations:create_tuple(DB4, open_ticket, #{ticket_id => 7}),
+    DBAfterOpen7 = db_after(Open7),
+    Closed7 = operations:create_tuple(DBAfterOpen7, closed_ticket, #{ticket_id => 7}),
+    Closed8 = operations:create_tuple(DBAfterOpen7, closed_ticket, #{ticket_id => 8}),
+    DBAfterClosed8 = db_after(Closed8),
+    Open8 = operations:create_tuple(DBAfterClosed8, open_ticket, #{ticket_id => 8}),
+    #{accepted_open_7 => Open7,
+      rejected_closed_7 => Closed7,
+      accepted_closed_8 => Closed8,
+      rejected_open_8 => Open8}.
+
+-spec run_example_weak_entity_dependency() -> map().
+run_example_weak_entity_dependency() ->
+    main:setup(),
+    DB0 = operations:create_database(example_weak_entity_dependency),
+    {DB1, _} = operations:create_relation(DB0, person, #{id => integer}),
+    {DB2, _} = operations:create_relation(DB1, dependent, #{person_id => integer, dep_name => string}),
+    {DB3, _} = operations:update_relation_constraints(DB2, dependent, example_weak_entity_dependency_constraints()),
+    {DB4, _} = operations:create_tuple(DB3, person, #{id => 1}),
+    Valid = operations:create_tuple(DB4, dependent, #{person_id => 1, dep_name => "kid"}),
+    DBAfterValid = db_after(Valid),
+    MissingParent = operations:create_tuple(DBAfterValid, dependent, #{person_id => 2, dep_name => "kid2"}),
+    #{accepted_existing_parent => Valid,
+      rejected_missing_parent => MissingParent}.
+
+-spec run_example_department_has_employee() -> map().
+run_example_department_has_employee() ->
+    main:setup(),
+    DB0 = operations:create_database(example_department_has_employee),
+    {DB1, _} = operations:create_relation(DB0, employee_dept, #{dept_id => integer, employee_id => integer}),
+    {DB2, _} = operations:create_relation(DB1, department, #{id => integer}),
+    {DB3, _} = operations:update_relation_constraints(DB2, department, example_department_has_employee_constraints()),
+    {DB4, _} = operations:create_tuple(DB3, employee_dept, #{dept_id => 1, employee_id => 99}),
+    Dept1 = operations:create_tuple(DB4, department, #{id => 1}),
+    DBAfterDept1 = db_after(Dept1),
+    Dept2 = operations:create_tuple(DBAfterDept1, department, #{id => 2}),
+    #{accepted_department_with_employee => Dept1,
+      rejected_department_without_employee => Dept2}.
+
+-spec run_example_symmetry_antisymmetry() -> map().
+run_example_symmetry_antisymmetry() ->
+    main:setup(),
+    DB0 = operations:create_database(example_symmetry_antisymmetry),
+    {DB1, _} = operations:create_relation(DB0, married_to, #{person_a => integer, person_b => integer}),
+    {DB2, _} = operations:create_relation(DB1, reports_to, #{employee_id => integer, manager_id => integer}),
+    {DB3, _} = operations:create_tuple(DB2, married_to, #{person_a => 2, person_b => 1}),
+    {DB4, _} = operations:create_tuple(DB3, married_to, #{person_a => 1, person_b => 2}),
+    ConstraintsByRel = example_symmetry_antisymmetry_constraints(),
+    {DB5, _} = operations:update_relation_constraints(DB4, married_to, maps:get(married_to, ConstraintsByRel)),
+    {DB6, _} = operations:update_relation_constraints(DB5, reports_to, maps:get(reports_to, ConstraintsByRel)),
+    MissingReverseMarriage = operations:create_tuple(DB6, married_to, #{person_a => 3, person_b => 4}),
+    AcceptedWithReverse = operations:create_tuple(DB6, married_to, #{person_a => 2, person_b => 1}),
+    Reports12 = operations:create_tuple(DB6, reports_to, #{employee_id => 1, manager_id => 2}),
+    DBAfterReports12 = db_after(Reports12),
+    Reports21 = operations:create_tuple(DBAfterReports12, reports_to, #{employee_id => 2, manager_id => 1}),
+    Reports33 = operations:create_tuple(DBAfterReports12, reports_to, #{employee_id => 3, manager_id => 3}),
+    #{rejected_missing_reverse_marriage => MissingReverseMarriage,
+      accepted_with_existing_reverse_marriage => AcceptedWithReverse,
+      accepted_reports_1_to_2 => Reports12,
+      rejected_reports_2_to_1 => Reports21,
+      rejected_reports_3_to_3 => Reports33}.
+
+-spec run_all_examples() -> map().
+run_all_examples() ->
+    #{
+        supertype_exclusive => run_example_supertype_exclusive(),
+        order_item_references => run_example_order_item_references(),
+        manager_constraints => run_example_manager_constraints(),
+        ticket_status_exclusive => run_example_ticket_status_exclusive(),
+        weak_entity_dependency => run_example_weak_entity_dependency(),
+        department_has_employee => run_example_department_has_employee(),
+        symmetry_antisymmetry => run_example_symmetry_antisymmetry()
+    }.
+
+db_after({DB, _Relation}) -> DB.
+
 -spec merge_constraints(#relation_constraints{} | undefined, #relation_constraints{} | undefined) -> #relation_constraints{}.
-merge_constraints(undefined, undefined) ->
-    empty_constraints();
-merge_constraints(undefined, C2) when is_record(C2, relation_constraints) ->
-    C2;
-merge_constraints(C1, undefined) when is_record(C1, relation_constraints) ->
-    C1;
-merge_constraints(#relation_constraints{attribute_constraints = AttrConstraints1,
-                                        tuple_constraints = TupleConstraints1,
-                                        multi_tuple_constraints = MultiTupleConstraints1},
-                  #relation_constraints{attribute_constraints = AttrConstraints2,
-                                        tuple_constraints = TupleConstraints2,
-                                        multi_tuple_constraints = MultiTupleConstraints2}) ->
-    %% Merge attribute constraints preserving all named constraints and
-    %% rejecting duplicates by name.
-    MergedAttrConstraints = merge_attribute_constraints_map(AttrConstraints1, AttrConstraints2),
-    #relation_constraints{
-        attribute_constraints = MergedAttrConstraints,
-        tuple_constraints = TupleConstraints1 ++ TupleConstraints2,
-        multi_tuple_constraints = MultiTupleConstraints1 ++ MultiTupleConstraints2
-    }.
+merge_constraints(C1, C2) ->
+    N1 = normalize_constraints(C1),
+    N2 = normalize_constraints(C2),
+    #relation_constraints{constraints = N1#relation_constraints.constraints ++ N2#relation_constraints.constraints}.
 
-%% @doc Filter constraints to only keep those for specified attributes.
-%%
-%% Used by PROJECT to drop constraints for attributes that are projected away.
-%%
-%% @param Constraints The #relation_constraints{} or undefined
-%% @param Attrs List of attribute names to keep
-%% @returns Filtered #relation_constraints{}
 -spec filter_constraints(#relation_constraints{} | undefined, [atom()]) -> #relation_constraints{}.
-filter_constraints(undefined, _Attrs) ->
-    empty_constraints();
-filter_constraints(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints, Attrs) ->
-    FilteredAttrConstraints = maps:with(Attrs, AttrConstraints),
-    Constraints#relation_constraints{
-        attribute_constraints = FilteredAttrConstraints
-    }.
+filter_constraints(Constraints, Attrs) ->
+    Normalized = normalize_constraints(Constraints),
+    Keep = [
+        {Name, Formula} || {Name, Formula} <- Normalized#relation_constraints.constraints,
+             lists:all(fun(V) -> lists:member(V, Attrs) end, vars_in_constraint(Formula))
+    ],
+    #relation_constraints{constraints = Keep}.
 
-%% @doc Rename attribute names in constraints according to a mapping.
-%%
-%% Updates both the attribute field in #attribute_constraint{} and any
-%% {var, AttrName} references inside constraint terms. Used by RENAME operator.
-%%
-%% @param Constraints The #relation_constraints{} or undefined
-%% @param RenameMappings Map of #{old_name => new_name}
-%% @returns #relation_constraints{} with renamed attributes
 -spec rename_constraint_attrs(#relation_constraints{} | undefined, map()) -> #relation_constraints{}.
-rename_constraint_attrs(undefined, _RenameMappings) ->
-    empty_constraints();
-rename_constraint_attrs(#relation_constraints{attribute_constraints = AttrConstraints} = Constraints, RenameMappings) ->
-    RenamedAttrConstraints = maps:fold(
-        fun(OldAttr, ConstraintList, Acc) ->
-            NewAttr = maps:get(OldAttr, RenameMappings, OldAttr),
-            RenamedList = [begin
-                               Cs = AttrConstraint#attribute_constraint.constraints,
-                               RenamedConstraints = [rename_vars_in_constraint(C, RenameMappings) || C <- Cs],
-                               AttrConstraint#attribute_constraint{
-                                   attribute = NewAttr,
-                                   constraints = RenamedConstraints
-                               }
-                           end || AttrConstraint <- ConstraintList],
-            Existing = maps:get(NewAttr, Acc, []),
-            Acc#{NewAttr => RenamedList ++ Existing}
-        end,
-        #{},
-        AttrConstraints
-    ),
-    Constraints#relation_constraints{
-        attribute_constraints = RenamedAttrConstraints
-    }.
+rename_constraint_attrs(Constraints, RenameMappings) ->
+    Normalized = normalize_constraints(Constraints),
+    Renamed = [{Name, rename_vars_in_constraint(Formula, RenameMappings)} ||
+               {Name, Formula} <- Normalized#relation_constraints.constraints],
+    #relation_constraints{constraints = Renamed}.
 
-%% @doc Infer constraints from a predicate.
-%%
-%% For opaque function predicates, returns empty constraints (cannot analyze).
-%% For declarative predicate terms, extracts constraint structure and creates
-%% #attribute_constraint{} records using domain information from schema.
-%%
-%% Declarative predicate format:
-%%   {attr, AttrName, Op, Value} - e.g., {attr, age, lt, 50}
-%%   {'and', [Pred1, Pred2, ...]}
-%%   {'or', [Pred1, Pred2, ...]}
-%% @param Predicate The predicate (function or declarative term)
-%% @param Schema The relation schema (for context, maps attr => domain)
-%% @returns Inferred #relation_constraints{}
 -spec infer_constraints_from_pred(term(), map()) -> #relation_constraints{}.
 infer_constraints_from_pred(Predicate, _Schema) when is_function(Predicate) ->
-    %% Opaque function - cannot extract constraints
     empty_constraints();
-infer_constraints_from_pred({attr, AttrName, Op, Value}, Schema) ->
-    %% Declarative constraint on single attribute
-    Constraint = op_to_constraint(Op, Value),
-    Domain = maps:get(AttrName, Schema, undefined),
-    case Domain of
-        undefined ->
-            %% Attribute not in schema - cannot create constraint
-            empty_constraints();
-        _ ->
-            ConstraintName = list_to_atom(atom_to_list(AttrName) ++ "_" ++ atom_to_list(Op)),
-            AttrConstraint = #attribute_constraint{
-                name = ConstraintName,
-                attribute = AttrName,
-                domain = Domain,
-                constraints = [Constraint]
-            },
-            #relation_constraints{
-                attribute_constraints = #{AttrName => [AttrConstraint]},
-                tuple_constraints = [],
-                multi_tuple_constraints = []
-            }
-    end;
+infer_constraints_from_pred({attr, AttrName, Op, Value}, _Schema) ->
+    Name = list_to_atom(atom_to_list(AttrName) ++ "_" ++ atom_to_list(Op)),
+    #relation_constraints{constraints = [{Name, op_to_constraint(Op, AttrName, Value)}]};
 infer_constraints_from_pred({'and', Predicates}, Schema) ->
-    %% Conjunction - merge all constraints
     lists:foldl(
         fun(Pred, Acc) ->
-            PredConstraints = infer_constraints_from_pred(Pred, Schema),
-            merge_constraints(Acc, PredConstraints)
+            merge_constraints(Acc, infer_constraints_from_pred(Pred, Schema))
         end,
         empty_constraints(),
         Predicates
     );
-infer_constraints_from_pred({'or', _Predicates}, _Schema) ->
-    %% Disjunction - cannot easily propagate as attribute-level constraints
-    %% Would need to track as full formula, not per-attribute
-    empty_constraints();
+infer_constraints_from_pred({'or', Predicates}, Schema) ->
+    OrParts = [
+        constraint_from_predicate(P, Schema) || P <- Predicates,
+        constraint_from_predicate(P, Schema) =/= undefined
+    ],
+    case OrParts of
+        [] -> empty_constraints();
+        _ -> #relation_constraints{constraints = [{inferred_or, {'or', OrParts}}]}
+    end;
 infer_constraints_from_pred(_, _Schema) ->
-    %% Unknown format
     empty_constraints().
 
-has_attribute_constraint_name(ConstraintList, Name) ->
-    lists:any(fun(#attribute_constraint{name = N}) -> N =:= Name end, ConstraintList).
+constraint_from_predicate({attr, AttrName, Op, Value}, _Schema) ->
+    op_to_constraint(Op, AttrName, Value);
+constraint_from_predicate({'and', Predicates}, Schema) ->
+    {'and', [C || C <- [constraint_from_predicate(P, Schema) || P <- Predicates], C =/= undefined]};
+constraint_from_predicate({'or', Predicates}, Schema) ->
+    {'or', [C || C <- [constraint_from_predicate(P, Schema) || P <- Predicates], C =/= undefined]};
+constraint_from_predicate(_, _Schema) ->
+    undefined.
 
-has_attribute_constraint_name_globally(AttrConstraints, Name) ->
+op_to_constraint(lt, Attr, Value) -> lt({var, Attr}, Value);
+op_to_constraint(lte, Attr, Value) -> lte({var, Attr}, Value);
+op_to_constraint(gt, Attr, Value) -> gt({var, Attr}, Value);
+op_to_constraint(gte, Attr, Value) -> gte({var, Attr}, Value);
+op_to_constraint(eq, Attr, Value) -> eq({var, Attr}, Value);
+op_to_constraint(neq, Attr, Value) -> neq({var, Attr}, Value);
+op_to_constraint(between, Attr, {Min, Max}) -> {'and', [gte({var, Attr}, Min), lt({var, Attr}, Max)]};
+op_to_constraint(_, _Attr, _Value) -> {'and', []}.
+
+normalize_constraints(undefined) ->
+    empty_constraints();
+normalize_constraints(#relation_constraints{} = Constraints) ->
+    NormalizedEntries = normalize_named_constraints(Constraints#relation_constraints.constraints),
+    assert_unique_constraint_names(NormalizedEntries),
+    Constraints#relation_constraints{constraints = NormalizedEntries};
+normalize_constraints(_) ->
+    empty_constraints().
+
+normalize_named_constraints(Entries) ->
+    [normalize_named_constraint(Entry) || Entry <- Entries].
+
+normalize_named_constraint({Name, Formula}) when is_atom(Name) ->
+    {Name, Formula};
+normalize_named_constraint(InvalidEntry) ->
+    error({invalid_constraint_entry, InvalidEntry}).
+
+assert_unique_constraint_names(NamedConstraints) ->
+    Names = [Name || {Name, _Formula} <- NamedConstraints],
+    case has_duplicates(Names) of
+        true ->
+            error({duplicate_constraint_names, Names});
+        false ->
+            ok
+    end.
+
+has_duplicates([]) ->
+    false;
+has_duplicates([Name | Rest]) ->
+    lists:member(Name, Rest) orelse has_duplicates(Rest).
+
+vars_in_constraint({member_of, _Rel, Binding}) when is_map(Binding) ->
     maps:fold(
-      fun(_Attr, ConstraintList, Acc) ->
-          Acc orelse has_attribute_constraint_name(ConstraintList, Name)
+      fun(_K, V, Acc) ->
+          Acc ++ vars_in_term(V)
       end,
-      false,
-      AttrConstraints).
+      [],
+      Binding);
+vars_in_constraint({'and', Cs}) -> lists:usort(lists:flatmap(fun vars_in_constraint/1, Cs));
+vars_in_constraint({'or', Cs}) -> lists:usort(lists:flatmap(fun vars_in_constraint/1, Cs));
+vars_in_constraint({'not', C}) -> vars_in_constraint(C);
+vars_in_constraint({'not', C, _}) -> vars_in_constraint(C);
+vars_in_constraint({exists, Var, _Rel, C}) -> lists:delete(Var, vars_in_constraint(C));
+vars_in_constraint({forall, Var, _Rel, C}) -> lists:delete(Var, vars_in_constraint(C));
+vars_in_constraint(_) -> [].
 
-has_tuple_constraint_name(TupleConstraints, Name) ->
-    lists:any(fun(#tuple_constraint{name = N}) -> N =:= Name end, TupleConstraints).
+vars_in_term({var, Name}) when is_atom(Name) -> [Name];
+vars_in_term({const, _}) -> [];
+vars_in_term(T) when is_tuple(T) ->
+    lists:flatmap(fun vars_in_term/1, tuple_to_list(T));
+vars_in_term(T) when is_list(T) ->
+    lists:flatmap(fun vars_in_term/1, T);
+vars_in_term(T) when is_map(T) ->
+    maps:fold(fun(_K, V, Acc) -> Acc ++ vars_in_term(V) end, [], T);
+vars_in_term(_) -> [].
 
-rename_attribute_constraint_in_list([], _OldName, _NewName, Found, Acc) ->
-    {Found, lists:reverse(Acc)};
-rename_attribute_constraint_in_list([#attribute_constraint{name = OldName} = C | Rest],
-                                    OldName,
-                                    NewName,
-                                    _Found,
-                                    Acc) ->
-    rename_attribute_constraint_in_list(Rest,
-                                        OldName,
-                                        NewName,
-                                        true,
-                                        [C#attribute_constraint{name = NewName} | Acc]);
-rename_attribute_constraint_in_list([C | Rest], OldName, NewName, Found, Acc) ->
-    rename_attribute_constraint_in_list(Rest, OldName, NewName, Found, [C | Acc]).
-
-rename_tuple_constraint_in_list([], _OldName, _NewName, Found, Acc) ->
-    {Found, lists:reverse(Acc)};
-rename_tuple_constraint_in_list([#tuple_constraint{name = OldName} = C | Rest], OldName, NewName, _Found, Acc) ->
-    rename_tuple_constraint_in_list(Rest, OldName, NewName, true, [C#tuple_constraint{name = NewName} | Acc]);
-rename_tuple_constraint_in_list([C | Rest], OldName, NewName, Found, Acc) ->
-    rename_tuple_constraint_in_list(Rest, OldName, NewName, Found, [C | Acc]).
-
-merge_attribute_constraints_map(AttrConstraints1, AttrConstraints2) ->
-    maps:fold(
-      fun(Attr, ConstraintList2, Acc) ->
-          Existing = maps:get(Attr, Acc, []),
-          ExistingNames = [N || #attribute_constraint{name = N} <- Existing],
-          NewNames = [N || #attribute_constraint{name = N} <- ConstraintList2],
-          case lists:any(fun(Name) -> lists:member(Name, ExistingNames) end, NewNames) of
-              true ->
-                  error({duplicate_constraint_name, Attr, ExistingNames, NewNames});
-              false ->
-                  Acc#{Attr => Existing ++ ConstraintList2}
-          end
-      end,
-      AttrConstraints1,
-      AttrConstraints2).
-
-%% Helper: rename variable references inside a constraint term
 rename_vars_in_constraint({member_of, RelName, Binding}, Mappings) ->
     RenamedBinding = maps:map(
         fun(_K, {var, VarName}) ->
@@ -1405,21 +1012,17 @@ rename_vars_in_constraint({'and', Constraints}, Mappings) ->
     {'and', [rename_vars_in_constraint(C, Mappings) || C <- Constraints]};
 rename_vars_in_constraint({'or', Constraints}, Mappings) ->
     {'or', [rename_vars_in_constraint(C, Mappings) || C <- Constraints]};
+rename_vars_in_constraint({'not', Constraint}, Mappings) ->
+    {'not', rename_vars_in_constraint(Constraint, Mappings)};
 rename_vars_in_constraint({'not', Constraint, Universe}, Mappings) ->
     {'not', rename_vars_in_constraint(Constraint, Mappings), Universe};
+rename_vars_in_constraint({exists, Var, Rel, Constraint}, Mappings) ->
+    {exists, maps:get(Var, Mappings, Var), Rel, rename_vars_in_constraint(Constraint, Mappings)};
+rename_vars_in_constraint({forall, Var, Rel, Constraint}, Mappings) ->
+    {forall, maps:get(Var, Mappings, Var), Rel, rename_vars_in_constraint(Constraint, Mappings)};
 rename_vars_in_constraint(Other, _Mappings) ->
     Other.
 
-op_to_constraint(lt, Value) -> lt({var, value}, Value);
-op_to_constraint(lte, Value) -> lte({var, value}, Value);
-op_to_constraint(gt, Value) -> gt({var, value}, Value);
-op_to_constraint(gte, Value) -> gte({var, value}, Value);
-op_to_constraint(eq, Value) -> eq({var, value}, Value);
-op_to_constraint(neq, Value) -> neq({var, value}, Value);
-op_to_constraint(between, {Min, Max}) -> between(Min, Max);
-op_to_constraint(_, _Value) -> {'and', []}.  % No-op constraint
-
-%% Validate tuple against criteria map
 validate_tuple_against_criteria(Tuple, Criteria) when is_map(Criteria) ->
     maps:fold(
         fun(Attr, Constraint, Acc) ->
@@ -1431,20 +1034,9 @@ validate_tuple_against_criteria(Tuple, Criteria) when is_map(Criteria) ->
 
 validate_attribute(undefined, _) -> false;
 validate_attribute(Value, #{test := Test}) -> Test(#{value => Value});
-validate_attribute(Value, Constraint) when is_function(Constraint, 1) ->
-    Constraint(Value);
+validate_attribute(Value, Constraint) when is_function(Constraint, 1) -> Constraint(Value);
 validate_attribute(_, _) -> true.
 
-%% Check if tuple exists in a mutable relation
-relation_contains(_Tuple, #relation{tree = undefined}) ->
-    false;
-relation_contains(Tuple, #relation{tree = Tree}) ->
-    %% Would need to hash the tuple and check the Merkle tree
-    %% This is a placeholder - actual implementation depends on storage
-    TupleHash = erlang:phash2(Tuple),
-    gb_trees:is_defined(TupleHash, Tree).
-
-%% Apply variable substitution to a binding
 apply_substitution(Binding, Substitution) ->
     maps:map(
         fun(_K, {var, VarName}) ->
@@ -1455,7 +1047,6 @@ apply_substitution(Binding, Substitution) ->
         Binding
     ).
 
-%% Find variables in a binding
 find_variables(Binding) ->
     maps:fold(
         fun(_K, {var, VarName}, Acc) -> [VarName | Acc];
@@ -1465,39 +1056,24 @@ find_variables(Binding) ->
         Binding
     ).
 
-%% Find a substitution that satisfies membership
-find_satisfying_substitution(_Tuple, _Variables, _Relation, _Substitution) ->
-    %% This would require enumeration via generators
-    %% Placeholder for now - full implementation needs generator integration
-    false.
-
-%% Get schema from domain or relation
 get_schema(#domain{schema = S}) -> S;
 get_schema(#relation{schema = S}) -> S.
 
-%% Get name from domain or relation
 get_name(#domain{name = N}) -> N;
 get_name(#relation{name = N}) -> N.
 
-%% Get lineage from relation
 get_lineage(#relation{lineage = L}) -> L;
 get_lineage(#domain{name = N}) -> {base, N}.
 
-%% Check if schemas are compatible (same attributes with compatible domains)
 schemas_compatible(S1, S2) ->
-    %% Schemas are compatible if they have the same structure
     maps:keys(S1) =:= maps:keys(S2).
 
-%% Merge two compatible schemas
 merge_schemas(S1, _S2) ->
-    %% For now, just use the first schema (they should be identical)
     S1.
 
-%% Get cardinality from domain or relation
 get_cardinality(#domain{cardinality = C}) -> C;
 get_cardinality(#relation{cardinality = C}) -> C.
 
-%% Compute cardinality of complement
 complement_cardinality(R, Universe) ->
     RC = get_cardinality(R),
     UC = get_cardinality(Universe),
@@ -1507,22 +1083,20 @@ complement_cardinality(R, Universe) ->
         _ -> UC
     end.
 
-%% Compute cardinality of intersection
 intersection_cardinality(R1, R2) ->
     C1 = get_cardinality(R1),
     C2 = get_cardinality(R2),
     case {C1, C2} of
-        {{finite, N}, _} -> {finite, N};  % Upper bound
-        {_, {finite, M}} -> {finite, M};  % Upper bound
+        {{finite, N}, _} -> {finite, N};
+        {_, {finite, M}} -> {finite, M};
         _ -> min_cardinality(C1, C2)
     end.
 
-%% Compute cardinality of union
 union_cardinality(R1, R2) ->
     C1 = get_cardinality(R1),
     C2 = get_cardinality(R2),
     case {C1, C2} of
-        {{finite, N}, {finite, M}} -> {finite, N + M};  % Upper bound
+        {{finite, N}, {finite, M}} -> {finite, N + M};
         _ -> max_cardinality(C1, C2)
     end.
 
@@ -1539,9 +1113,7 @@ max_cardinality(_, continuum) -> continuum;
 max_cardinality(aleph_zero, _) -> aleph_zero;
 max_cardinality(_, aleph_zero) -> aleph_zero.
 
-%% Evaluate a relational constraint
 evaluate_constraint(Database, {member_of, RelName, Binding}, Context) when is_atom(RelName) ->
-    %% Get the relation from the database using version hash
     BoundBinding = bind_variables(Binding, Context),
     case get_domain_from_db(Database, RelName) of
         {ok, Relation} ->
@@ -1549,19 +1121,15 @@ evaluate_constraint(Database, {member_of, RelName, Binding}, Context) when is_at
         {error, not_found} ->
             {error, {relation_not_found, RelName}}
     end;
-evaluate_constraint(_Database, {member_of, #domain{} = Rel, Binding}, Context) ->
-    %% Inline domain record - no database lookup needed
+evaluate_constraint(_Database, {member_of, #relation{} = Rel, Binding}, Context) ->
     BoundBinding = bind_variables(Binding, Context),
     {ok, member(BoundBinding, Rel)};
-evaluate_constraint(Database, {'not', Constraint, Universe}, Context) ->
+evaluate_constraint(_Database, {member_of, #domain{} = Rel, Binding}, Context) ->
+    BoundBinding = bind_variables(Binding, Context),
+    {ok, member(BoundBinding, Rel)};
+evaluate_constraint(Database, {'not', Constraint, _Universe}, Context) ->
     case evaluate_constraint(Database, Constraint, Context) of
-        {ok, true} -> {ok, false};
-        {ok, false} ->
-            %% Must also be in universe
-            case evaluate_constraint(Database, {member_of, Universe, Context}, Context) of
-                {ok, true} -> {ok, true};
-                _ -> {ok, false}
-            end;
+        {ok, Bool} -> {ok, not Bool};
         Error -> Error
     end;
 evaluate_constraint(Database, {'and', Constraints}, Context) ->
@@ -1592,16 +1160,15 @@ bind_variables(Binding, Context) ->
     maps:map(
         fun(_K, {var, VarName}) ->
             maps:get(VarName, Context, maps:get(value, Context, undefined));
+           (_K, {const, Value}) ->
+            Value;
            (_K, V) ->
             V
         end,
         Binding
     ).
 
-%% @doc Get domain/relation from database by name, using version hash
-%% This replaces the old get_domain/1 function with version-aware lookup
--spec get_domain_from_db(#database_state{}, atom()) ->
-    {ok, #relation{}} | {error, not_found}.
+-spec get_domain_from_db(#database_state{}, atom()) -> {ok, #relation{}} | {error, not_found}.
 get_domain_from_db(Database, DomainName) ->
     case maps:find(DomainName, Database#database_state.relations) of
         {ok, DomainHash} ->
@@ -1610,44 +1177,3 @@ get_domain_from_db(Database, DomainName) ->
         error ->
             {error, not_found}
     end.
-
-example_1op() ->
-    main:setup(),
-    DB = operations:create_database(test_db),
-    maps:keys(DB#database_state.relations),
-    {DB1, _} = operations:create_relation(DB, employees, #{id => integer, name => string, age => integer, salary => integer}),
-    IdConstraint = constraint:create_1op(id_positive, id, integer, [constraint:gt({var, value}, 0)]),
-    AgeConstraint = constraint:create_1op(age_range, age, integer, [constraint:gte({var, value}, 18), constraint:lt({var,value}, 70)]),
-    SalaryConstraint = constraint:create_1op(salary_range, salary, integer, [constraint:between(30000, 200000)]),
-    {ok, C1} = constraint:add_attribute_constraint(undefined, id, IdConstraint),
-    {ok, C2} = constraint:add_attribute_constraint(C1, age, AgeConstraint),
-    {ok, C3} = constraint:add_attribute_constraint(C2, salary, SalaryConstraint),
-    {DB2, _UpdatedRel} = operations:update_relation_constraints(DB1, employees, C3),
-    {DB3, _} = operations:create_tuple(DB2, employees, #{id => 1, name => "Alice", age => 30, salary => 75000}),
-    {DB4, _} = operations:create_tuple(DB3, employees, #{id => -1, name => "Alice", age => 30, salary => 75000}),
-    {_DB5, _} = operations:create_tuple(DB4, employees, #{id => 1, name => "Alice", age => 30, salary => 3005000}).
-
-example_2op() ->
-    main:setup(),
-    DB = operations:create_database(test_db),
-    {DB1, _} = operations:create_relation(DB, employees, #{a => integer, b => integer, c => integer}),
-
-    TupleConstraint = create_2op(a_gt_b_plus_c,
-    [
-        {exists, s, integer,
-         {'and', [
-             {member_of, plus, #{a => {var, b}, b => {var, c}, sum => {var, s}}},
-             {member_of, greater_than, #{left => {var, a}, right => {var, s}}}
-         ]}}
-    ]),
-
-    {ok, Constraints} = add_tuple_constraint(undefined, TupleConstraint),
-    {DB2, _} = operations:update_relation_constraints(DB1, employees, Constraints),
-
-    %% a=10, b=3, c=4 -> exists s=7, so 10 > 7 is true
-    {DB3, _} = operations:create_tuple(DB2, employees, #{a => 10, b => 3, c => 4}),
-
-    %% a=6, b=3, c=4 -> s=7, so 6 > 7 is false
-    Rejected = operations:create_tuple(DB3, employees, #{a => 6, b => 3, c => 4}),
-
-    #{accepted => #{a => 10, b => 3, c => 4}, rejected => Rejected}.

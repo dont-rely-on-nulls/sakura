@@ -586,7 +586,7 @@ compile_to_relation(DB, {materialize, SubPlan}) ->
         name = EphemeralName,
         tree = undefined,
         schema = compute_schema(DB, SubPlan),
-        constraints = #{},
+        constraints = constraint:empty_constraints(),
         cardinality = unknown,
         generator = GeneratorFun,
         membership_criteria = #{},

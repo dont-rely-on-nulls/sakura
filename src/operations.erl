@@ -41,6 +41,7 @@
 -include("../include/operations.hrl").
 -export([
 	 create_database/1,
+	 value_hash/1,
 	 create_relation/3,
 	 create_immutable_relation/2,
 	 update_relation_constraints/3,
@@ -86,6 +87,17 @@
 %% @see create_relation/3
 hash(Value) ->
     crypto:hash(sha256, term_to_binary(Value)).
+
+%% @doc Hash a value using Sakura's canonical content hash.
+%%
+%% Public wrapper around the internal hash function, used by other modules
+%% that need to compare values against stored attribute hashes.
+%%
+%% @param Value Any Erlang term
+%% @returns Binary SHA-256 hash
+-spec value_hash(term()) -> binary().
+value_hash(Value) ->
+    hash(Value).
 
 %% @doc Insert a tuple into a relation and update the database state.
 %%

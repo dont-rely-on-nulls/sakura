@@ -7,7 +7,7 @@
     name,                  % Relation name (atom)
     tree,                  % Merkle tree (mutable only), undefined for immutable/generator-based
     schema,                % #{attribute_name => relation_name}
-    constraints,           % #relation_constraints{} - all constraint types (1OP, 2OP, 3OP)
+    constraints,           % #relation_constraints{} - logical formulas over membership tests
     cardinality,           % {finite, N} | aleph_zero | continuum
     generator,             % Generator function (immutable only), undefined for tree-based
     membership_criteria,   % #{attribute_name => constraint:relational_constraint()} - domain membership test
@@ -27,25 +27,10 @@
     cardinality            % {finite, N} | aleph_zero | continuum
 }).
 
-%% Attribute constraint (1OP - 1st Order Property)
-%% Constrains values of a specific attribute in a relation
--record(attribute_constraint, {
-    name :: atom(),                % Stable identifier for lifecycle ops
-    attribute :: atom(),              % Attribute name (e.g., salary)
-    domain :: atom() | #relation{},   % Domain or relation this attribute draws from
-    constraints :: [term()]           % Additional relational constraints beyond domain membership
-}).
-
--record(tuple_constraint, {
-    name :: atom(),                % Stable identifier for lifecycle ops
-    constraints :: [term()]
-}).
-
-%% Relation constraints - holds all types of constraints for a relation
+%% Relation constraints - unified logical formulas.
+%% Every formula is evaluated as a membership test expression over tuple bindings.
 -record(relation_constraints, {
-    attribute_constraints :: #{atom() => [#attribute_constraint{}]}, % 1OPs - per-attribute named constraints
-    tuple_constraints :: [#tuple_constraint{}],                     % 2OPs - inter-attribute constraints
-    multi_tuple_constraints :: [term()]                             % 3OPs - multi-tuple constraints (future)
+    constraints :: [{atom(), term()}]
 }).
 
 %%% Cardinality Types
