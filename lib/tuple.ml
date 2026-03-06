@@ -3,12 +3,12 @@ module AttributeMap = Map.Make(String)
 type non_materialized = {
   hash : Conventions.Hash.t;
   relation : Conventions.Name.t;
-  attributes : Conventions.Hash.t AttributeMap.t;
+  attributes : Attribute.referenced AttributeMap.t;
 }
 
 type materialized = {
   relation: Conventions.Name.t;
-  attributes: Conventions.AbstractValue.t AttributeMap.t
+  attributes: Attribute.materialized AttributeMap.t
 }
 
 type t = 

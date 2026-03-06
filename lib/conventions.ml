@@ -13,14 +13,6 @@ module Cardinality = struct
 end
 
 module AbstractValue = struct
-  module StringMap = Map.Make(String)
-  type t = {
-    fields: string StringMap.t;
-  }
-  let hash_text value = 
-    let folder (name: string) (value: string) (acc: Hash.t) = 
-      Hash.(hash_text (acc ^ hash_text name ^ hash_text value))
-    in StringMap.fold folder value.fields ""
-  let compare a b = 
-    StringMap.compare String.compare a.fields b.fields
+  type t = Obj.t
+  let hash (elem: t) = Interop.Sha256.compute_hash @@ Marshal.to_bytes elem []
 end

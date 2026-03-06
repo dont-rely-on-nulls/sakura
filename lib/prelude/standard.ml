@@ -10,11 +10,12 @@ let less_than_natural: Relation.t =
       (left, r) in
     match position with
     | Some position -> 
-      let (left: Conventions.AbstractValue.t), (right: Conventions.AbstractValue.t) =
-        let (left_value, right_value) = pair_of_nat position in
-        ({ fields = Conventions.AbstractValue.StringMap.of_list [("value", string_of_int left_value)] }, 
-         { fields = Conventions.AbstractValue.StringMap.of_list [("value", string_of_int right_value)] })
-      in let attributes: Conventions.AbstractValue.t Tuple.AttributeMap.t =
+      let left, right = pair_of_nat position in
+      (* let left: Attribute.t = Attribute.make_materialized ~value: (Obj.magic left) in *)
+      (* let right: Attribute.t = Attribute.make_materialized ~value: (Obj.magic right) in *)
+      let left = Obj.magic left in
+      let right = Obj.magic right in
+      let attributes: Attribute.materialized Tuple.AttributeMap.t =
         Tuple.AttributeMap.of_list [("left", left); ("right", right)]
       in Generator.Value (Tuple.make_materialized ~relation: "less_than" ~attributes: attributes, generator)
     | None -> Error "Cannot produce a randomly enumerated value for less_than over naturals."
