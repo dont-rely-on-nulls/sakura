@@ -3,7 +3,7 @@
 
 (using ctypes 0.3)
 
-(name relational_engine)
+(name sakura)
 
 (generate_opam_files true)
 
@@ -19,7 +19,7 @@
 (documentation https://url/to/documentation)
 
 (package
- (name relational_engine)
+ (name sakura)
  (synopsis "A short synopsis")
  (description "A longer description")
  (depends ocaml dune)

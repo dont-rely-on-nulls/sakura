@@ -3,5 +3,5 @@
  (name main)
  (modules main)
  (libraries relational_engine)
- (package relational_engine)
+ (package sakura)
  (modes byte exe))

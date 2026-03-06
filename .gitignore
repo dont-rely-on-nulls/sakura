@@ -1,0 +1,10 @@
+_build/
+.direnv/
+
+# Nix build/link artifacts
+result
+result-*
+
+# OCaml editor/tooling artifacts
+*.merlin
+.ocamlformat-lock
