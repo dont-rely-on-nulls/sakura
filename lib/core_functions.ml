@@ -1,9 +1,6 @@
-(* open Ctypes *)
-
 module Types = Types_generated
 
 module Functions (F : Ctypes.FOREIGN) = struct
-  (* open F *)
   open Ctypes_static
 
   let os_extension =
