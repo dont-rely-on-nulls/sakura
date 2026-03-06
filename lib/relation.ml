@@ -1,61 +1,25 @@
-module Hash = struct
-  type t = Interop.Sha256.t
-
-  let compare = String.compare
-end
-
-module Name = struct
-  type t = string
-
-  let compare = String.compare
-end
-
 module Tree = struct
-  type t = unit
+  type t = unit (* TODO: Radix Merkle tree here *)
 end
 
-module Schema = struct
-  type t = (string, string) Hashtbl.t
-
-  let create () = Hashtbl.create 16
-end
-
-module RelationConstraints = struct
-  type t = (string * string) list
-end
-
-module Cardinality = struct
-  type t = Finite of int | AlephZero | Continuum
-end
-
-module Generator = struct
-  type result =
-    | Done
-    | Value of (string, string) Hashtbl.t * t
-    | Error of string
-
-  and t = (string, string) Hashtbl.t -> result
-end
-
-module MembershipCriteria = struct
-  type t = (string, string) Hashtbl.t
-
-  let create () = Hashtbl.create 16
+module RelationConstraint = struct
+  type name = string
+  type t = (name * Constraint.t) list
 end
 
 module Provenance = struct
   type t =
     | Undefined
-    | Base of Name.t
+    | Base of Conventions.Name.t
     | Join of t * t
-    | Select of t * MembershipCriteria.t
+    | Select of t * (Tuple.t -> bool)
     | Project of t * string list
     | Take of t * int
 end
 
 module Lineage = struct
   type t =
-    | Base of Name.t
+    | Base of Conventions.Name.t
     | Select of (string -> bool) * t
     | Project of string list * t
     | Join of string * t * t
@@ -66,25 +30,23 @@ module Lineage = struct
 end
 
 type t = {
-  hash : Hash.t;
-  name : Name.t;
+  hash : Conventions.Hash.t option;
+  name : Conventions.Name.t;
   tree : Tree.t option;
-  schema : Schema.t;
-  constraints : RelationConstraints.t;
-  cardinality : Cardinality.t;
+  constraints : RelationConstraint.t option;
+  cardinality : Conventions.Cardinality.t;
   generator : Generator.t option;
-  membership_criteria : MembershipCriteria.t;
+  membership_criteria : Tuple.t -> bool;
   provenance : Provenance.t;
   lineage : Lineage.t;
 }
 
-let make ~hash ~name ~tree ~schema ~constraints ~cardinality ~generator
+let make ~hash ~name ~tree ~constraints ~cardinality ~generator
     ~membership_criteria ~provenance ~lineage =
   {
     hash;
     name;
     tree;
-    schema;
     constraints;
     cardinality;
     generator;
@@ -92,18 +54,3 @@ let make ~hash ~name ~tree ~schema ~constraints ~cardinality ~generator
     provenance;
     lineage;
   }
-
-let compare left right =
-  match Name.compare left.name right.name with
-  | 0 -> Hash.compare left.hash right.hash
-  | n -> n
-
-module Ord = struct
-  type nonrec t = t
-
-  let compare = compare
-end
-
-module Set = Set.Make (Ord)
-module Map = Map.Make (Ord)
-

@@ -1,3 +1,4 @@
+(include_subdirs qualified)
 (library
  (name relational_engine)
  (libraries
@@ -11,9 +12,7 @@
   sexplib)
  (preprocess
   (pps ppx_deriving.show ppx_sexp_conv ppx_protocol_conv))
- (c_library_flags
-  (-L %{env:LIBRELATIONAL_ENGINE_LIB_PATH=})
-  (-lrelational_engine))
+ ;; (c_library_flags -lssl -lcrypto -L %{env:LIBRESSL_LIB_PATH=})
  ;; (foreign_stubs
  ;;  (language cxx)
  ;;  (names merklecpp_stubs)
