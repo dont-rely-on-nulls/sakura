@@ -1,0 +1,12 @@
+* Check if temporary file with the command hash with exists
+To hash the command, we must hash its bytes without the timestamp,
+since it will always vary given it's a transactional time, and add
+instead the commit HEAD of the state of the database.
+
+If such file exists, load the transaction and storage offsets
+alongside the command and attempt to write it as a recovery.
+* Get the transaction offset of the transaction graph file AND storage file
+* Write the offsets to a tmp file
+* Write the command with a flag **flushed** set to false to a tmp file
+* Attempt to execute the command
+* Delete the temporary file

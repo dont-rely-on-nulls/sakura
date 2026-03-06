@@ -1,0 +1,40 @@
+(library
+ (name relational_engine)
+ (libraries
+  ctypes
+  ctypes-foreign
+  data-encoding
+  lwt
+  lwt.unix
+  lwt-exit
+  ppx_protocol_conv_xml_light
+  sexplib)
+ (preprocess
+  (pps ppx_deriving.show ppx_sexp_conv ppx_protocol_conv))
+ (c_library_flags
+  (-L %{env:LIBRELATIONAL_ENGINE_LIB_PATH=})
+  (-lrelational_engine))
+ ;; (foreign_stubs
+ ;;  (language cxx)
+ ;;  (names merklecpp_stubs)
+ ;;  (flags
+ ;;   (:standard -lssl -lcrypto)
+ ;;   (-L %{env:LIBRESSL_LIB_PATH=})
+ ;;   (-I %{env:LIBRESSL_INCLUDE_PATH=})
+ ;;   (-I %{env:MERKLECPP_INCLUDE_PATH=})))
+ (ctypes
+  (external_library_name relational_engine)
+  (headers
+   (include %{env:LIBRELATIONAL_ENGINE_INCLUDE_PATH=}/library.h))
+  (build_flags_resolver
+   (vendored
+    (c_flags -L %{env:LIBRELATIONAL_ENGINE_LIB_PATH=})))
+  (type_description
+   (instance Types)
+   (functor core_types))
+  (function_description
+   (concurrency unlocked)
+   (instance Functions)
+   (functor core_functions))
+  (generated_types Types_generated)
+  (generated_entry_point C)))
