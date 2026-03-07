@@ -45,9 +45,7 @@ let build_membership_criteria _schema : (Tuple.t -> bool) =
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
 
-  (* ============================================================================
-     State Persistence - Store relation and database states
-     ============================================================================ *)
+  (* State Persistence - Store relation and database states *)
 
   (** Store a relation state to storage *)
   let store_relation (storage : storage) (relation : Relation.t) : (unit, error) Result.t =
@@ -155,34 +153,11 @@ module Make (Storage : Management.Physical.S) = struct
           timestamp = stored.timestamp;
         })
 
-  (* ============================================================================
-     Database Operations
-     ============================================================================ *)
-
-  (** Register a domain in the database.  Can be called after [create_database]
-      to add user-defined domains (e.g. [money], [email], [uuid]). *)
-  let register_domain (db : Management.Database.t) (domain : Domain.t)
-    : Management.Database.t =
-    Management.Database.add_domain db domain
-
-  (** Create a new database pre-seeded with the standard prelude domains. *)
-  let create_database ~name : Management.Database.t =
-    let seed domains db =
-      List.fold_left Management.Database.add_domain db domains
-    in
-    Management.Database.empty ~name
-    |> seed Prelude.Domains.[integer; natural; rational; string]
-
-  (** Get database history *)
-  let database_history (db : Management.Database.t) : Conventions.Hash.t list =
-    db.history
-
-  (* ============================================================================
-     Relation Operations
-     ============================================================================ *)
+  (*   Relation Operations - forward declarations needed by catalog helpers
+      *)
 
   (** Create a new empty relation with the given schema *)
-  let create_relation
+  let create_relation_raw
       (storage : storage)
       (db : Management.Database.t)
       ~(name : string)
@@ -206,93 +181,11 @@ module Make (Storage : Management.Physical.S) = struct
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
-      (* Persist relation and database state *)
       match store_relation storage relation with
       | Error e -> Error e
-      | Ok () ->
-        match store_database storage new_db with
-        | Error e -> Error e
-        | Ok () -> Ok (new_db, relation)
+      | Ok () -> Ok (new_db, relation)
 
-  (** Create an immutable/generator-based relation *)
-  let create_immutable_relation
-      (storage : storage)
-      (db : Management.Database.t)
-      ~(name : string)
-      ~(schema : Schema.t)
-      ~(generator : Generator.t)
-      ~(membership_criteria : Tuple.t -> bool)
-      ~(cardinality : Conventions.Cardinality.t)
-    : (Management.Database.t * Relation.t) result =
-    if Management.Database.has_relation db name then
-      Error (RelationAlreadyExists name)
-    else
-      let relation_hash = Hashing.hash_relation ~name ~schema ~tree:Merkle.empty in
-      let relation = Relation.make
-          ~hash:(Some relation_hash)
-          ~name
-          ~schema
-          ~tree:None  (* No tree for generator-based relations *)
-          ~constraints:None
-          ~cardinality
-          ~generator:(Some generator)
-          ~membership_criteria
-          ~provenance:(build_base_provenance schema name)
-          ~lineage:(Relation.Lineage.Base name)
-      in
-      let new_db = Management.Database.add_relation db ~relation in
-      (* Persist relation and database state *)
-      match store_relation storage relation with
-      | Error e -> Error e
-      | Ok () ->
-        match store_database storage new_db with
-        | Error e -> Error e
-        | Ok () -> Ok (new_db, relation)
-
-  (** Remove a relation from the database *)
-  let retract_relation
-      (storage : storage)
-      (db : Management.Database.t)
-      ~(name : string)
-    : Management.Database.t result =
-    if not (Management.Database.has_relation db name) then
-      Error (RelationNotFound name)
-    else
-      let new_db = Management.Database.remove_relation db ~name in
-      (* Persist database state *)
-      match store_database storage new_db with
-      | Error e -> Error e
-      | Ok () -> Ok new_db
-
-  (** Clear all tuples from a relation (truncate) *)
-  let clear_relation
-      (storage : storage)
-      (db : Management.Database.t)
-      (relation : Relation.t)
-    : (Management.Database.t * Relation.t) result =
-    let name = relation.name in
-    match Management.Database.get_relation db name with
-    | None -> Error (RelationNotFound name)
-    | Some _ ->
-      let new_tree = Merkle.empty in
-      let new_hash = Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree in
-      let new_relation = { relation with
-        hash = Some new_hash;
-        tree = Some new_tree;
-        cardinality = Conventions.Cardinality.Finite 0;
-      } in
-      let new_db = Management.Database.update_relation db ~relation:new_relation in
-      (* Persist relation and database state *)
-      match store_relation storage new_relation with
-      | Error e -> Error e
-      | Ok () ->
-        match store_database storage new_db with
-        | Error e -> Error e
-        | Ok () -> Ok (new_db, new_relation)
-
-  (* ============================================================================
-     Tuple Operations - Storage Integrated
-     ============================================================================ *)
+  (* Tuple Operations - Storage Integrated *)
 
   (** Store each attribute value and return map of attr_name -> attr_hash *)
   let store_attributes
@@ -498,9 +391,340 @@ module Make (Storage : Management.Physical.S) = struct
             | Error e -> Error e
             | Ok () -> Ok (new_db, new_relation)
 
-  (* ============================================================================
-     Query Operations
-     ============================================================================ *)
+  (* 
+     System Catalog Maintenance
+      *)
+
+  (** Update catalog when a new user relation is created.
+      Skipped if the relation being created is itself a catalog relation. *)
+  let update_catalog_on_create
+      (storage : storage)
+      (db : Management.Database.t)
+      (relation : Relation.t)
+    : (Management.Database.t, error) Result.t =
+    if Prelude.Catalog.is_catalog_relation relation.name then
+      Ok db
+    else
+      (* Insert into sakura:relation *)
+      match Management.Database.get_relation db Prelude.Catalog.relation_rel_name with
+      | None -> Ok db  (* catalog not yet initialized *)
+      | Some rel_cat ->
+        let rel_tuple = Prelude.Catalog.build_relation_tuple relation.name in
+        match create_tuple storage db rel_cat rel_tuple with
+        | Error e -> Error e
+        | Ok (db, _, _) ->
+          (* Insert into sakura:attribute for each schema entry *)
+          match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
+          | None -> Ok db
+          | Some attr_cat ->
+            let attr_tuples =
+              Prelude.Catalog.build_attribute_tuples
+                ~relation_name:relation.name relation.schema
+            in
+            match create_tuples storage db attr_cat attr_tuples with
+            | Error e -> Error e
+            | Ok (db, _, _) -> Ok db
+
+  (** Update catalog when a user relation is retracted.
+      Skipped if the relation being retracted is itself a catalog relation. *)
+  let update_catalog_on_retract
+      (storage : storage)
+      (db : Management.Database.t)
+      (relation : Relation.t)
+    : (Management.Database.t, error) Result.t =
+    if Prelude.Catalog.is_catalog_relation relation.name then
+      Ok db
+    else
+      (* Remove the tuple from sakura:relation *)
+      let step1 db =
+        match Management.Database.get_relation db Prelude.Catalog.relation_rel_name with
+        | None -> Ok db
+        | Some rel_cat ->
+          let rel_tuple_hash =
+            Hashing.hash_tuple (Prelude.Catalog.build_relation_tuple relation.name)
+          in
+          let tree = match rel_cat.tree with Some t -> t | None -> Merkle.empty in
+          if Merkle.member rel_tuple_hash tree then
+            match retract_tuple storage db rel_cat ~tuple_hash:rel_tuple_hash with
+            | Error e -> Error e
+            | Ok (new_db, _) -> Ok new_db
+          else
+            Ok db
+      in
+      match step1 db with
+      | Error e -> Error e
+      | Ok db ->
+        (* Remove attribute tuples for this relation from sakura:attribute *)
+        let attr_tuples =
+          Prelude.Catalog.build_attribute_tuples
+            ~relation_name:relation.name relation.schema
+        in
+        let rec remove_attrs db = function
+          | [] -> Ok db
+          | tup :: rest ->
+            let tup_hash = Hashing.hash_tuple tup in
+            match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
+            | None -> Ok db
+            | Some attr_cat ->
+              let tree = match attr_cat.tree with Some t -> t | None -> Merkle.empty in
+              if Merkle.member tup_hash tree then
+                match retract_tuple storage db attr_cat ~tuple_hash:tup_hash with
+                | Error e -> Error e
+                | Ok (new_db, _) -> remove_attrs new_db rest
+              else
+                remove_attrs db rest
+        in
+        remove_attrs db attr_tuples
+
+  (** Bootstrap the 6 system catalog relations into a fresh database.
+      Called only from [create_database]; suppresses recursive catalog updates. *)
+  let init_catalog_relations
+      (storage : storage)
+      (db : Management.Database.t)
+    : (Management.Database.t, error) Result.t =
+    (* Step 1: Create all 6 catalog relations bypassing catalog maintenance *)
+    let rec create_all db = function
+      | [] -> Ok db
+      | (name, schema) :: rest ->
+        match create_relation_raw storage db ~name ~schema with
+        | Error e -> Error e
+        | Ok (new_db, _) -> create_all new_db rest
+    in
+    match create_all db Prelude.Catalog.catalog_definitions with
+    | Error e -> Error e
+    | Ok db ->
+      (* Step 5: Seed sakura:relation with one tuple per catalog relation name *)
+      let rel_cat =
+        Option.get (Management.Database.get_relation db Prelude.Catalog.relation_rel_name)
+      in
+      let rel_tuples =
+        List.map Prelude.Catalog.build_relation_tuple Prelude.Catalog.catalog_relation_names
+      in
+      match create_tuples storage db rel_cat rel_tuples with
+      | Error e -> Error e
+      | Ok (db, _, _) ->
+        (* Step 6: Seed sakura:attribute with attribute tuples for each catalog relation *)
+        let all_attr_tuples =
+          List.concat_map (fun (name, schema) ->
+            Prelude.Catalog.build_attribute_tuples ~relation_name:name schema
+          ) Prelude.Catalog.catalog_definitions
+        in
+        let attr_cat =
+          Option.get (Management.Database.get_relation db Prelude.Catalog.attribute_rel_name)
+        in
+        match create_tuples storage db attr_cat all_attr_tuples with
+        | Error e -> Error e
+        | Ok (db, _, _) ->
+          (* Step 7: Seed sakura:on with insert, update, delete *)
+          let on_cat =
+            Option.get (Management.Database.get_relation db Prelude.Catalog.on_rel_name)
+          in
+          let on_tuples =
+            List.map Prelude.Catalog.build_on_tuple ["insert"; "update"; "delete"]
+          in
+          match create_tuples storage db on_cat on_tuples with
+          | Error e -> Error e
+          | Ok (db, _, _) ->
+            (* Step 8: Seed sakura:timing with immediate, deferred *)
+            let timing_cat =
+              Option.get (Management.Database.get_relation db Prelude.Catalog.timing_rel_name)
+            in
+            let timing_tuples =
+              List.map Prelude.Catalog.build_timing_tuple ["immediate"; "deferred"]
+            in
+            match create_tuples storage db timing_cat timing_tuples with
+            | Error e -> Error e
+            | Ok (db, _, _) ->
+              (* Step 9: Seed sakura:domain with the 4 prelude domain names *)
+              let dom_cat =
+                Option.get (Management.Database.get_relation db Prelude.Catalog.domain_rel_name)
+              in
+              let dom_tuples =
+                List.map Prelude.Catalog.build_domain_tuple
+                  ["integer"; "natural"; "rational"; "string"]
+              in
+              match create_tuples storage db dom_cat dom_tuples with
+              | Error e -> Error e
+              | Ok (db, _, _) -> Ok db
+
+  (* 
+     Database Operations
+      *)
+
+  (** Register a domain in the database.  Can be called after [create_database]
+      to add user-defined domains (e.g. [money], [email], [uuid]).
+      Also inserts a tuple into [sakura:domain] if the catalog is live. *)
+  let register_domain
+      (storage : storage)
+      (db : Management.Database.t)
+      (domain : Domain.t)
+    : (Management.Database.t, error) Result.t =
+    let db = Management.Database.add_domain db domain in
+    match Management.Database.get_relation db Prelude.Catalog.domain_rel_name with
+    | None -> Ok db  (* catalog not yet initialized *)
+    | Some dom_cat ->
+      let dom_tuple = Prelude.Catalog.build_domain_tuple domain.name in
+      match create_tuple storage db dom_cat dom_tuple with
+      | Error e -> Error e
+      | Ok (new_db, _, _) -> Ok new_db
+
+  (** Create a new database pre-seeded with the standard prelude domains and
+      the system catalog relations. *)
+  let create_database (storage : storage) ~name
+    : (Management.Database.t, error) Result.t =
+    (* Register prelude domains first (catalog does not exist yet, so no catalog update) *)
+    let db =
+      List.fold_left
+        Management.Database.add_domain
+        (Management.Database.empty ~name)
+        Prelude.Domains.[integer; natural; rational; string]
+    in
+    (* Bootstrap catalog relations and seed them *)
+    init_catalog_relations storage db
+
+  (** Get database history *)
+  let database_history (db : Management.Database.t) : Conventions.Hash.t list =
+    db.history
+
+  (* 
+     Relation Operations
+      *)
+
+  (** Create a new empty relation with the given schema.
+      Also updates [sakura:relation] and [sakura:attribute] in the system catalog. *)
+  let create_relation
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(name : string)
+      ~(schema : Schema.t)
+    : (Management.Database.t * Relation.t) result =
+    if Management.Database.has_relation db name then
+      Error (RelationAlreadyExists name)
+    else
+      let tree = Merkle.empty in
+      let relation_hash = Hashing.hash_relation ~name ~schema ~tree in
+      let relation = Relation.make
+          ~hash:(Some relation_hash)
+          ~name
+          ~schema
+          ~tree:(Some tree)
+          ~constraints:None
+          ~cardinality:(Conventions.Cardinality.Finite 0)
+          ~generator:None
+          ~membership_criteria:(build_membership_criteria schema)
+          ~provenance:(build_base_provenance schema name)
+          ~lineage:(Relation.Lineage.Base name)
+      in
+      let new_db = Management.Database.add_relation db ~relation in
+      match store_relation storage relation with
+      | Error e -> Error e
+      | Ok () ->
+        (* Update catalog (handles its own store_database calls internally) *)
+        match update_catalog_on_create storage new_db relation with
+        | Error e -> Error e
+        | Ok final_db ->
+          (* Persist final database state *)
+          match store_database storage final_db with
+          | Error e -> Error e
+          | Ok () -> Ok (final_db, relation)
+
+  (** Create an immutable/generator-based relation *)
+  let create_immutable_relation
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(name : string)
+      ~(schema : Schema.t)
+      ~(generator : Generator.t)
+      ~(membership_criteria : Tuple.t -> bool)
+      ~(cardinality : Conventions.Cardinality.t)
+    : (Management.Database.t * Relation.t) result =
+    if Management.Database.has_relation db name then
+      Error (RelationAlreadyExists name)
+    else
+      let relation_hash = Hashing.hash_relation ~name ~schema ~tree:Merkle.empty in
+      let relation = Relation.make
+          ~hash:(Some relation_hash)
+          ~name
+          ~schema
+          ~tree:None  (* No tree for generator-based relations *)
+          ~constraints:None
+          ~cardinality
+          ~generator:(Some generator)
+          ~membership_criteria
+          ~provenance:(build_base_provenance schema name)
+          ~lineage:(Relation.Lineage.Base name)
+      in
+      let new_db = Management.Database.add_relation db ~relation in
+      (* Persist relation and database state *)
+      match store_relation storage relation with
+      | Error e -> Error e
+      | Ok () ->
+        match store_database storage new_db with
+        | Error e -> Error e
+        | Ok () -> Ok (new_db, relation)
+
+  (** Remove a relation from the database.
+      Also removes its entries from [sakura:relation] and [sakura:attribute]. *)
+  let retract_relation
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(name : string)
+    : Management.Database.t result =
+    if not (Management.Database.has_relation db name) then
+      Error (RelationNotFound name)
+    else
+      let relation = Option.get (Management.Database.get_relation db name) in
+      let new_db = Management.Database.remove_relation db ~name in
+      (* Update catalog on the db state that no longer contains the retracted relation *)
+      match update_catalog_on_retract storage new_db relation with
+      | Error e -> Error e
+      | Ok final_db ->
+        match store_database storage final_db with
+        | Error e -> Error e
+        | Ok () -> Ok final_db
+
+  (** Clear all tuples from a relation (truncate) *)
+  let clear_relation
+      (storage : storage)
+      (db : Management.Database.t)
+      (relation : Relation.t)
+    : (Management.Database.t * Relation.t) result =
+    let name = relation.name in
+    match Management.Database.get_relation db name with
+    | None -> Error (RelationNotFound name)
+    | Some _ ->
+      let new_tree = Merkle.empty in
+      let new_hash = Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree in
+      let new_relation = { relation with
+        hash = Some new_hash;
+        tree = Some new_tree;
+        cardinality = Conventions.Cardinality.Finite 0;
+      } in
+      let new_db = Management.Database.update_relation db ~relation:new_relation in
+      (* Persist relation and database state *)
+      match store_relation storage new_relation with
+      | Error e -> Error e
+      | Ok () ->
+        match store_database storage new_db with
+        | Error e -> Error e
+        | Ok () -> Ok (new_db, new_relation)
+
+  (** Register a named constraint on a relation in the system catalog. *)
+  let register_constraint
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(constraint_name : string)
+      ~(relation_name : string)
+    : (Management.Database.t, error) Result.t =
+    match Management.Database.get_relation db Prelude.Catalog.constraint_rel_name with
+    | None -> Ok db  (* catalog not initialized *)
+    | Some con_cat ->
+      let con_tuple = Prelude.Catalog.build_constraint_tuple constraint_name relation_name in
+      match create_tuple storage db con_cat con_tuple with
+      | Error e -> Error e
+      | Ok (new_db, _, _) -> Ok new_db
+
+  (*Query Operations *)
 
   (** Get all tuple hashes from a relation *)
   let tuple_hashes (relation : Relation.t) : Conventions.Hash.t list =

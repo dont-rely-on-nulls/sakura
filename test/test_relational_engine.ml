@@ -264,12 +264,16 @@ let with_storage f =
     result
 
 let%test_unit "manipulation: create database" =
-  let db = Manipulation.Memory.create_database ~name:"my_db" in
-  assert (db.name = "my_db")
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"my_db" with
+    | Error _ -> assert false
+    | Ok db -> assert (db.name = "my_db"))
 
 let%test_unit "manipulation: create relation" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "name" "string"
       |> Schema.add "age" "integer" in
@@ -282,7 +286,9 @@ let%test_unit "manipulation: create relation" =
 
 let%test_unit "manipulation: create relation already exists" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
     match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
     | Error _ -> assert false
@@ -293,7 +299,9 @@ let%test_unit "manipulation: create relation already exists" =
 
 let%test_unit "manipulation: retract relation" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
     match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
     | Error _ -> assert false
@@ -306,7 +314,9 @@ let%test_unit "manipulation: retract relation" =
 
 let%test_unit "manipulation: create tuple with storage" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "name" "string" in
     match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
@@ -322,7 +332,9 @@ let%test_unit "manipulation: create tuple with storage" =
 
 let%test_unit "manipulation: create and load tuple" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "value" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"numbers" ~schema with
@@ -345,7 +357,9 @@ let%test_unit "manipulation: create and load tuple" =
 
 let%test_unit "manipulation: create multiple tuples with storage" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "id" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"items" ~schema with
@@ -365,7 +379,9 @@ let%test_unit "manipulation: create multiple tuples with storage" =
 
 let%test_unit "manipulation: load multiple tuples" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "n" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"test" ~schema with
@@ -392,7 +408,9 @@ let%test_unit "manipulation: load multiple tuples" =
 
 let%test_unit "manipulation: retract tuple" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "value" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"numbers" ~schema with
@@ -417,7 +435,9 @@ let%test_unit "manipulation: retract tuple" =
 
 let%test_unit "manipulation: tuple hashes" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
     match Manipulation.Memory.create_relation storage db ~name:"test" ~schema with
     | Error _ -> assert false
@@ -435,7 +455,9 @@ let%test_unit "manipulation: tuple hashes" =
 
 let%test_unit "manipulation: clear relation" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
     match Manipulation.Memory.create_relation storage db ~name:"test" ~schema with
     | Error _ -> assert false
@@ -456,7 +478,9 @@ let%test_unit "manipulation: clear relation" =
 
 let%test_unit "manipulation: duplicate tuple rejected" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "x" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"test" ~schema with
@@ -475,7 +499,9 @@ let%test_unit "manipulation: duplicate tuple rejected" =
 
 let%test_unit "manipulation: tuple_exists check" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
     match Manipulation.Memory.create_relation storage db ~name:"test" ~schema with
     | Error _ -> assert false
@@ -515,7 +541,9 @@ let%test_unit "manipulation: different tuples different hashes" =
 
 let%test_unit "manipulation: get_relation from database" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "id" "integer" in
     match Manipulation.Memory.create_relation storage db ~name:"items" ~schema with
@@ -534,7 +562,9 @@ let%test_unit "manipulation: get_relation from database" =
 
 let%test_unit "schema: persisted and loaded correctly" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test_db" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty
       |> Schema.add "id" "integer"
       |> Schema.add "name" "string"
@@ -556,13 +586,143 @@ let%test_unit "schema: persisted and loaded correctly" =
         assert (List.mem ("email", "string") loaded_rel.schema))
 
 (* ============================================================================
+   System Catalog Tests
+   ============================================================================ *)
+
+let%test_unit "catalog: create_database seeds 6 catalog relations" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let catalog_names = Prelude.Catalog.catalog_relation_names in
+      List.iter (fun name ->
+        assert (Management.Database.has_relation db name)
+      ) catalog_names)
+
+let%test_unit "catalog: sakura:relation contains all 6 catalog names" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Manipulation.Memory.get_relation db ~name:"sakura:relation" with
+        | None -> assert false
+        | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count rel = 6))
+
+let%test_unit "catalog: sakura:on contains insert, update, delete" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let on_rel = match Manipulation.Memory.get_relation db ~name:"sakura:on" with
+        | None -> assert false
+        | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count on_rel = 3))
+
+let%test_unit "catalog: sakura:timing contains immediate, deferred" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let timing_rel = match Manipulation.Memory.get_relation db ~name:"sakura:timing" with
+        | None -> assert false
+        | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count timing_rel = 2))
+
+let%test_unit "catalog: sakura:domain seeded with 4 prelude domains" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let dom_rel = match Manipulation.Memory.get_relation db ~name:"sakura:domain" with
+        | None -> assert false
+        | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count dom_rel = 4))
+
+let%test_unit "catalog: create_relation updates sakura:relation" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let schema = Schema.empty |> Schema.add "id" "natural" in
+      let db = match Manipulation.Memory.create_relation storage db ~name:"employees" ~schema with
+        | Error _ -> assert false | Ok (db, _) -> db
+      in
+      let rel = match Manipulation.Memory.get_relation db ~name:"sakura:relation" with
+        | None -> assert false | Some r -> r
+      in
+      (* 6 catalog relations + 1 user relation *)
+      assert (Manipulation.Memory.tuple_count rel = 7))
+
+let%test_unit "catalog: create_relation updates sakura:attribute" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let schema = Schema.empty |> Schema.add "id" "natural" in
+      let db = match Manipulation.Memory.create_relation storage db ~name:"employees" ~schema with
+        | Error _ -> assert false | Ok (db, _) -> db
+      in
+      let attr_rel = match Manipulation.Memory.get_relation db ~name:"sakura:attribute" with
+        | None -> assert false | Some r -> r
+      in
+      (* catalog attribute tuples (sum of schema sizes of all 6 catalog relations) + 1 for employees *)
+      (* sakura:relation: 1, sakura:domain: 1, sakura:attribute: 3, sakura:constraint: 2,
+         sakura:on: 1, sakura:timing: 1  => 9 catalog attrs + 1 for employees = 10 *)
+      let count = Manipulation.Memory.tuple_count attr_rel in
+      assert (count = 10))
+
+let%test_unit "catalog: retract_relation removes from sakura:relation" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let schema = Schema.empty |> Schema.add "id" "natural" in
+      let db = match Manipulation.Memory.create_relation storage db ~name:"employees" ~schema with
+        | Error _ -> assert false | Ok (db, _) -> db
+      in
+      let db = match Manipulation.Memory.retract_relation storage db ~name:"employees" with
+        | Error _ -> assert false | Ok db -> db
+      in
+      let rel = match Manipulation.Memory.get_relation db ~name:"sakura:relation" with
+        | None -> assert false | Some r -> r
+      in
+      (* Back to 6 catalog relations *)
+      assert (Manipulation.Memory.tuple_count rel = 6))
+
+let%test_unit "catalog: register_constraint inserts into sakura:constraint" =
+  with_storage (fun storage ->
+    match Manipulation.Memory.create_database storage ~name:"test" with
+    | Error _ -> assert false
+    | Ok db ->
+      let schema = Schema.empty |> Schema.add "id" "natural" in
+      let db = match Manipulation.Memory.create_relation storage db ~name:"orders" ~schema with
+        | Error _ -> assert false | Ok (db, _) -> db
+      in
+      let db = match Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"orders_id_positive"
+          ~relation_name:"orders" with
+        | Error _ -> assert false | Ok db -> db
+      in
+      let con_rel = match Manipulation.Memory.get_relation db ~name:"sakura:constraint" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count con_rel = 1))
+
+(* ============================================================================
    Integration Tests
    ============================================================================ *)
 
 let%test_unit "integration: full workflow with storage" =
   with_storage (fun storage ->
     (* Create database *)
-    let db = Manipulation.Memory.create_database ~name:"shop" in
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
 
     (* Create products relation *)
     let schema = Schema.empty
@@ -627,7 +787,9 @@ let%test_unit "integration: full workflow with storage" =
 
 let%test_unit "integration: database history tracking" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"versioned" in
+    let db = match Manipulation.Memory.create_database storage ~name:"versioned" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let initial_hash = db.hash in
 
     let schema = Schema.empty in
@@ -638,7 +800,6 @@ let%test_unit "integration: database history tracking" =
 
     (* After first change, initial hash should be in history *)
     assert (db.hash <> initial_hash);
-    (* Note: empty initial hash ("") is not added to history *)
 
     let hash_after_rel1 = db.hash in
 
@@ -653,7 +814,9 @@ let%test_unit "integration: database history tracking" =
 
 let%test_unit "integration: hash bubbles up correctly" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
 
     let (db, relation) = match Manipulation.Memory.create_relation storage db ~name:"items" ~schema with
@@ -695,7 +858,9 @@ let%test_unit "integration: hash bubbles up correctly" =
 
 let%test_unit "branching: load database from historical hash" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
 
     (* Create relation and add a tuple *)
@@ -751,7 +916,9 @@ let%test_unit "branching: load database from historical hash" =
 
 let%test_unit "branching: branch from historical state" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"test" in
+    let db = match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
 
     (* Create relation *)
@@ -826,7 +993,9 @@ let%test_unit "branching: branch from historical state" =
 
 let%test_unit "branching: full reconstruction from hash" =
   with_storage (fun storage ->
-    let db = Manipulation.Memory.create_database ~name:"shop" in
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
     let schema = Schema.empty in
 
     (* Create relation *)
