@@ -21,9 +21,10 @@ let less_than_natural: Relation.t =
             in let right = Tuple.AttributeMap.find "right" materialized.attributes
             in left < right
         | Tuple.NonMaterialized _non_materialized -> false (* TODO: Handle references later *)
-  in Relation.make 
+  in Relation.make
     ~hash: None
     ~name: "natural_natural_less_than"
+    ~schema: (Schema.empty |> Schema.add "left" "natural" |> Schema.add "right" "natural")
     ~tree: None
     ~constraints: None
     ~cardinality: Conventions.Cardinality.AlephZero

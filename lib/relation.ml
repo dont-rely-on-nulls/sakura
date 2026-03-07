@@ -1,6 +1,5 @@
-module Tree = struct
-  type t = unit (* TODO: Radix Merkle tree here *)
-end
+(** Use the Merkle module for tuple hash storage *)
+module Tree = Merkle
 
 module RelationConstraint = struct
   type name = string
@@ -32,6 +31,7 @@ end
 type t = {
   hash : Conventions.Hash.t option;
   name : Conventions.Name.t;
+  schema : Schema.t;
   tree : Tree.t option;
   constraints : RelationConstraint.t option;
   cardinality : Conventions.Cardinality.t;
@@ -41,11 +41,12 @@ type t = {
   lineage : Lineage.t;
 }
 
-let make ~hash ~name ~tree ~constraints ~cardinality ~generator
+let make ~hash ~name ~schema ~tree ~constraints ~cardinality ~generator
     ~membership_criteria ~provenance ~lineage =
   {
     hash;
     name;
+    schema;
     tree;
     constraints;
     cardinality;

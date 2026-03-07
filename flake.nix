@@ -81,7 +81,7 @@
           default = self.packages.${system}.relational_engine;
 
           relational_engine = ocamlPackages.buildDunePackage {
-            pname = "relational_engine";
+            pname = "sakura";
             version = "0.1.0";
             duneVersion = "3";
             src = sources.ocaml;

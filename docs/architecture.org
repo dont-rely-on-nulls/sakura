@@ -1,0 +1,282 @@
+#+TITLE: Sakura Architecture
+
+* Module Organization
+
+The codebase is organized into focused modules, each with a single
+responsibility. This separation enables independent testing, clearer
+dependencies, and easier reasoning about the system.
+
+** Core Types
+
+- =Schema=: Defines the structure of relations. A schema maps
+  attribute names to domain names (types), capturing both the shape
+  and the semantic meaning of each attribute.
+
+- =Relation=: A relation combines a name, schema, optional merkle tree
+  of tuple hashes, constraints, cardinality, and metadata for
+  provenance tracking. The schema is part of the relation's
+  identity—it's hashed into the relation hash and persisted to
+  storage.
+
+- =Tuple=: A tuple is a mapping from attribute names to values. Tuples
+  can be materialized (concrete values in memory) or non-materialized
+  (references to be resolved).
+
+** Computation Modules
+
+- =Hashing=: Content-addressable hash computation for tuples and
+  relations. Tuple hashes are computed from sorted attribute
+  name-value pairs. Relation hashes incorporate the name, schema, and
+  merkle tree root.
+
+- =Storable=: Serialization formats for persistence. Each entity type
+  (tuple, relation, database) has a storable representation that
+  captures exactly the data needed for reconstruction.
+
+** Management Layer
+
+- =Management.Physical=: A functor-based storage abstraction. Any
+  backend implementing the signature (get, put, exists, transactions)
+  can be plugged in. The in-memory backend serves development and
+  testing.
+
+- =Management.Database=: Database state management. A database holds
+  its relations directly—not just their hashes—providing an integrated
+  cache. Mutations produce new database states with updated hashes and
+  history tracking.
+
+** Manipulation
+
+- =Manipulation=: CRUD operations over the storage layer. This module
+  is a functor parameterized by a storage backend. It handles the
+  interplay between in-memory relation objects and their persisted
+  representations, ensuring consistency between the two.
+
+* Storage Model
+
+Sakura uses an append-only, content-addressed storage model. Every
+object in the database is identified by its cryptographic hash
+(SHA-256), and data is never overwritten—only new versions are
+appended. This design provides natural deduplication, complete history
+preservation, and integrity verification at every level.
+
+** Content Addressing
+
+Every entity in Sakura is stored and retrieved by its hash:
+
+- An *attribute* is a value with its hash. The same value appearing in
+  multiple tuples is stored once and referenced by hash everywhere
+  else.
+
+- A *tuple* is a set of attribute hashes. Its own hash is derived from
+  the hashes of its constituent attributes.
+
+- A *relation* maintains a set of tuple hashes. The relation's hash
+  represents the current state of that set.
+
+- A *database* holds a map of relation names to their current hashes.
+  The database hash is computed from this map, forming the root of a
+  Merkle tree.
+
+This hierarchical hashing means that any change modifying an
+attribute, inserting a tuple, or altering a relation—propagates
+upward, producing a new database hash. The chain of database hashes
+over time constitutes the complete history of the database.
+
+** Schema Persistence
+
+A relation's schema is not merely metadata—it is part of the
+relation's identity. The schema is included in the relation hash
+computation and persisted alongside the tuple hashes and cardinality.
+
+When a relation is stored:
+
+#+begin_example
+StoredRelation = {
+  name: string,
+  schema: (attribute_name, domain_name) list,
+  tree_keys: hash list,
+  cardinality: cardinality
+}
+#+end_example
+
+When the relation is loaded from storage, the schema is reconstructed
+exactly. This enables:
+
+- *Schema validation*: Tuples can be validated against the relation's
+  schema at load time, not just at insertion time.
+
+- *Query planning*: The schema is available for type checking and
+  optimization without requiring a separate schema registry.
+
+- *Time-travel consistency*: Loading a historical relation state
+  retrieves the schema as it existed at that point in time.
+
+** Integrated Relation Cache
+
+The database maintains actual =Relation.t= objects, not just their
+hashes. This eliminates the need for a separate cache and ensures
+consistency between the database's view of its relations and the
+relations themselves.
+
+When a relation is created or updated:
+
+1. The =Relation.t= object is constructed with its computed hash
+2. The database stores the relation directly in its =relations= map
+3. The relation hash is inserted into the database's merkle tree
+4. Both the relation and database states are persisted to storage
+
+Retrieving a relation is a direct map lookup:
+
+#+begin_src ocaml
+let get_relation db name = RelationMap.find_opt name db.relations
+#+end_src
+
+When loading a database from storage, all its relations are loaded
+and reconstructed in memory as part of the database load. This
+ensures that =load_database= returns a fully operational database
+with all relations ready for use.
+
+** Append-Only Semantics
+
+Nothing is deleted or modified in place. When a tuple is "updated,"
+the new version is appended and the relation's hash set is updated to
+reference it. The old tuple remains in storage, reachable through
+historical database hashes.
+
+This has practical consequences:
+
+- *Deduplication*: Identical attribute values share storage. If a
+  million tuples contain the string "active", that string exists once,
+  referenced a million times by its hash.
+
+- *Immutable History*: Any past database state can be reconstructed by
+  following the Merkle tree from a historical root hash.
+
+- *Integrity*: Corruption or tampering is detectable—if a stored
+  object doesn't match its hash, something is wrong.
+
+** Merkle Tree Structure
+
+The database forms a Merkle tree where:
+
+- Leaf nodes are attribute values
+- Interior nodes are tuples (referencing attributes) and relations
+  (referencing tuples)
+- The root is the database hash
+
+This structure enables efficient verification. To prove a tuple
+belongs to a relation at a given database state, one needs only the
+tuple, its sibling hashes up to the relation, and the path to the
+database root—not the entire database.
+
+* Physical Layer Abstraction
+
+The physical storage layer is designed as a functor: a module that
+accepts any storage backend implementing a common signature. This
+means the same relational engine can run against different storage
+systems without modification.
+
+** Backend Requirements
+
+A storage backend must provide:
+
+- Key-value storage where keys are hashes and values are serialized objects
+- Read operations (potentially with consistency options)
+- Write operations (append new objects)
+- Transaction support with isolation guarantees
+
+The abstraction handles the difference between backends that offer
+strong consistency (like etcd) and those with eventual consistency
+(like DynamoDB), exposing appropriate primitives for dirty reads
+versus transactional reads.
+
+** Pluggable Backends
+
+Potential backends include:
+
+- *etcd*: For distributed coordination and strong consistency
+- *Redis*: For in-memory speed with optional persistence
+- *DynamoDB*: For cloud-native scalability
+- *PostgreSQL*: For leveraging existing infrastructure (using it purely as a key-value store)
+- *Local filesystem*: For embedded or development use
+- *Any key-value store*: The interface is minimal enough to adapt to most systems
+
+The choice of backend affects performance characteristics and
+operational concerns, but not the correctness of the relational
+algebra or the integrity guarantees provided by the Merkle structure.
+
+** Transaction Semantics
+
+The physical layer must abstract over:
+
+- *Dirty reads*: Reading potentially uncommitted or stale data, useful
+  when eventual consistency is acceptable
+
+- *Transactional reads*: Reading a consistent snapshot, necessary when
+  operations depend on multiple related values
+
+- *Atomic writes*: Ensuring that a set of objects is either fully
+  written or not written at all
+
+Different backends implement these guarantees differently. The functor
+interface normalizes them into a common vocabulary so the relational
+engine above can reason about consistency without knowing which
+backend is in use.
+
+* Ephemeral Relations and Generators
+
+Not all relations are stored. Some are computed on demand.
+
+** Generator Functions
+
+An ephemeral relation has a generator: a function that produces tuples
+lazily. The relation =less_than_natural=, for instance, generates
+pairs (n, m) where n < m from the natural numbers. This relation is
+infinite—it cannot be stored—but it can be queried.
+
+The generator maintains no external state. Given a position (an
+integer index into the enumeration), it deterministically produces the
+corresponding tuple. This makes ephemeral relations reproducible:
+running the same query twice yields the same results.
+
+** Membership Criteria
+
+Every relation, stored or ephemeral, has a membership criterion: a
+predicate that determines whether a tuple belongs to the relation.
+For stored relations, this is typically derived from constraints. For
+ephemeral relations, it's the intensional definition—the rule that
+characterizes membership rather than an enumeration of members.
+
+* Provenance and Updatable Views
+
+When relations are combined through algebraic operations (join,
+project, select), the result is an ephemeral relation that tracks
+where its attributes came from.
+
+** Provenance
+
+Provenance records the source relation of each attribute. If a join
+combines =orders= and =customers= on =customer_id=, the resulting
+ephemeral relation knows that =order_date= came from =orders= and
+=customer_name= came from =customers=.
+
+This enables updatable views: an update to an attribute in a derived
+relation can be traced back to the base relation that owns it and
+applied there. The derived relation reflects the change automatically
+on next evaluation.
+
+** Lineage
+
+Lineage records the operations that produced a relation. It's a tree
+describing the algebraic derivation: this relation is a selection over
+a projection of a join of these two base relations.
+
+Lineage enables query optimization (rewriting equivalent expressions)
+and provenance queries (understanding how a result was derived).
+
+* References
+
+- Codd, E. F. (1979), "Extending the Database Relational Model to Capture More Meaning"
+- Merkle, R. (1987), "A Digital Signature Based on a Conventional Encryption Function"
+- Buneman, P., Khanna, S., Tan, W. (2001), "Why and Where: A Characterization of Data Provenance"
