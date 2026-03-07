@@ -1,0 +1,47 @@
+* About
+
+Sakura is a semantic-relational algebra engine inspired by
+E. F. Codd's RM/T and D. McGoveran's (as understood by Fabian Pascal)
+SRDM. It models relations in both intension and extension, providing
+their manipulation as first-class elements of an algebra.
+
+* Motivation
+
+We believe the relational model was not ever fully implemented. The
+fundamental necessity of expressing intent and binding meaning
+enclosed to a conceptual model in data is seldom achieved by any
+self-claimed relational database vendor. The emergence of different
+physically concerned paradigms in the industry demonstrate not only a
+large scale amnesia about fundamentals, but also a lethal
+manifestation of problems that should not exist otherwise. The
+relational data model as an applied theory is an universally rich and
+concrete approach to reality that bases itself greatly in
+moderate-realism applied to mathematics, as described in =An
+Aristotelian Realist Philosophy of Mathematics: Mathematics as the
+Science of Quantity and Structure= by J. Franklin. We believe that
+unleashing the full potential of the relational model as refined over
+the years despite overwhelming disregard of the industry as a whole,
+will promote efficiency to a new scale never seen, that was very much
+so cut short by relational pretenders and theoretically unsound
+approaches. Our goal is to eliminate the application-database
+distinction, while maintaining a clear separation between a first
+order predicate logic algebra engine and a higher order predicate
+logic decision engine (application) via an embedded data sublanguage
+with Sakura as a possible auxiliary runtime.
+
+* Design Intent
+
+Sakura aims to treat relations as algebraic manipulation units with both:
+
+- extension (actual tuples, finite or generated)
+- intension (schema + constraints + derivation meaning)
+
+The current engine already exposes the extension side robustly for
+many operations, despite the lack of constraints greater than 1OP.
+The main active work is making intension handling fully consistent and
+reliable across planners/operators/protocols.
+
+* References
+
+- Codd, E. F. (1970), "A Relational Model of Data for Large Shared Data Banks"
+- Codd, E. F. (1979), "Extending the Database Relational Model to Capture More Meaning"

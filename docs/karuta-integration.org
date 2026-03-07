@@ -1,0 +1,130 @@
+* About Karuta
+
+Just like PostgreSQL and MySQL have SQL, Sakura has Karuta, a prolog-like language targetting the BEAM. [[karuta][https://github.com/dont-rely-on-nulls/karuta]] is the programming language that presents the different sublanguages to manage an RDBMS.
+
+We believe that what E. F. Codd envisioned was a stack of sublanguages that are embedded in a more powerful language, that expand it's abstraction scope as you move up the stack, trying to provide guarantees at each level. A data retrieval language should halt and has no business into being Turing Complete, but a predicate procedure language might. In light of this, Sakura is supposed to provide a common DSL that can differentiate between such sublanguages and execute things accordingly.
+
+The approach is that everything is a relation itself. So a constraint for instance is expressed as a relation less_than over NxN instead of simply being an operator '<'.
+
+* Sublanguages
+Here's an overview of the sublanguages and how they are manifested in Karuta:
+
+** DRL (Data Retrieval Language)
+
+- Pure querying, total/terminating subset;
+- No user recursion with no self references.
+
+** DCL (Data Constraint Language)
+
+- Integrity rules (key, FK-like, checks, assertions, aggregates-for-integrity).
+- Semantically predicates, but with enforcement timing (on write/commit), not free query operators.
+
+** DML (Data Manipulation Language)
+
+- Insert/update/delete;
+- Delta semantics, can trigger constraint evaluation.
+  
+** DDL (Data Definition Language)
+
+- Define relations/views (ephemeral relations)/indexes/types/modules/predicate signatures and capabilities.
+  
+** TCL (Transaction/Control Language)
+
+- Begin/commit/rollback, isolation/consistency controls, maybe savepoints.
+
+** PPL (Procedural Predicate Language)
+
+- Stored procedures/functions, recursion allowed, orchestration logic.
+- Can call DRL/DML/DCL-aware operations, but not all PPL predicates are DRL-safe.
+  
+** ACL (Authorization/Policy Language) (optional early, important later)
+
+- Who can query/mutate/define; row/predicate-level access policies.
+
+* Prototype
+
+#+begin_src prolog
+  % DDL
+  :- schema[users] {
+    :- signature[people-sig] {
+      person[_, _].
+      another-person[string, natural].
+      valid_age[natural].
+      a-procedure[int, int].
+      a-view[_, _, _].
+    }.
+    :- module[people, people-sig] {
+      % This is using the arity directly, because the types are being specified in the signature.     
+      % These Sakura-provided type extensions after '::' are the what informs Sakura through metadata on connection which type of Karuta predicate this is used as in Karuta.
+      another-person/2 :: sakura:persisted     
+      another-person[Name, FavoriteNumber].
+
+      person[string, natural] :: sakura:persisted
+      person[Name, Age] :- valid_age[Age].
+
+      % DCL
+      another-constraint[list[person], string, natural] :: sakura:constraint
+      another-constraint[[], _, _].
+      another-constraint[[person[Name, Age]|Rest], Whatever1, Whatever2] :-
+        (eq[Name, Whatever1] ; !eq[Name, Whatever1], !eq[Age, Whatever2]),
+        another-constraint[Rest, Whatever1, Whatever2].
+
+      % DCL
+      my-predicate[int, string, nat] :: sakura:constraint
+      my-predicate[Arg1, Arg2, Arg3] :- 
+        another-module:my-predicate[Arg1, Arg2, Arg3],
+        on[insert, update],
+        timing[immediate].
+
+      % DCL
+      valid_age/1 :: sakura:constraint
+      valid_age[Age] with [karuta, sakura] :-
+        nat[Age],
+        greater_or_equal[Age, 0],
+        % DRL
+        aggregate[person, 2, Tuples],
+        another-constraint[Tuples, "lemos", 26],
+        on[insert, update],
+        timing[immediate],
+        target[age].
+
+      % PPL
+      a-procedure/2 :: sakura:stored
+      a-procedure[Arg1, Arg2] :-
+        eq[Arg1, Arg2].
+
+      % DDL
+      a-view[string, natural, natural] :: sakura:ephemeral
+      a-view[Name, Age, FavoriteNumber] :-
+        person[Name, Age],
+        another-person[Name, FavoriteNumber].
+    }.
+  }.
+
+  my-predicate[users:people:person, string, nat] :: signature
+  my-predicate[Arg1, Arg2, Arg3] :- 
+    another-module:my-predicate[Arg1, Arg2, Arg3].
+  
+  main[Arg1, Arg2] :-
+    karuta:plus[Arg1, Arg2, Out],
+    karuta:aggregate[numbers:inc, 2, Tuples],
+    
+    % Project directive should give us these configurations
+    project:sakura[Secret, Port, Host],
+    project:sakura:config[Users1, Commit],
+    
+    sakura:connect[Secret, Port, Host, Connection],
+    sakura:database[Connection, Users1, Commit, DB1Handle],
+
+    % TCL
+    sakura:transaction[TXContext, DB1Handle],
+
+    % DML
+    sakura:insert[users:people:person["Toad", 18], TXContext],
+    (sakura:error?[TXContext, Reason], sakura:rollback[TXContext], print["We rolled back: ~s!", Reason]) ;
+    (sakura:new[TXContext, [name], Difference1],
+     sakura:commit[TXContext, DB2Handle],
+     sakura:delta[DB1Handle, DB2Handle, Difference2],
+     % DRL
+     @relation1[Arg2, Out]).
+#+end_src

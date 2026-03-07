@@ -1,27 +1,16 @@
-#+TITLE: Relational Engine
+#+TITLE: Sakura Relational Engine
 
 * About
 This is a relational engine.
 
-* Roadmap
-- [ ] State
-  - [ ] Add the schema modifications to the commit state hash
-  - [ ] Save a history of the schema
-- [ ] Filesystem [0/6]
-  - [ ] Durability
-  - [ ] Immutable storage
-  - [ ] ARIES
-  - [ ] Merkle construction per virtual file
-  - [ ] Branching
-  - [ ] Branch merge strategies [0/3]
-    - [ ] Selected merge
-    - [ ] Union merge
-    - [ ] Biased union merge
-- [ ] Language [0/4]
-  - [ ] Lexer
-  - [ ] Parser
-  - [ ] AST
-  - [ ] Unification and query terms
-- [ ] Server [0/2]
-  - [ ] Authentication
-  - [ ] Multi-client coordination
+* Glossary
+** Conceptual model
+A piece of the world of discourse. In a project to design a map of Scotland, this would be Scotland itself in reality alongside the business rules in natural language.
+** Relation
+A cartesian product of primitive domains (integer, natural, rational, etc) with a membership criteria over an intension (collection of business rules)
+** Ephemeral Relation
+We can ephemeral relations that relations that have its values generated on demand. They are catalogued on the database as normal relations, but act based on a generator function. In SQL, they would be views, but here they are much else, they are algebraic artifacts that come out of any relational operation, eg.: R2 <- project {field1, field2} R1. R2 in this case is an ephemeral relation.
+** Provenance
+From where an attribute comes from in a generated relation (ephemeral). For example, if a join occurs and blends the attributes from two different relations, the base relations are references on the new generated ephemeral relation as to identify its origins. This is what enables "updatable views", since we always know the source of an attribute.
+** Lineage
+What operation produced an attribute. A join, project, etc.
