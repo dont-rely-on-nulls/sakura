@@ -150,6 +150,7 @@ module Make (Storage : Management.Physical.S) = struct
           name = stored.name;
           tree;
           relations;
+          domains = Management.Database.RelationMap.empty;
           history = stored.history;
           timestamp = stored.timestamp;
         })
@@ -158,12 +159,19 @@ module Make (Storage : Management.Physical.S) = struct
      Database Operations
      ============================================================================ *)
 
-  (** Create a new database with standard domain relations *)
+  (** Register a domain in the database.  Can be called after [create_database]
+      to add user-defined domains (e.g. [money], [email], [uuid]). *)
+  let register_domain (db : Management.Database.t) (domain : Domain.t)
+    : Management.Database.t =
+    Management.Database.add_domain db domain
+
+  (** Create a new database pre-seeded with the standard prelude domains. *)
   let create_database ~name : Management.Database.t =
-    let db = Management.Database.empty ~name in
-    (* Add standard domain relations: integer, natural, string, etc. *)
-    (* For now, just return empty database. Prelude can be added later. *)
-    db
+    let seed domains db =
+      List.fold_left Management.Database.add_domain db domains
+    in
+    Management.Database.empty ~name
+    |> seed Prelude.Domains.[integer; natural; rational; string]
 
   (** Get database history *)
   let database_history (db : Management.Database.t) : Conventions.Hash.t list =

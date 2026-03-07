@@ -15,6 +15,7 @@ type t = {
   name : Conventions.Name.t;
   tree : Merkle.t;
   relations : Relation.t RelationMap.t;  (* Stores actual relations, not just hashes *)
+  domains : Domain.t RelationMap.t;      (* Domain registry: prelude + user-defined *)
   history : Conventions.Hash.t list;
   timestamp : float;
 }
@@ -24,6 +25,7 @@ let empty ~name = {
   name;
   tree = Merkle.empty;
   relations = RelationMap.empty;
+  domains = RelationMap.empty;
   history = [];
   timestamp = Unix.gettimeofday ();
 }
@@ -47,6 +49,7 @@ let update_state db ~relations ~tree =
     name = db.name;
     tree;
     relations;
+    domains = db.domains;
     history;
     timestamp = Unix.gettimeofday ();
   }
@@ -95,3 +98,28 @@ let update_relation db ~(relation : Relation.t) =
     let tree = db.tree |> Merkle.delete old_hash |> Merkle.insert new_hash in
     let relations = RelationMap.add name relation db.relations in
     update_state db ~relations ~tree
+
+(* ============================================================================
+   Domain Registry - prelude and user-defined domains
+   ============================================================================ *)
+
+(** Register a domain in the database.  Overwrites any existing domain with
+    the same name, allowing user-defined domains to shadow prelude ones. *)
+let add_domain db (domain : Domain.t) =
+  { db with domains = RelationMap.add domain.name domain db.domains }
+
+(** Look up a domain by name *)
+let get_domain db name =
+  RelationMap.find_opt name db.domains
+
+(** List all registered domain names *)
+let get_domain_names db =
+  RelationMap.fold (fun name _ acc -> name :: acc) db.domains []
+
+(** Check whether a domain is registered *)
+let has_domain db name =
+  RelationMap.mem name db.domains
+
+(** Remove a domain from the registry *)
+let remove_domain db name =
+  { db with domains = RelationMap.remove name db.domains }
