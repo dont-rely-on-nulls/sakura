@@ -1042,3 +1042,311 @@ let%test_unit "branching: full reconstruction from hash" =
           assert (List.mem "Apple" names);
           assert (List.mem "Banana" names);
           assert (List.mem "Cherry" names))
+
+(* ============================================================================
+   Algebra Tests
+   ============================================================================ *)
+
+(* Helper: build a materialized tuple with int attributes *)
+let make_int_tuple relation pairs =
+  let attributes =
+    List.fold_left (fun acc (k, v) ->
+      Tuple.AttributeMap.add k { Attribute.value = Obj.repr (v : int) } acc)
+      Tuple.AttributeMap.empty pairs
+  in
+  (Tuple.Materialized { Tuple.relation; attributes } : Tuple.t)
+
+(* Helper: build a stored relation with one integer column and given values *)
+let stored_relation_with_ints storage db ~name ~attr values =
+  let schema = Schema.empty |> Schema.add attr "integer" in
+  let (db, rel) = match Manipulation.Memory.create_relation storage db ~name ~schema with
+    | Error _ -> assert false | Ok x -> x
+  in
+  let tuples = List.map (fun v ->
+    let attributes =
+      Tuple.AttributeMap.singleton attr { Attribute.value = Obj.repr (v : int) }
+    in
+    ({ Tuple.relation = name; attributes } : Tuple.materialized)
+  ) values in
+  let (db, rel, _) = match Manipulation.Memory.create_tuples storage db rel tuples with
+    | Error _ -> assert false | Ok x -> x
+  in
+  (db, rel)
+
+let%test_unit "algebra: const_relation single tuple" =
+  with_storage (fun storage ->
+    let rel = Algebra.Memory.const_relation
+        [ "x", Obj.repr (42 : int);
+          "y", Obj.repr (99 : int) ] in
+    match Algebra.Memory.materialize storage rel with
+    | Error _    -> assert false
+    | Ok [tup]   ->
+      let x: int = Obj.obj (Tuple.AttributeMap.find "x" tup.Tuple.attributes).Attribute.value in
+      assert (x = 42)
+    | Ok _       -> assert false)
+
+let%test_unit "algebra: select_fn with predicate" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (_, rel) = stored_relation_with_ints storage db ~name:"nums" ~attr:"n" [1;2;3;4;5] in
+    let predicate = function
+      | Tuple.Materialized t ->
+        let v: int = Obj.obj (Tuple.AttributeMap.find "n" t.Tuple.attributes).Attribute.value in
+        v > 3
+      | _ -> false
+    in
+    match Algebra.Memory.select_fn storage predicate rel with
+    | Error _   -> assert false
+    | Ok result ->
+      match Algebra.Memory.materialize storage result with
+      | Error _ -> assert false
+      | Ok rows ->
+        assert (List.length rows = 2);
+        List.iter (fun t ->
+          let v: int = Obj.obj (Tuple.AttributeMap.find "n" t.Tuple.attributes).Attribute.value in
+          assert (v > 3)) rows)
+
+let%test_unit "algebra: project restricts schema" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "a" "integer" |> Schema.add "b" "integer" in
+    let (db, rel) = match Manipulation.Memory.create_relation storage db ~name:"ab" ~schema with
+      | Error _ -> assert false | Ok x -> x
+    in
+    let attrs = Tuple.AttributeMap.empty
+      |> Tuple.AttributeMap.add "a" { Attribute.value = Obj.repr (1 : int) }
+      |> Tuple.AttributeMap.add "b" { Attribute.value = Obj.repr (2 : int) } in
+    let (_, rel, _) = match Manipulation.Memory.create_tuple storage db rel
+        { Tuple.relation = "ab"; attributes = attrs } with
+      | Error _ -> assert false | Ok x -> x
+    in
+    match Algebra.Memory.project storage ["a"] rel with
+    | Error _ -> assert false
+    | Ok projected ->
+      match Algebra.Memory.materialize storage projected with
+      | Error _ -> assert false
+      | Ok [t] ->
+        assert (Tuple.AttributeMap.mem "a" t.Tuple.attributes);
+        assert (not (Tuple.AttributeMap.mem "b" t.Tuple.attributes))
+      | Ok _ -> assert false)
+
+let%test_unit "algebra: rename changes attr names" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (_, rel) = stored_relation_with_ints storage db ~name:"r" ~attr:"x" [7] in
+    match Algebra.Memory.rename storage [("x", "y")] rel with
+    | Error _ -> assert false
+    | Ok renamed ->
+      match Algebra.Memory.materialize storage renamed with
+      | Error _ -> assert false
+      | Ok [t] ->
+        assert (not (Tuple.AttributeMap.mem "x" t.Tuple.attributes));
+        assert (Tuple.AttributeMap.mem "y" t.Tuple.attributes);
+        let v: int = Obj.obj (Tuple.AttributeMap.find "y" t.Tuple.attributes).Attribute.value in
+        assert (v = 7)
+      | Ok _ -> assert false)
+
+let%test_unit "algebra: equijoin merges matching tuples" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* left: {id=1, name="Alice"}, {id=2, name="Bob"} *)
+    let schema_l = Schema.empty |> Schema.add "id" "integer" |> Schema.add "name" "string" in
+    let (db, left) = match Manipulation.Memory.create_relation storage db ~name:"L" ~schema:schema_l with
+      | Error _ -> assert false | Ok x -> x
+    in
+    let make_left id name =
+      let attrs = Tuple.AttributeMap.empty
+        |> Tuple.AttributeMap.add "id"   { Attribute.value = Obj.repr (id : int) }
+        |> Tuple.AttributeMap.add "name" { Attribute.value = Obj.repr (name : string) } in
+      ({ Tuple.relation = "L"; attributes = attrs } : Tuple.materialized)
+    in
+    let (db, left, _) = match Manipulation.Memory.create_tuples storage db left
+        [make_left 1 "Alice"; make_left 2 "Bob"] with
+      | Error _ -> assert false | Ok x -> x
+    in
+    (* right: {id=1, score=100}, {id=3, score=999} *)
+    let schema_r = Schema.empty |> Schema.add "id" "integer" |> Schema.add "score" "integer" in
+    let (db, right) = match Manipulation.Memory.create_relation storage db ~name:"R" ~schema:schema_r with
+      | Error _ -> assert false | Ok x -> x
+    in
+    let make_right id score =
+      let attrs = Tuple.AttributeMap.empty
+        |> Tuple.AttributeMap.add "id"    { Attribute.value = Obj.repr (id : int) }
+        |> Tuple.AttributeMap.add "score" { Attribute.value = Obj.repr (score : int) } in
+      ({ Tuple.relation = "R"; attributes = attrs } : Tuple.materialized)
+    in
+    let (_, right, _) = match Manipulation.Memory.create_tuples storage db right
+        [make_right 1 100; make_right 3 999] with
+      | Error _ -> assert false | Ok x -> x
+    in
+    match Algebra.Memory.equijoin storage ["id"] left right with
+    | Error _  -> assert false
+    | Ok joined ->
+      match Algebra.Memory.materialize storage joined with
+      | Error _ -> assert false
+      | Ok rows ->
+        (* Only id=1 matches *)
+        assert (List.length rows = 1);
+        let t = List.hd rows in
+        let score: int = Obj.obj (Tuple.AttributeMap.find "score" t.Tuple.attributes).Attribute.value in
+        assert (score = 100))
+
+let%test_unit "algebra: equijoin empty match" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (db, left) = stored_relation_with_ints storage db ~name:"L" ~attr:"id" [1;2] in
+    let (_, right) = stored_relation_with_ints storage db ~name:"R" ~attr:"id" [9;8] in
+    match Algebra.Memory.equijoin storage ["id"] left right with
+    | Error _  -> assert false
+    | Ok joined ->
+      match Algebra.Memory.materialize storage joined with
+      | Error _ -> assert false
+      | Ok rows -> assert (List.length rows = 0))
+
+let%test_unit "algebra: union concatenates streams" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (db, r1) = stored_relation_with_ints storage db ~name:"A" ~attr:"n" [1;2] in
+    let (_, r2) = stored_relation_with_ints storage db ~name:"B" ~attr:"n" [3;4] in
+    match Algebra.Memory.union storage r1 r2 with
+    | Error _    -> assert false
+    | Ok unioned ->
+      match Algebra.Memory.materialize storage unioned with
+      | Error _ -> assert false
+      | Ok rows ->
+        assert (List.length rows = 4);
+        let vals = List.map (fun t ->
+          Obj.obj (Tuple.AttributeMap.find "n" t.Tuple.attributes).Attribute.value
+        ) rows in
+        assert (List.mem 1 vals);
+        assert (List.mem 2 vals);
+        assert (List.mem 3 vals);
+        assert (List.mem 4 vals))
+
+let%test_unit "algebra: diff removes right from left" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (db, r1) = stored_relation_with_ints storage db ~name:"A" ~attr:"n" [1;2;3] in
+    let (_, r2) = stored_relation_with_ints storage db ~name:"B" ~attr:"n" [2;3] in
+    match Algebra.Memory.diff storage r1 r2 with
+    | Error _   -> assert false
+    | Ok result ->
+      match Algebra.Memory.materialize storage result with
+      | Error _ -> assert false
+      | Ok rows ->
+        assert (List.length rows = 1);
+        let v: int = Obj.obj (Tuple.AttributeMap.find "n" (List.hd rows).Tuple.attributes).Attribute.value in
+        assert (v = 1))
+
+let%test_unit "algebra: take limits output" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (_, rel) = stored_relation_with_ints storage db ~name:"big" ~attr:"n" [10;20;30;40;50] in
+    match Algebra.Memory.take storage 3 rel with
+    | Error _   -> assert false
+    | Ok result ->
+      match Algebra.Memory.materialize storage result with
+      | Error _ -> assert false
+      | Ok rows -> assert (List.length rows = 3))
+
+(* ============================================================================
+   DRL Parser Tests
+   ============================================================================ *)
+
+let%test_unit "drl: parse Base" =
+  match Drl.Parser.of_string {|(Base "users")|} with
+  | Error _              -> assert false
+  | Ok (Drl.Ast.Base s)  -> assert (s = "users")
+  | Ok _                 -> assert false
+
+let%test_unit "drl: parse Const" =
+  match Drl.Parser.of_string {|(Const (("age" (Int 18))))|} with
+  | Error _                    -> assert false
+  | Ok (Drl.Ast.Const [("age", Drl.Ast.Int 18)]) -> ()
+  | Ok _                       -> assert false
+
+let%test_unit "drl: parse Join" =
+  match Drl.Parser.of_string {|(Join (id) (Base "L") (Base "R"))|} with
+  | Error _                             -> assert false
+  | Ok (Drl.Ast.Join (["id"], Drl.Ast.Base "L", Drl.Ast.Base "R")) -> ()
+  | Ok _                                -> assert false
+
+let%test_unit "drl: parse Select" =
+  let s = {|(Select (Const (("age" (Int 18)))) (Base "users"))|} in
+  match Drl.Parser.of_string s with
+  | Error _ -> assert false
+  | Ok (Drl.Ast.Select (Drl.Ast.Const _, Drl.Ast.Base "users")) -> ()
+  | Ok _    -> assert false
+
+(* ============================================================================
+   DRL Executor end-to-end Tests
+   ============================================================================ *)
+
+let%test_unit "drl: execute Base" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let (db, _) = stored_relation_with_ints storage db ~name:"items" ~attr:"v" [10; 20] in
+    match Drl.Parser.of_string {|(Base "items")|} with
+    | Error _   -> assert false
+    | Ok query  ->
+      match Drl.Executor.Memory.execute storage db query with
+      | Error _   -> assert false
+      | Ok rel    ->
+        match Algebra.Memory.materialize storage rel with
+        | Error _ -> assert false
+        | Ok rows -> assert (List.length rows = 2))
+
+let%test_unit "drl: execute Select+Const" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* users: {age=18, name="Alice"}, {age=25, name="Bob"} *)
+    let schema = Schema.empty |> Schema.add "age" "integer" |> Schema.add "name" "string" in
+    let (db, users) = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok x -> x
+    in
+    let make_user age name =
+      let attrs = Tuple.AttributeMap.empty
+        |> Tuple.AttributeMap.add "age"  { Attribute.value = Obj.repr (age : int) }
+        |> Tuple.AttributeMap.add "name" { Attribute.value = Obj.repr (name : string) } in
+      ({ Tuple.relation = "users"; attributes = attrs } : Tuple.materialized)
+    in
+    let (db, _, _) = match Manipulation.Memory.create_tuples storage db users
+        [make_user 18 "Alice"; make_user 25 "Bob"] with
+      | Error _ -> assert false | Ok x -> x
+    in
+    (* Query: select users where age = 18 *)
+    let s = {|(Select (Const (("age" (Int 18)))) (Base "users"))|} in
+    match Drl.Parser.of_string s with
+    | Error _  -> assert false
+    | Ok query ->
+      match Drl.Executor.Memory.execute storage db query with
+      | Error _  -> assert false
+      | Ok rel   ->
+        match Algebra.Memory.materialize storage rel with
+        | Error _ -> assert false
+        | Ok rows ->
+          assert (List.length rows = 1);
+          let name_v: string =
+            Obj.obj (Tuple.AttributeMap.find "name" (List.hd rows).Tuple.attributes).Attribute.value
+          in
+          assert (name_v = "Alice"))
