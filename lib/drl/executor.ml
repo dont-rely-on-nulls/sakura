@@ -8,12 +8,7 @@ module Make(Storage : Management.Physical.S) = struct
 
   let wrap = Result.map_error (fun e -> AlgebraError e)
 
-  (* Convert Ast.value → AbstractValue.t (Obj.t) via Obj.repr *)
-  let ast_value_to_abstract : Ast.value -> Conventions.AbstractValue.t = function
-    | Ast.Int n   -> Obj.repr n
-    | Ast.Float f -> Obj.repr f
-    | Ast.Str s   -> Obj.repr s
-    | Ast.Bool b  -> Obj.repr b
+  let ast_value_to_abstract = Ast.value_to_abstract
 
   let rec execute
       (storage : Storage.t)

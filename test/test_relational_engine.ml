@@ -2384,3 +2384,303 @@ let%test_unit "constraint propagation: project filters constraints" =
     match Algebra.Memory.project storage [ "y" ] rel with
     | Error _ -> assert false
     | Ok result -> assert (result.Relation.constraints = None))
+
+(* ============================================================================
+   DML Sublanguage Tests
+   ============================================================================ *)
+
+(* Parse tests use canonical flat sexp format: (Constructor (field val) ...) *)
+
+let%test_unit "dml: parse CreateDatabase" =
+  match Dml.Parser.of_string {|(CreateDatabase "shop")|} with
+  | Error _ -> assert false
+  | Ok stmt -> assert (stmt = Dml.Ast.CreateDatabase "shop")
+
+let%test_unit "dml: parse RetractRelation" =
+  match Dml.Parser.of_string {|(RetractRelation "users")|} with
+  | Error _ -> assert false
+  | Ok stmt -> assert (stmt = Dml.Ast.RetractRelation "users")
+
+let%test_unit "dml: parse ClearRelation" =
+  match Dml.Parser.of_string {|(ClearRelation "users")|} with
+  | Error _ -> assert false
+  | Ok stmt -> assert (stmt = Dml.Ast.ClearRelation "users")
+
+let%test_unit "dml: round-trip InsertTuple" =
+  let src = Dml.Ast.InsertTuple {
+    relation = "users";
+    attributes = [("name", Drl.Ast.Str "Alice"); ("age", Drl.Ast.Int 30)]
+  } in
+  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dml: round-trip CreateRelation" =
+  let src = Dml.Ast.CreateRelation {
+    name = "users";
+    schema = [("name", "string"); ("age", "natural")]
+  } in
+  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dml: round-trip InsertTuples" =
+  let src = Dml.Ast.InsertTuples {
+    relation = "users";
+    tuples = [
+      [("name", Drl.Ast.Str "Alice"); ("age", Drl.Ast.Int 30)];
+      [("name", Drl.Ast.Str "Bob");   ("age", Drl.Ast.Int 25)];
+    ]
+  } in
+  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dml: round-trip RegisterDomain" =
+  let src = Dml.Ast.RegisterDomain { name = "money"; cardinality = Dml.Ast.AlephZero } in
+  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+(* Executor tests construct AST directly — no dependency on sexp format *)
+
+let%test_unit "dml: execute CreateDatabase" =
+  with_storage (fun storage ->
+    let db = Management.Database.empty ~name:"" in
+    let stmt = Dml.Ast.CreateDatabase "shop" in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db -> assert (db.name = "shop"))
+
+let%test_unit "dml: execute CreateRelation" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let stmt = Dml.Ast.CreateRelation { name = "users"; schema = [("name", "string"); ("age", "natural")] } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db -> assert (Management.Database.has_relation db "users"))
+
+let%test_unit "dml: execute InsertTuple" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "name" "string" in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let stmt = Dml.Ast.InsertTuple { relation = "users"; attributes = [("name", Drl.Ast.Str "Alice")] } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Management.Database.get_relation db "users" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count rel = 1))
+
+let%test_unit "dml: execute InsertTuples" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "name" "string" in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let stmt = Dml.Ast.InsertTuples {
+      relation = "users";
+      tuples = [[("name", Drl.Ast.Str "Alice")]; [("name", Drl.Ast.Str "Bob")]]
+    } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Management.Database.get_relation db "users" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count rel = 2))
+
+let%test_unit "dml: execute DeleteTuple" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "name" "string" in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+      (Dml.Ast.InsertTuple { relation = "users"; attributes = [("name", Drl.Ast.Str "Alice")] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let stmt = Dml.Ast.DeleteTuple { relation = "users"; attributes = [("name", Drl.Ast.Str "Alice")] } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Management.Database.get_relation db "users" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count rel = 0))
+
+let%test_unit "dml: execute RetractRelation" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    match Dml.Executor.Memory.execute storage db (Dml.Ast.RetractRelation "users") with
+    | Error _ -> assert false
+    | Ok db -> assert (not (Management.Database.has_relation db "users")))
+
+let%test_unit "dml: execute ClearRelation" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "name" "string" in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+      (Dml.Ast.InsertTuples { relation = "users";
+        tuples = [[("name", Drl.Ast.Str "Alice")]; [("name", Drl.Ast.Str "Bob")]] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    match Dml.Executor.Memory.execute storage db (Dml.Ast.ClearRelation "users") with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Management.Database.get_relation db "users" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count rel = 0))
+
+let%test_unit "dml: execute RegisterDomain" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let stmt = Dml.Ast.RegisterDomain { name = "money"; cardinality = Dml.Ast.AlephZero } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db -> assert (Management.Database.has_domain db "money"))
+
+let%test_unit "dml: insert into nonexistent relation returns error" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let stmt = Dml.Ast.InsertTuple { relation = "ghost"; attributes = [("x", Drl.Ast.Int 1)] } in
+    match Dml.Executor.Memory.execute storage db stmt with
+    | Error (Dml.Executor.Memory.RelationNotFound "ghost") -> ()
+    | _ -> assert false)
+
+(* ============================================================================
+   DCL Sublanguage Tests
+   ============================================================================ *)
+
+let%test_unit "dcl: round-trip RegisterConstraint MemberOf" =
+  let src = Dcl.Ast.RegisterConstraint {
+    constraint_name = "fk_order";
+    relation_name = "order_items";
+    body = Dcl.Ast.MemberOf { target = "orders"; binding = [("order_id", Dcl.Ast.Var "order_id")] }
+  } in
+  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dcl: round-trip And constraint" =
+  let src = Dcl.Ast.RegisterConstraint {
+    constraint_name = "valid_range";
+    relation_name = "scores";
+    body = Dcl.Ast.And [
+      Dcl.Ast.MemberOf { target = "ge_zero";
+        binding = [("left", Dcl.Ast.Var "score"); ("right", Dcl.Ast.Const (Drl.Ast.Int 0))] };
+      Dcl.Ast.MemberOf { target = "le_hundred";
+        binding = [("left", Dcl.Ast.Var "score"); ("right", Dcl.Ast.Const (Drl.Ast.Int 100))] };
+    ]
+  } in
+  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dcl: round-trip Not constraint" =
+  let src = Dcl.Ast.RegisterConstraint {
+    constraint_name = "not_closed";
+    relation_name = "open_ticket";
+    body = Dcl.Ast.Not {
+      body = Dcl.Ast.MemberOf { target = "closed_ticket";
+        binding = [("ticket_id", Dcl.Ast.Var "ticket_id")] };
+      universe = "open_ticket"
+    }
+  } in
+  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  | Error _ -> assert false
+  | Ok parsed -> assert (parsed = src)
+
+let%test_unit "dcl: execute RegisterConstraint attaches constraint" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "order_id" "natural" in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"order_items" ~schema with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let stmt = Dcl.Ast.RegisterConstraint {
+      constraint_name = "fk_order";
+      relation_name = "order_items";
+      body = Dcl.Ast.MemberOf { target = "orders"; binding = [("order_id", Dcl.Ast.Var "order_id")] }
+    } in
+    match Dcl.Executor.Memory.execute storage db stmt with
+    | Error _ -> assert false
+    | Ok db ->
+      let rel = match Management.Database.get_relation db "order_items" with
+        | None -> assert false | Some r -> r
+      in
+      assert (rel.Relation.constraints <> None))
+
+let%test_unit "dcl: FK constraint enforced on insert" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"shop" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"orders"
+        ~schema:(Schema.empty |> Schema.add "id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    (* Insert a valid order *)
+    let db = match Dml.Executor.Memory.execute storage db
+      (Dml.Ast.InsertTuple { relation = "orders"; attributes = [("id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"order_items"
+        ~schema:(Schema.empty |> Schema.add "order_id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    (* Register FK: order_id in order_items must match id in orders *)
+    let db = match Dcl.Executor.Memory.execute storage db
+      (Dcl.Ast.RegisterConstraint {
+        constraint_name = "fk_order";
+        relation_name = "order_items";
+        body = Dcl.Ast.MemberOf { target = "orders"; binding = [("id", Dcl.Ast.Var "order_id")] }
+      }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* Valid insert: order_id=1 exists in orders *)
+    let db = match Dml.Executor.Memory.execute storage db
+      (Dml.Ast.InsertTuple { relation = "order_items"; attributes = [("order_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let rel = match Management.Database.get_relation db "order_items" with
+      | None -> assert false | Some r -> r
+    in
+    assert (Manipulation.Memory.tuple_count rel = 1);
+    (* Invalid insert: order_id=99 does not exist in orders *)
+    match Dml.Executor.Memory.execute storage db
+      (Dml.Ast.InsertTuple { relation = "order_items"; attributes = [("order_id", Drl.Ast.Int 99)] }) with
+    | Error (Dml.Executor.Memory.ManipulationError (Manipulation.ConstraintViolation _)) -> ()
+    | _ -> assert false)

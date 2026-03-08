@@ -8,6 +8,13 @@ type value =
   | Bool  of bool
 [@@deriving sexp]
 
+(** Convert an AST value to an AbstractValue.t (Obj.t) via Obj.repr *)
+let value_to_abstract : value -> Conventions.AbstractValue.t = function
+  | Int n   -> Obj.repr n
+  | Float f -> Obj.repr f
+  | Str s   -> Obj.repr s
+  | Bool b  -> Obj.repr b
+
 type direction = Asc | Desc
 [@@deriving sexp]
 
