@@ -29,10 +29,15 @@ module Make(Storage : Management.Physical.S) = struct
        | Error _ -> (fun _pos -> Generator.Error ("Failed to load: " ^ rel.Relation.name))
        | Ok ts -> list_generator (List.map (fun t -> Tuple.Materialized t) ts))
 
-  let of_generator ~name ~schema gen =
+  let of_generator ~name ~schema ?constraints ?cardinality gen =
+    let cardinality =
+      match cardinality with
+      | Some c -> c
+      | None -> Conventions.Cardinality.AlephZero
+    in
     Relation.make
-      ~hash:None ~name ~schema ~tree:None ~constraints:None
-      ~cardinality:Conventions.Cardinality.AlephZero
+      ~hash:None ~name ~schema ~tree:None ~constraints
+      ~cardinality
       ~generator:(Some gen)
       ~membership_criteria:(fun _ -> true)
       ~provenance:Relation.Provenance.Undefined
@@ -61,7 +66,8 @@ module Make(Storage : Management.Physical.S) = struct
           else go next (Option.map ((+) 1) pos)
       in fun pos -> go gen pos
     in
-    Ok (of_generator ~name:("σ_" ^ rel.Relation.name) ~schema:rel.Relation.schema lazy_gen)
+    Ok (of_generator ~name:("σ_" ^ rel.Relation.name) ~schema:rel.Relation.schema
+           ?constraints:rel.Relation.constraints lazy_gen)
 
   let project storage (attrs : string list) rel =
     let gen = to_generator storage rel in
@@ -83,7 +89,22 @@ module Make(Storage : Management.Physical.S) = struct
         | Generator.Value (t, next) -> Generator.Value (project_tuple t, go next)
       in fun pos -> go gen pos
     in
-    Ok (of_generator ~name:("π_" ^ rel.Relation.name) ~schema:new_schema lazy_gen)
+    let filtered_constraints =
+      match rel.Relation.constraints with
+      | None | Some [] -> None
+      | Some cs ->
+        let kept =
+          List.filter_map
+            (fun (name, c) ->
+              match Constraint.filter_by_attrs attrs c with
+              | Some c' -> Some (name, c')
+              | None -> None)
+            cs
+        in
+        (match kept with [] -> None | _ -> Some kept)
+    in
+    Ok (of_generator ~name:("π_" ^ rel.Relation.name) ~schema:new_schema
+           ?constraints:filtered_constraints lazy_gen)
 
   let rename storage (renames : (string * string) list) rel =
     let rename_key k = match List.assoc_opt k renames with Some k' -> k' | None -> k in
@@ -104,7 +125,17 @@ module Make(Storage : Management.Physical.S) = struct
         | Generator.Value (t, next) -> Generator.Value (rename_tuple t, go next)
       in fun pos -> go gen pos
     in
-    Ok (of_generator ~name:("ρ_" ^ rel.Relation.name) ~schema:new_schema lazy_gen)
+    let renamed_constraints =
+      match rel.Relation.constraints with
+      | None | Some [] -> None
+      | Some cs ->
+        Some
+          (List.map
+             (fun (name, c) -> (name, Constraint.rename_vars renames c))
+             cs)
+    in
+    Ok (of_generator ~name:("ρ_" ^ rel.Relation.name) ~schema:new_schema
+           ?constraints:renamed_constraints lazy_gen)
 
   let equijoin storage (attrs : string list) left right =
     let right_gen = to_generator storage right in
@@ -155,8 +186,15 @@ module Make(Storage : Management.Physical.S) = struct
         in
         from_left left_gen 0
       in
+      let merged_constraints =
+        match left.Relation.constraints, right.Relation.constraints with
+        | None, None -> None
+        | Some cs, None | None, Some cs -> Some cs
+        | Some cs1, Some cs2 -> Some (Constraint.merge cs1 cs2)
+      in
       let name = "⋈_" ^ left.Relation.name ^ "_" ^ right.Relation.name in
-      Ok (of_generator ~name ~schema:merged_schema join_gen)
+      Ok (of_generator ~name ~schema:merged_schema
+             ?constraints:merged_constraints join_gen)
 
   let union storage rel1 rel2 =
     let gen1 = to_generator storage rel1 in
@@ -170,6 +208,7 @@ module Make(Storage : Management.Physical.S) = struct
       in fun pos -> go gen1 gen2 pos
     in
     let name = "∪_" ^ rel1.Relation.name ^ "_" ^ rel2.Relation.name in
+    (* Conservative: drop constraints since they only hold if both inputs agree *)
     Ok (of_generator ~name ~schema:rel1.Relation.schema chain_gen)
 
   let attrs_equal
@@ -203,7 +242,8 @@ module Make(Storage : Management.Physical.S) = struct
         in fun pos -> go left_gen pos
       in
       let name = "−_" ^ rel1.Relation.name ^ "_" ^ rel2.Relation.name in
-      Ok (of_generator ~name ~schema:rel1.Relation.schema lazy_gen)
+      Ok (of_generator ~name ~schema:rel1.Relation.schema
+             ?constraints:rel1.Relation.constraints lazy_gen)
 
   let take storage n rel =
     let gen = to_generator storage rel in
@@ -216,7 +256,9 @@ module Make(Storage : Management.Physical.S) = struct
           | Generator.Value (t, next) -> Generator.Value (t, go next (count - 1))
       in fun pos -> go gen n pos
     in
-    Ok (of_generator ~name:("τ_" ^ rel.Relation.name) ~schema:rel.Relation.schema lazy_gen)
+    Ok (of_generator ~name:("τ_" ^ rel.Relation.name) ~schema:rel.Relation.schema
+           ?constraints:rel.Relation.constraints
+           ~cardinality:(Conventions.Cardinality.Finite n) lazy_gen)
 
   let materialize storage rel : (Tuple.materialized list, error) Result.t =
     match drain (to_generator storage rel) with

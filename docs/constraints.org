@@ -1,0 +1,403 @@
+#+TITLE: Constraints and Membership Criteria
+
+* Conceptual Foundation
+
+A relation's *intension* is its meaning: what the relation represents
+in the conceptual model. Where the extension is the set of tuples
+currently admitted, the intension declares which tuples /could/ be
+admitted. Constraints are the formal mechanism by which a relation's
+intension narrows the infinite space of possible tuples to only those
+consistent with the conceptual model.
+
+Because Sakura models everything as a relation, constraints are
+themselves relations. Checking a constraint is checking membership in
+a constraint-relation. When a DML operation (insert/delete)
+manipulates a relation, it verifies that the manipulated data
+satisfies membership in all attached constraint-relations before
+committing the change.
+
+** Membership Criteria vs. Constraints
+
+Sakura distinguishes two levels of admission control:
+
+- *Membership criteria* (=membership_criteria : Tuple.t -> bool=) is
+  the opaque predicate baked into every relation. For stored relations
+  it validates schema/domain conformance. For ephemeral relations
+  (less_than, plus, etc.) it /is/ the intensional definition --- the
+  rule that characterizes the relation rather than an enumeration of
+  members.
+
+- *Constraints* (=Constraint.t=) are declarative, inspectable
+  structures attached to a relation via its =constraints= field. They
+  are evaluated at DML time against the current database snapshot and
+  produce structured diagnostics on failure.
+
+Membership criteria are checked first. If the tuple passes, the
+constraint list is evaluated.
+
+** Negation and Closed-World Reasoning
+
+The =Not= constructor requires an explicit universe relation name.
+This forces closed-world reasoning: negation is only meaningful
+relative to a known domain. Without a declared universe, =NOT P=
+would vacuously hold for anything outside the domain of discourse.
+
+At runtime the universe annotation is declarative --- it is not
+checked as a tuple-existence predicate, because the tuple being
+validated has not been stored yet. The evaluator simply negates the
+body and treats any =MembershipFailed= diagnostic from the body as
+successful negation.
+
+** Cardinality Awareness
+
+Constraints can narrow cardinality. A =Forall= over a finite
+quantifier relation, or a range restriction via comparison relations,
+constrains an otherwise infinite domain to a finite subset. The
+=ConstrainedFinite= variant of =Conventions.Cardinality.t= tags
+relations known to be finite due to constraints but whose exact count
+is not computed.
+
+* Constraint Language
+
+The constraint language is a small first-order logic over relation
+membership:
+
+#+begin_src ocaml
+type t =
+  | MemberOf of { target : relation_name; binding : binding }
+  | Not of { body : t; universe : relation_name }
+  | And of t list
+  | Or of t list
+  | Exists of { variable : attr_name; quantifier : relation_name; body : t }
+  | Forall of { variable : attr_name; quantifier : relation_name; body : t }
+#+end_src
+
+** MemberOf
+
+The atomic constraint. It checks whether the tuple, after binding
+resolution, is a member of the target relation.
+
+#+begin_src ocaml
+MemberOf { target = "orders"; binding = BindingMap.singleton "order_id" (Var "order_id") }
+#+end_src
+
+This says: "the value of =order_id= in the current tuple must appear
+as =order_id= in some tuple of the =orders= relation." This is a
+foreign key constraint.
+
+Everything is a relation --- domains, comparison relations, user
+relations. =MemberOf= resolves them uniformly from the database.
+
+** Bindings
+
+Bindings map target attribute names to expressions:
+
+#+begin_src ocaml
+type binding_expr =
+  | Var of attr_name          (* resolve from current tuple *)
+  | Const of AbstractValue.t  (* literal value *)
+#+end_src
+
+A binding like ={ "left" -> Var "age"; "right" -> Const 18 }= applied
+to a tuple with =age=25= produces the pairs
+=[("left", 25); ("right", 18)]=, which are then checked for
+membership in the target relation (e.g., =greater_than_or_equal=).
+
+** Logical Connectives
+
+- =And cs=: All sub-constraints must hold. Short-circuits on first failure.
+- =Or cs=: At least one must hold. Short-circuits on first success.
+- =Not { body; universe }=: The body must /not/ hold. The universe
+  declares the domain of negation for logical soundness.
+
+** Quantifiers
+
+- =Exists { variable; quantifier; body }=: There exists a tuple in
+  the quantifier relation such that, when bound to =variable=, the
+  body holds. The quantifier must be a finite relation.
+- =Forall { variable; quantifier; body }=: For all tuples in the
+  quantifier relation, the body holds. Also requires finiteness.
+
+Quantifiers bind values from the quantifier relation into the tuple's
+attribute map, extending the scope for the body evaluation.
+
+* Comparison Shorthands
+
+Because comparisons are relations, comparison constraints are
+=MemberOf= with the appropriate relation name and binding. Shorthand
+constructors eliminate boilerplate:
+
+#+begin_src ocaml
+Constraint.lt  ~left:(Var "age") ~right:(Const (Obj.repr 65))
+(* equivalent to:
+   MemberOf { target = "less_than";
+              binding = { "left" -> Var "age"; "right" -> Const 65 } } *)
+
+Constraint.between ~value:(Var "score") ~low:(Const 0) ~high:(Const 100)
+(* And [ gte score 0; lte score 100 ] *)
+#+end_src
+
+Available shorthands: =lt=, =lte=, =gt=, =gte=, =eq=, =neq=, =between=.
+
+* Comparison and Arithmetic Relations
+
+The prelude registers domain-parameterized comparison relations. Each
+takes a domain's =compare= function and a predicate over the compare
+result:
+
+| Relation name         | Schema         | Predicate       |
+|-----------------------+----------------+-----------------|
+| =less_than=           | (left, right)  | =compare < 0=   |
+| =less_than_or_equal=  | (left, right)  | =compare <= 0=  |
+| =greater_than=        | (left, right)  | =compare > 0=   |
+| =greater_than_or_equal= | (left, right) | =compare >= 0= |
+| =equal=               | (left, right)  | =compare = 0=   |
+| =not_equal=           | (left, right)  | =compare <> 0=  |
+
+Arithmetic relations follow the same pattern with richer schemas:
+
+| Relation     | Schema                          | Invariant             |
+|--------------+---------------------------------+-----------------------|
+| =plus=       | (a, b, sum)                     | =a + b = sum=         |
+| =times=      | (a, b, product)                 | =a * b = product=     |
+| =minus=      | (a, b, difference)              | =a - b = difference=  |
+| =divide=     | (a, b, quotient, remainder)     | =a = b*q + r, 0<=r<b= |
+
+All are ephemeral (generator-based, infinite). They serve as the
+vocabulary for constraint expressions.
+
+* Domain Compare
+
+Each =Domain.t= now carries a =compare= field:
+
+#+begin_src ocaml
+type t = {
+  name : Name.t;
+  generator : Generator.t;
+  membership_criteria : Tuple.t -> bool;
+  cardinality : Cardinality.t;
+  compare : AbstractValue.t -> AbstractValue.t -> int;
+}
+#+end_src
+
+The =compare= function dispatches comparison for values of that
+domain. The comparison relations use domain comparators rather than
+spreading =Obj.magic= casts at each call site. The four prelude
+domains define their comparators:
+
+- =integer=, =natural=: integer comparison
+- =rational=: float comparison
+- =string=: lexicographic comparison
+
+* Evaluation Engine
+
+** Eval Context
+
+The evaluator cannot depend on =Relation.t=, =Database.t=, or
+=Manipulation= (they compile later). Instead it receives a callback
+record:
+
+#+begin_src ocaml
+type eval_context = {
+  check_membership :
+    relation_name ->
+    (attr_name * AbstractValue.t) list ->
+    bool;
+  iterate_finite :
+    relation_name ->
+    (attr_name * AbstractValue.t) list list option;
+}
+#+end_src
+
+Both callbacks are closed over a specific =(storage, db)= pair at
+construction time. The =db= is a =Management.Database.t= representing
+one exact version (one hash). All relation lookups resolve against
+that snapshot only. This is critical: constraint evaluation sees a
+consistent view of the database, never a partially-mutated state.
+
+** How =check_membership= Works
+
+For a stored relation, =check_membership= loads every tuple from the
+Merkle tree and checks whether any tuple's attributes match the bound
+pairs. For an ephemeral relation (no tree), it delegates to
+=membership_criteria=.
+
+This distinction matters for foreign key constraints. A FK like
+"order_items.order_id must exist in orders" requires checking actual
+tuple existence in the =orders= relation, not just schema
+conformance.
+
+** Evaluation Rules
+
+| Constructor | Rule                                                        |
+|-------------+-------------------------------------------------------------|
+| =MemberOf=  | Bind variables from tuple, call =check_membership=          |
+| =Not=       | Negate body. =MembershipFailed= from body counts as success |
+| =And=       | All must hold (short-circuit on first failure)              |
+| =Or=        | Any must hold (short-circuit on first success)              |
+| =Exists=    | Iterate quantifier, bind each row, true if any body holds   |
+| =Forall=    | Iterate quantifier, bind each row, true only if all hold    |
+
+Quantifiers require finite quantifier relations (=iterate_finite=
+returns =Some rows=). An infinite quantifier produces
+=UnboundedQuantifier= diagnostic.
+
+** Diagnostics
+
+Failures produce structured diagnostics rather than opaque booleans:
+
+#+begin_src ocaml
+type diagnostic =
+  | MembershipFailed of { target : string; bound_values : ... }
+  | RelationNotFound of string
+  | UnboundedQuantifier of { variable; quantifier }
+  | ConstraintFailures of (string * diagnostic) list
+#+end_src
+
+Named constraint evaluation collects all failures into
+=ConstraintFailures=, giving the caller a complete picture of which
+constraints were violated and why.
+
+* Enforcement in Manipulation
+
+Constraints are enforced in =Manipulation.create_tuple=. The sequence is:
+
+1. Check =membership_criteria= (schema/domain validation)
+2. If the relation has constraints, build an =eval_context= from the
+   current =(storage, db)= pair
+3. Evaluate each named constraint against the tuple
+4. On any failure, return =ConstraintViolation= with diagnostic details
+5. On success, proceed to hash, store, and persist
+
+The =eval_context= is built fresh for each =create_tuple= call with
+the /current/ database state. This ensures FK lookups see recently
+inserted tuples, not a stale snapshot from constraint registration
+time.
+
+** Registering Constraints
+
+=register_constraint= performs two actions:
+
+1. Attaches the constraint body to the relation via
+   =update_relation_constraints=, which merges new constraints with
+   any existing ones
+2. Records the constraint name and relation in the =sakura:constraint=
+   catalog relation
+
+The constraint body is stored in the =Relation.t= object's
+=constraints= field, not separately. This means the constraint
+travels with the relation through algebraic operations.
+
+* Propagation Through Algebra
+
+When algebraic operations derive new relations, constraints propagate
+according to rules that preserve soundness:
+
+| Operation | Propagation rule                                    |
+|-----------+-----------------------------------------------------|
+| Select    | Preserve all source constraints                     |
+| Project   | Filter: keep only constraints whose variables are   |
+|           | all within the projected attributes                 |
+| Rename    | Apply variable renaming to constraint references    |
+| Equijoin  | Merge constraints from both input relations         |
+| Union     | Drop all constraints (conservative: constraints     |
+|           | only hold if both inputs agree)                     |
+| Diff      | Preserve left relation's constraints                |
+| Take      | Preserve source constraints                         |
+
+The =filter_by_attrs=, =rename_vars=, and =merge= utility functions
+on =Constraint.t= implement these transformations.
+
+** Example: Project Filtering
+
+Given a relation =R(x, y)= with constraint "=x < 100=", projecting
+to =[y]= drops the constraint because =x= is no longer in scope.
+Projecting to =[x]= or =[x, y]= preserves it.
+
+#+begin_src ocaml
+Constraint.filter_by_attrs ["y"] (Constraint.lt ~left:(Var "x") ~right:(Const 100))
+(* => None — dropped because "x" not in ["y"] *)
+
+Constraint.filter_by_attrs ["x"] (Constraint.lt ~left:(Var "x") ~right:(Const 100))
+(* => Some (lt ...) — preserved *)
+#+end_src
+
+* Utility Functions
+
+=Constraint.t= provides introspection and transformation utilities:
+
+- =vars_in : t -> attr_name list= --- collect all =Var= names
+  referenced in a constraint, recursively through all sub-expressions.
+
+- =rename_vars : (attr_name * attr_name) list -> t -> t= --- rename
+  variable references throughout a constraint tree. Used by the rename
+  algebra operator.
+
+- =filter_by_attrs : attr_name list -> t -> t option= --- returns
+  =None= if the constraint references any variable not in the given
+  set. Used by projection to drop inapplicable constraints. For =Or=,
+  all branches must survive (dropping a branch changes semantics).
+
+- =merge : (string * t) list -> (string * t) list -> (string * t) list=
+  --- AND-merge two named constraint lists. Constraints sharing a name
+  are combined with =And=. Used by equijoin.
+
+* Examples
+
+** Foreign Key
+
+#+begin_src ocaml
+(* order_items.order_id must reference an existing order *)
+let fk =
+  Constraint.MemberOf {
+    target = "orders";
+    binding = Constraint.BindingMap.singleton "order_id" (Var "order_id")
+  }
+in
+register_constraint storage db
+  ~constraint_name:"fk_order"
+  ~relation_name:"order_items"
+  ~body:fk
+#+end_src
+
+Inserting an order_item with =order_id=999= when no such order exists
+produces =ConstraintViolation "constraint fk_order violated"=.
+
+** Mutual Exclusion
+
+#+begin_src ocaml
+(* A ticket cannot be both open and closed *)
+let not_closed =
+  Constraint.Not {
+    body = Constraint.MemberOf {
+      target = "closed_ticket";
+      binding = Constraint.BindingMap.singleton "ticket_id" (Var "ticket_id")
+    };
+    universe = "open_ticket"
+  }
+in
+register_constraint storage db
+  ~constraint_name:"not_closed"
+  ~relation_name:"open_ticket"
+  ~body:not_closed
+#+end_src
+
+** Self-Reference Inequality
+
+#+begin_src ocaml
+(* An employee cannot manage themselves *)
+let neq = Constraint.neq ~left:(Var "emp_id") ~right:(Var "mgr_id") in
+register_constraint storage db
+  ~constraint_name:"no_self_manage"
+  ~relation_name:"reports_to"
+  ~body:neq
+#+end_src
+
+This uses the =not_equal= comparison relation: it checks membership
+in ={(left, right) | left <> right}=.
+
+* References
+
+- Codd, E. F. (1979), "Extending the Database Relational Model to Capture More Meaning"
+- Date, C. J. and Darwen, H. (2006), "The Third Manifesto"
+- McGoveran, D. (1994), "The Semantic Relational Data Model"

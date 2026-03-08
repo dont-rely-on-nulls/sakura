@@ -9,7 +9,7 @@ module Name = struct
 end
 
 module Cardinality = struct
-  type t = Finite of int | AlephZero | Continuum
+  type t = Finite of int | ConstrainedFinite | AlephZero | Continuum
 end
 
 module AbstractValue = struct

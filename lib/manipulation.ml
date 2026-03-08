@@ -45,6 +45,98 @@ let build_membership_criteria _schema : (Tuple.t -> bool) =
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
 
+  (* ============================================================================
+     Constraint evaluation context
+     ============================================================================ *)
+
+  (** Build an eval_context closed over a specific (storage, db) snapshot.
+      All relation lookups resolve against this exact database version. *)
+  let build_eval_context (storage : storage) (db : Management.Database.t)
+      : Constraint.eval_context =
+    let check_membership rel_name bound_pairs =
+      match Management.Database.get_relation db rel_name with
+      | None -> false
+      | Some rel ->
+        let attributes =
+          List.fold_left
+            (fun acc (k, v) ->
+              Tuple.AttributeMap.add k { Attribute.value = v } acc)
+            Tuple.AttributeMap.empty bound_pairs
+        in
+        let tuple =
+          Tuple.Materialized { Tuple.relation = rel_name; attributes }
+        in
+        if not (rel.membership_criteria tuple) then false
+        else
+          (* For stored relations, check if a matching tuple actually exists *)
+          match rel.tree with
+          | None ->
+            (* No tree = ephemeral/generator relation, membership_criteria suffices *)
+            true
+          | Some tree ->
+            let hashes = Merkle.keys tree in
+            List.exists
+              (fun h ->
+                match Storage.load_raw storage h with
+                | Error _ | Ok None -> false
+                | Ok (Some bytes) ->
+                  let stored = Storable.Tuple.of_bytes bytes in
+                  (* Check if all bound pairs match the stored tuple's attributes *)
+                  List.for_all
+                    (fun (bk, bv) ->
+                      List.exists
+                        (fun (sk, sh) ->
+                          sk = bk
+                          &&
+                          match Storage.load_raw storage sh with
+                          | Error _ | Ok None -> false
+                          | Ok (Some vbytes) ->
+                            let sv : Conventions.AbstractValue.t =
+                              Marshal.from_bytes vbytes 0
+                            in
+                            Stdlib.( = ) sv bv)
+                        stored.Storable.Tuple.attributes)
+                    bound_pairs)
+              hashes
+    in
+    let iterate_finite rel_name =
+      match Management.Database.get_relation db rel_name with
+      | None -> None
+      | Some rel -> (
+        match rel.cardinality with
+        | Conventions.Cardinality.Finite _ | Conventions.Cardinality.ConstrainedFinite -> (
+          match rel.tree with
+          | None -> Some []
+          | Some tree ->
+            let hashes = Merkle.keys tree in
+            let rec load_all acc = function
+              | [] -> Some (List.rev acc)
+              | h :: rest -> (
+                match Storage.load_raw storage h with
+                | Error _ -> None
+                | Ok None -> None
+                | Ok (Some bytes) ->
+                  let stored = Storable.Tuple.of_bytes bytes in
+                  let rec load_attrs attr_acc = function
+                    | [] -> Some (List.rev attr_acc)
+                    | (name, attr_hash) :: attr_rest -> (
+                      match Storage.load_raw storage attr_hash with
+                      | Error _ | Ok None -> None
+                      | Ok (Some vbytes) ->
+                        let value : Conventions.AbstractValue.t =
+                          Marshal.from_bytes vbytes 0
+                        in
+                        load_attrs ((name, value) :: attr_acc) attr_rest)
+                  in
+                  (match load_attrs [] stored.Storable.Tuple.attributes with
+                   | None -> None
+                   | Some pairs -> load_all (pairs :: acc) rest))
+            in
+            load_all [] hashes)
+        | _ -> None)
+    in
+    { Constraint.check_membership; iterate_finite }
+
   (* State Persistence - Store relation and database states *)
 
   (** Store a relation state to storage *)
@@ -219,6 +311,25 @@ module Make (Storage : Management.Physical.S) = struct
       if not (relation.membership_criteria (Tuple.Materialized tuple)) then
         Error (ConstraintViolation "Tuple does not satisfy membership criteria")
       else
+        (* Check constraints *)
+        let constraint_ok =
+          match relation.constraints with
+          | None | Some [] -> Ok true
+          | Some named_constraints ->
+            let ctx = build_eval_context storage db in
+            Constraint.evaluate_named ctx tuple named_constraints
+        in
+        (match constraint_ok with
+         | Error (Constraint.ConstraintFailures failures) ->
+           let msg =
+             String.concat "; "
+               (List.map (fun (name, _) -> "constraint " ^ name ^ " violated")
+                  failures)
+           in
+           Error (ConstraintViolation msg)
+         | Error _ -> Error (ConstraintViolation "Constraint evaluation failed")
+         | Ok false -> Error (ConstraintViolation "Constraint not satisfied")
+         | Ok true ->
         (* Compute tuple hash *)
         let tuple_hash = Hashing.hash_tuple tuple in
 
@@ -275,7 +386,7 @@ module Make (Storage : Management.Physical.S) = struct
                | Ok () ->
                  match store_database storage new_db with
                  | Error e -> Error e
-                 | Ok () -> Ok (new_db, new_relation, tuple_hash))
+                 | Ok () -> Ok (new_db, new_relation, tuple_hash)))
 
   (** Insert multiple tuples into a relation *)
   let create_tuples
@@ -709,20 +820,83 @@ module Make (Storage : Management.Physical.S) = struct
         | Error e -> Error e
         | Ok () -> Ok (new_db, new_relation)
 
-  (** Register a named constraint on a relation in the system catalog. *)
+  (** Attach constraints to an existing relation.
+      Rebuilds membership_criteria to include constraint checking,
+      re-hashes, and persists. *)
+  let update_relation_constraints
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(relation_name : string)
+      ~(constraints : Relation.RelationConstraint.t)
+    : (Management.Database.t * Relation.t) result =
+    match Management.Database.get_relation db relation_name with
+    | None -> Error (RelationNotFound relation_name)
+    | Some relation ->
+      let merged_constraints =
+        match relation.constraints with
+        | None -> constraints
+        | Some existing -> Constraint.merge existing constraints
+      in
+      (* Don't bake constraint evaluation into membership_criteria —
+         create_tuple evaluates constraints with the current db snapshot.
+         membership_criteria stays for schema/domain validation only. *)
+      let new_relation =
+        { relation with
+          constraints = Some merged_constraints;
+        }
+      in
+      (* Re-hash *)
+      let new_relation =
+        match new_relation.tree with
+        | Some tree ->
+          let h =
+            Hashing.hash_relation ~name:relation_name
+              ~schema:relation.schema ~tree
+          in
+          { new_relation with hash = Some h }
+        | None -> new_relation
+      in
+      let new_db =
+        Management.Database.update_relation db ~relation:new_relation
+      in
+      (match store_relation storage new_relation with
+       | Error e -> Error e
+       | Ok () ->
+         (match store_database storage new_db with
+          | Error e -> Error e
+          | Ok () -> Ok (new_db, new_relation)))
+
+  (** Register a named constraint on a relation.
+      Attaches the constraint body to the relation AND records it in
+      [sakura:constraint]. *)
   let register_constraint
       (storage : storage)
       (db : Management.Database.t)
       ~(constraint_name : string)
       ~(relation_name : string)
+      ~(body : Constraint.t)
     : (Management.Database.t, error) Result.t =
-    match Management.Database.get_relation db Prelude.Catalog.constraint_rel_name with
-    | None -> Ok db  (* catalog not initialized *)
-    | Some con_cat ->
-      let con_tuple = Prelude.Catalog.build_constraint_tuple constraint_name relation_name in
-      match create_tuple storage db con_cat con_tuple with
-      | Error e -> Error e
-      | Ok (new_db, _, _) -> Ok new_db
+    (* Attach constraint to the relation *)
+    (match
+       update_relation_constraints storage db ~relation_name
+         ~constraints:[ (constraint_name, body) ]
+     with
+     | Error e -> Error e
+     | Ok (db, _) ->
+       (* Record in system catalog *)
+       (match
+          Management.Database.get_relation db
+            Prelude.Catalog.constraint_rel_name
+        with
+        | None -> Ok db
+        | Some con_cat ->
+          let con_tuple =
+            Prelude.Catalog.build_constraint_tuple constraint_name
+              relation_name
+          in
+          (match create_tuple storage db con_cat con_tuple with
+           | Error e -> Error e
+           | Ok (new_db, _, _) -> Ok new_db)))
 
   (*Query Operations *)
 

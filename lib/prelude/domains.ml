@@ -40,6 +40,7 @@ let integer : Domain.t =
   in
   Domain.make ~name:"integer" ~generator ~membership_criteria
     ~cardinality:Conventions.Cardinality.AlephZero
+    ~compare:(fun a b -> Stdlib.compare (Obj.magic a : int) (Obj.magic b : int))
 
 (** Natural number domain: non-negative integers (0, 1, 2, …).
     Schema: [value: natural]. *)
@@ -63,6 +64,7 @@ let natural : Domain.t =
   in
   Domain.make ~name:"natural" ~generator ~membership_criteria
     ~cardinality:Conventions.Cardinality.AlephZero
+    ~compare:(fun a b -> Stdlib.compare (Obj.magic a : int) (Obj.magic b : int))
 
 (** Rational number domain: pairs [(numerator, denominator)] where the
     denominator is never zero.  The generator enumerates all such pairs via
@@ -97,6 +99,8 @@ let rational : Domain.t =
   in
   Domain.make ~name:"rational" ~generator ~membership_criteria
     ~cardinality:Conventions.Cardinality.AlephZero
+    ~compare:(fun a b ->
+      Stdlib.compare (Obj.magic a : float) (Obj.magic b : float))
 
 (** String domain: any string value.  Not enumerable.
     Schema: [value: string]. *)
@@ -110,3 +114,5 @@ let string : Domain.t =
   in
   Domain.make ~name:"string" ~generator ~membership_criteria
     ~cardinality:Conventions.Cardinality.AlephZero
+    ~compare:(fun a b ->
+      String.compare (Obj.magic a : string) (Obj.magic b : string))

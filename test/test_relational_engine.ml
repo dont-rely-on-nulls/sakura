@@ -705,7 +705,8 @@ let%test_unit "catalog: register_constraint inserts into sakura:constraint" =
       in
       let db = match Manipulation.Memory.register_constraint storage db
           ~constraint_name:"orders_id_positive"
-          ~relation_name:"orders" with
+          ~relation_name:"orders"
+          ~body:(Constraint.And []) with
         | Error _ -> assert false | Ok db -> db
       in
       let con_rel = match Manipulation.Memory.get_relation db ~name:"sakura:constraint" with
@@ -1350,3 +1351,1036 @@ let%test_unit "drl: execute Select+Const" =
             Obj.obj (Tuple.AttributeMap.find "name" (List.hd rows).Tuple.attributes).Attribute.value
           in
           assert (name_v = "Alice"))
+
+(* ============================================================================
+   Constraint System Tests
+   ============================================================================ *)
+
+(* ---------- Constraint construction ---------- *)
+
+let%test_unit "constraint: vars_in MemberOf" =
+  let b =
+    Constraint.BindingMap.empty
+    |> Constraint.BindingMap.add "left" (Constraint.Var "x")
+    |> Constraint.BindingMap.add "right" (Constraint.Const (Obj.repr 10))
+  in
+  let c = Constraint.MemberOf { target = "less_than"; binding = b } in
+  let vars = Constraint.vars_in c in
+  assert (List.mem "x" vars);
+  assert (not (List.mem "right" vars))
+
+let%test_unit "constraint: vars_in And" =
+  let b1 =
+    Constraint.BindingMap.singleton "left" (Constraint.Var "a")
+  in
+  let b2 =
+    Constraint.BindingMap.singleton "left" (Constraint.Var "b")
+  in
+  let c =
+    Constraint.And
+      [
+        Constraint.MemberOf { target = "t1"; binding = b1 };
+        Constraint.MemberOf { target = "t2"; binding = b2 };
+      ]
+  in
+  let vars = Constraint.vars_in c in
+  assert (List.mem "a" vars);
+  assert (List.mem "b" vars)
+
+let%test_unit "constraint: rename_vars" =
+  let b =
+    Constraint.BindingMap.singleton "left" (Constraint.Var "old_name")
+  in
+  let c = Constraint.MemberOf { target = "t"; binding = b } in
+  let c' = Constraint.rename_vars [ ("old_name", "new_name") ] c in
+  let vars = Constraint.vars_in c' in
+  assert (List.mem "new_name" vars);
+  assert (not (List.mem "old_name" vars))
+
+let%test_unit "constraint: filter_by_attrs keeps relevant" =
+  let b =
+    Constraint.BindingMap.singleton "left" (Constraint.Var "x")
+  in
+  let c = Constraint.MemberOf { target = "t"; binding = b } in
+  assert (Constraint.filter_by_attrs [ "x" ] c <> None);
+  assert (Constraint.filter_by_attrs [ "y" ] c = None)
+
+let%test_unit "constraint: merge named constraints" =
+  let b = Constraint.BindingMap.empty in
+  let cs1 = [ ("c1", Constraint.MemberOf { target = "t1"; binding = b }) ] in
+  let cs2 = [ ("c2", Constraint.MemberOf { target = "t2"; binding = b }) ] in
+  let merged = Constraint.merge cs1 cs2 in
+  assert (List.length merged = 2)
+
+let%test_unit "constraint: merge duplicate names produces And" =
+  let b = Constraint.BindingMap.empty in
+  let c1 = Constraint.MemberOf { target = "t1"; binding = b } in
+  let c2 = Constraint.MemberOf { target = "t2"; binding = b } in
+  let merged = Constraint.merge [ ("shared", c1) ] [ ("shared", c2) ] in
+  assert (List.length merged = 1);
+  match List.assoc "shared" merged with
+  | Constraint.And _ -> ()
+  | _ -> assert false
+
+(* ---------- Smart constructors ---------- *)
+
+let%test_unit "constraint: and_ singleton" =
+  let b = Constraint.BindingMap.empty in
+  let c = Constraint.MemberOf { target = "t"; binding = b } in
+  match Constraint.and_ [ c ] with
+  | Constraint.MemberOf _ -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: or_ singleton" =
+  let b = Constraint.BindingMap.empty in
+  let c = Constraint.MemberOf { target = "t"; binding = b } in
+  match Constraint.or_ [ c ] with
+  | Constraint.MemberOf _ -> ()
+  | _ -> assert false
+
+(* ---------- Comparison shorthands ---------- *)
+
+let%test_unit "constraint: lt shorthand" =
+  match Constraint.lt ~left:(Var "x") ~right:(Const (Obj.repr 5)) with
+  | Constraint.MemberOf { target = "less_than"; _ } -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: between shorthand" =
+  match
+    Constraint.between ~value:(Var "x") ~low:(Const (Obj.repr 0))
+      ~high:(Const (Obj.repr 100))
+  with
+  | Constraint.And [ _; _ ] -> ()
+  | _ -> assert false
+
+(* ---------- Binding resolution ---------- *)
+
+let%test_unit "constraint: bind resolves Var and Const" =
+  let b =
+    Constraint.BindingMap.empty
+    |> Constraint.BindingMap.add "left" (Constraint.Var "x")
+    |> Constraint.BindingMap.add "right" (Constraint.Const (Obj.repr 42))
+  in
+  let tuple : Tuple.materialized =
+    {
+      relation = "test";
+      attributes =
+        Tuple.AttributeMap.singleton "x" { Attribute.value = Obj.repr 10 };
+    }
+  in
+  let bound = Constraint.bind b tuple in
+  assert (List.length bound = 2);
+  let left_v : int = Obj.obj (List.assoc "left" bound) in
+  let right_v : int = Obj.obj (List.assoc "right" bound) in
+  assert (left_v = 10);
+  assert (right_v = 42)
+
+(* ---------- Evaluation engine ---------- *)
+
+let make_eval_ctx ?(relations = []) () : Constraint.eval_context =
+  {
+    check_membership =
+      (fun rel_name bound_pairs ->
+        match List.assoc_opt rel_name relations with
+        | None -> false
+        | Some checker -> checker bound_pairs);
+    iterate_finite =
+      (fun rel_name ->
+        match List.assoc_opt rel_name relations with
+        | None -> None
+        | Some _ -> Some []);
+  }
+
+let%test_unit "constraint: evaluate MemberOf success" =
+  let ctx =
+    make_eval_ctx
+      ~relations:[ ("my_rel", fun _pairs -> true) ]
+      ()
+  in
+  let b = Constraint.BindingMap.empty in
+  let c = Constraint.MemberOf { target = "my_rel"; binding = b } in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Ok true -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: evaluate MemberOf failure" =
+  let ctx =
+    make_eval_ctx
+      ~relations:[ ("my_rel", fun _pairs -> false) ]
+      ()
+  in
+  let b = Constraint.BindingMap.empty in
+  let c = Constraint.MemberOf { target = "my_rel"; binding = b } in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Error (Constraint.MembershipFailed _) -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: evaluate And short-circuits" =
+  let call_count = ref 0 in
+  let ctx =
+    make_eval_ctx
+      ~relations:
+        [
+          ( "fail_rel",
+            fun _ ->
+              incr call_count;
+              false );
+          ( "ok_rel",
+            fun _ ->
+              incr call_count;
+              true );
+        ]
+      ()
+  in
+  let b = Constraint.BindingMap.empty in
+  let c =
+    Constraint.And
+      [
+        Constraint.MemberOf { target = "fail_rel"; binding = b };
+        Constraint.MemberOf { target = "ok_rel"; binding = b };
+      ]
+  in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  (match Constraint.evaluate ctx tuple c with
+   | Error _ -> ()
+   | _ -> assert false);
+  (* Second branch should not have been called *)
+  assert (!call_count = 1)
+
+let%test_unit "constraint: evaluate Or succeeds on first match" =
+  let ctx =
+    make_eval_ctx
+      ~relations:
+        [
+          ("a", fun _ -> false);
+          ("b", fun _ -> true);
+        ]
+      ()
+  in
+  let b = Constraint.BindingMap.empty in
+  let c =
+    Constraint.Or
+      [
+        Constraint.MemberOf { target = "a"; binding = b };
+        Constraint.MemberOf { target = "b"; binding = b };
+      ]
+  in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Ok true -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: evaluate Not negates" =
+  let ctx : Constraint.eval_context =
+    {
+      check_membership =
+        (fun rel_name _pairs ->
+          match rel_name with
+          | "universe" -> true
+          | "body_rel" -> false
+          | _ -> false);
+      iterate_finite = (fun _ -> None);
+    }
+  in
+  let b = Constraint.BindingMap.empty in
+  let c =
+    Constraint.Not
+      {
+        body = Constraint.MemberOf { target = "body_rel"; binding = b };
+        universe = "universe";
+      }
+  in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Ok true -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: evaluate Exists over finite relation" =
+  let ctx : Constraint.eval_context =
+    {
+      check_membership =
+        (fun _rel_name pairs ->
+          match List.assoc_opt "left" pairs, List.assoc_opt "right" pairs with
+          | Some l, Some r -> (Obj.obj l : int) < (Obj.obj r : int)
+          | _ -> false);
+      iterate_finite =
+        (fun rel_name ->
+          if rel_name = "small_set" then
+            Some
+              [
+                [ ("value", Obj.repr 1) ];
+                [ ("value", Obj.repr 5) ];
+                [ ("value", Obj.repr 10) ];
+              ]
+          else None);
+    }
+  in
+  let b =
+    Constraint.BindingMap.empty
+    |> Constraint.BindingMap.add "left" (Constraint.Var "x")
+    |> Constraint.BindingMap.add "right" (Constraint.Var "value")
+  in
+  let c =
+    Constraint.Exists
+      {
+        variable = "value";
+        quantifier = "small_set";
+        body = Constraint.MemberOf { target = "less_than"; binding = b };
+      }
+  in
+  (* x=3, exists value in {1,5,10} where 3 < value => true (5 or 10 work) *)
+  let tuple : Tuple.materialized =
+    {
+      relation = "test";
+      attributes =
+        Tuple.AttributeMap.singleton "x" { Attribute.value = Obj.repr 3 };
+    }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Ok true -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: evaluate Forall fails when not all match" =
+  let ctx : Constraint.eval_context =
+    {
+      check_membership =
+        (fun _rel_name pairs ->
+          match List.assoc_opt "left" pairs, List.assoc_opt "right" pairs with
+          | Some l, Some r -> (Obj.obj l : int) < (Obj.obj r : int)
+          | _ -> false);
+      iterate_finite =
+        (fun rel_name ->
+          if rel_name = "small_set" then
+            Some
+              [
+                [ ("value", Obj.repr 1) ];
+                [ ("value", Obj.repr 5) ];
+              ]
+          else None);
+    }
+  in
+  let b =
+    Constraint.BindingMap.empty
+    |> Constraint.BindingMap.add "left" (Constraint.Var "x")
+    |> Constraint.BindingMap.add "right" (Constraint.Var "value")
+  in
+  let c =
+    Constraint.Forall
+      {
+        variable = "value";
+        quantifier = "small_set";
+        body = Constraint.MemberOf { target = "less_than"; binding = b };
+      }
+  in
+  (* x=3, forall value in {1,5} where 3 < value => false (3 is not < 1) *)
+  let tuple : Tuple.materialized =
+    {
+      relation = "test";
+      attributes =
+        Tuple.AttributeMap.singleton "x" { Attribute.value = Obj.repr 3 };
+    }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Ok false -> ()
+  | _ -> assert false
+
+let%test_unit "constraint: Forall unbounded quantifier errors" =
+  let ctx : Constraint.eval_context =
+    {
+      check_membership = (fun _ _ -> true);
+      iterate_finite = (fun _ -> None);
+    }
+  in
+  let b = Constraint.BindingMap.empty in
+  let c =
+    Constraint.Forall
+      {
+        variable = "v";
+        quantifier = "infinite_rel";
+        body = Constraint.MemberOf { target = "t"; binding = b };
+      }
+  in
+  let tuple : Tuple.materialized =
+    { relation = "test"; attributes = Tuple.AttributeMap.empty }
+  in
+  match Constraint.evaluate ctx tuple c with
+  | Error (Constraint.UnboundedQuantifier _) -> ()
+  | _ -> assert false
+
+(* ---------- Integrated constraint enforcement in manipulation ---------- *)
+
+let%test_unit "constraint: create_tuple with passing constraint" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "value" "natural" in
+    let db, _rel =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"positives"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Register a constraint: value must be member of natural (always true for naturals) *)
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"is_natural" ~relation_name:"positives"
+          ~body:(Constraint.And [])
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let rel =
+      match Manipulation.Memory.get_relation db ~name:"positives" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let tuple : Tuple.materialized =
+      {
+        relation = "positives";
+        attributes =
+          Tuple.AttributeMap.singleton "value"
+            { Attribute.value = Obj.repr 5 };
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db rel tuple with
+    | Ok _ -> ()
+    | Error _ -> assert false)
+
+let%test_unit "constraint: create_tuple with failing constraint" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "value" "natural" in
+    let db, _rel =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"checked"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Register a constraint that always fails: MemberOf a nonexistent relation *)
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"impossible" ~relation_name:"checked"
+          ~body:
+            (Constraint.MemberOf
+               {
+                 target = "nonexistent_relation";
+                 binding =
+                   Constraint.BindingMap.singleton "x" (Constraint.Var "value");
+               })
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let rel =
+      match Manipulation.Memory.get_relation db ~name:"checked" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let tuple : Tuple.materialized =
+      {
+        relation = "checked";
+        attributes =
+          Tuple.AttributeMap.singleton "value"
+            { Attribute.value = Obj.repr 5 };
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db rel tuple with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* ---------- Scenario tests ported from Erlang ---------- *)
+
+(* Scenario 1: Mutual exclusion between subtypes *)
+let%test_unit "constraint scenario: mutual exclusion subtypes" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "id" "natural" in
+    let db, _employee =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"employee"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    let db, _manager =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"manager"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* manager must NOT be in employee (mutual exclusion) *)
+    let body =
+      Constraint.Not
+        {
+          body =
+            Constraint.MemberOf
+              {
+                target = "employee";
+                binding =
+                  Constraint.BindingMap.singleton "id" (Constraint.Var "id");
+              };
+          universe = "manager";
+        }
+    in
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"not_employee" ~relation_name:"manager" ~body
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    (* Insert into employee first *)
+    let employee =
+      match Manipulation.Memory.get_relation db ~name:"employee" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let emp_tuple : Tuple.materialized =
+      {
+        relation = "employee";
+        attributes =
+          Tuple.AttributeMap.singleton "id"
+            { Attribute.value = Obj.repr 1 };
+      }
+    in
+    let db, _employee, _ =
+      match
+        Manipulation.Memory.create_tuple storage db employee emp_tuple
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Now try to insert same id into manager — should fail *)
+    let manager =
+      match Manipulation.Memory.get_relation db ~name:"manager" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let mgr_tuple : Tuple.materialized =
+      {
+        relation = "manager";
+        attributes =
+          Tuple.AttributeMap.singleton "id"
+            { Attribute.value = Obj.repr 1 };
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db manager mgr_tuple with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* Scenario 2: Foreign key constraint *)
+let%test_unit "constraint scenario: foreign key" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let order_schema = Schema.empty |> Schema.add "order_id" "natural" in
+    let db, _orders =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"orders"
+          ~schema:order_schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    let item_schema =
+      Schema.empty |> Schema.add "item_id" "natural"
+      |> Schema.add "order_id" "natural"
+    in
+    let db, _items =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"order_items"
+          ~schema:item_schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* FK: order_items.order_id must exist in orders *)
+    let fk_body =
+      Constraint.MemberOf
+        {
+          target = "orders";
+          binding =
+            Constraint.BindingMap.singleton "order_id"
+              (Constraint.Var "order_id");
+        }
+    in
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"fk_order" ~relation_name:"order_items"
+          ~body:fk_body
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    (* Insert an order *)
+    let orders =
+      match Manipulation.Memory.get_relation db ~name:"orders" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let order_tuple : Tuple.materialized =
+      {
+        relation = "orders";
+        attributes =
+          Tuple.AttributeMap.singleton "order_id"
+            { Attribute.value = Obj.repr 100 };
+      }
+    in
+    let db, _orders, _ =
+      match
+        Manipulation.Memory.create_tuple storage db orders order_tuple
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Insert item referencing valid order — should succeed *)
+    let items =
+      match Manipulation.Memory.get_relation db ~name:"order_items" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let valid_item : Tuple.materialized =
+      {
+        relation = "order_items";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("item_id", { Attribute.value = Obj.repr 1 });
+              ("order_id", { Attribute.value = Obj.repr 100 });
+            ];
+      }
+    in
+    let db, items, _ =
+      match
+        Manipulation.Memory.create_tuple storage db items valid_item
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Insert item referencing nonexistent order — should fail *)
+    let invalid_item : Tuple.materialized =
+      {
+        relation = "order_items";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("item_id", { Attribute.value = Obj.repr 2 });
+              ("order_id", { Attribute.value = Obj.repr 999 });
+            ];
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db items invalid_item with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* Scenario 3: Self-reference (emp_id != mgr_id via not_equal comparison) *)
+let%test_unit "constraint scenario: self-reference neq" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema =
+      Schema.empty |> Schema.add "emp_id" "natural"
+      |> Schema.add "mgr_id" "natural"
+    in
+    let db, _rel =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"reports_to"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Register the not_equal comparison relation *)
+    let db, _ =
+      match
+        Manipulation.Memory.create_immutable_relation storage db
+          ~name:"not_equal"
+          ~schema:
+            (Schema.empty |> Schema.add "left" "natural"
+            |> Schema.add "right" "natural")
+          ~generator:(fun _ -> Generator.Error "not enumerable")
+          ~membership_criteria:(fun t ->
+            match t with
+            | Tuple.Materialized m -> (
+              match
+                ( Tuple.AttributeMap.find_opt "left" m.attributes,
+                  Tuple.AttributeMap.find_opt "right" m.attributes )
+              with
+              | Some l, Some r ->
+                (Obj.obj l.Attribute.value : int)
+                <> (Obj.obj r.Attribute.value : int)
+              | _ -> false)
+            | _ -> false)
+          ~cardinality:Conventions.Cardinality.AlephZero
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Constraint: emp_id != mgr_id via not_equal relation *)
+    let neq_body =
+      Constraint.neq ~left:(Var "emp_id") ~right:(Var "mgr_id")
+    in
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"no_self_manage" ~relation_name:"reports_to"
+          ~body:neq_body
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let rel =
+      match Manipulation.Memory.get_relation db ~name:"reports_to" with
+      | None -> assert false
+      | Some r -> r
+    in
+    (* Insert (emp_id=1, mgr_id=2) — should succeed *)
+    let valid : Tuple.materialized =
+      {
+        relation = "reports_to";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("emp_id", { Attribute.value = Obj.repr 1 });
+              ("mgr_id", { Attribute.value = Obj.repr 2 });
+            ];
+      }
+    in
+    let db, rel, _ =
+      match Manipulation.Memory.create_tuple storage db rel valid with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Insert (emp_id=3, mgr_id=3) — same person, should fail *)
+    let invalid : Tuple.materialized =
+      {
+        relation = "reports_to";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("emp_id", { Attribute.value = Obj.repr 3 });
+              ("mgr_id", { Attribute.value = Obj.repr 3 });
+            ];
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db rel invalid with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* Scenario 4: Mutual exclusion between open_ticket and closed_ticket *)
+let%test_unit "constraint scenario: open vs closed ticket" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "ticket_id" "natural" in
+    let db, _ =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"open_ticket"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    let db, _ =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"closed_ticket"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* open_ticket must not be in closed_ticket *)
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"not_closed" ~relation_name:"open_ticket"
+          ~body:
+            (Constraint.Not
+               {
+                 body =
+                   Constraint.MemberOf
+                     {
+                       target = "closed_ticket";
+                       binding =
+                         Constraint.BindingMap.singleton "ticket_id"
+                           (Constraint.Var "ticket_id");
+                     };
+                 universe = "open_ticket";
+               })
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    (* Insert ticket 1 as closed *)
+    let closed =
+      match Manipulation.Memory.get_relation db ~name:"closed_ticket" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let t1 : Tuple.materialized =
+      {
+        relation = "closed_ticket";
+        attributes =
+          Tuple.AttributeMap.singleton "ticket_id"
+            { Attribute.value = Obj.repr 1 };
+      }
+    in
+    let db, _, _ =
+      match Manipulation.Memory.create_tuple storage db closed t1 with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Try to open same ticket — should fail *)
+    let open_ =
+      match Manipulation.Memory.get_relation db ~name:"open_ticket" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let t1_open : Tuple.materialized =
+      {
+        relation = "open_ticket";
+        attributes =
+          Tuple.AttributeMap.singleton "ticket_id"
+            { Attribute.value = Obj.repr 1 };
+      }
+    in
+    match Manipulation.Memory.create_tuple storage db open_ t1_open with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* Scenario 5: Weak entity dependency *)
+let%test_unit "constraint scenario: weak entity dependency" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let parent_schema = Schema.empty |> Schema.add "parent_id" "natural" in
+    let db, _ =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"parent"
+          ~schema:parent_schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    let dep_schema =
+      Schema.empty |> Schema.add "dep_id" "natural"
+      |> Schema.add "parent_id" "natural"
+    in
+    let db, _ =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"dependent"
+          ~schema:dep_schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* dependent.parent_id must exist in parent *)
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"parent_exists" ~relation_name:"dependent"
+          ~body:
+            (Constraint.MemberOf
+               {
+                 target = "parent";
+                 binding =
+                   Constraint.BindingMap.singleton "parent_id"
+                     (Constraint.Var "parent_id");
+               })
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    (* Insert parent *)
+    let parent =
+      match Manipulation.Memory.get_relation db ~name:"parent" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let pt : Tuple.materialized =
+      {
+        relation = "parent";
+        attributes =
+          Tuple.AttributeMap.singleton "parent_id"
+            { Attribute.value = Obj.repr 10 };
+      }
+    in
+    let db, _, _ =
+      match Manipulation.Memory.create_tuple storage db parent pt with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Insert dependent with valid parent — succeeds *)
+    let dep =
+      match Manipulation.Memory.get_relation db ~name:"dependent" with
+      | None -> assert false
+      | Some r -> r
+    in
+    let valid_dep : Tuple.materialized =
+      {
+        relation = "dependent";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("dep_id", { Attribute.value = Obj.repr 1 });
+              ("parent_id", { Attribute.value = Obj.repr 10 });
+            ];
+      }
+    in
+    let db, dep, _ =
+      match
+        Manipulation.Memory.create_tuple storage db dep valid_dep
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Insert dependent with nonexistent parent — fails *)
+    let invalid_dep : Tuple.materialized =
+      {
+        relation = "dependent";
+        attributes =
+          Tuple.AttributeMap.of_list
+            [
+              ("dep_id", { Attribute.value = Obj.repr 2 });
+              ("parent_id", { Attribute.value = Obj.repr 999 });
+            ];
+      }
+    in
+    match
+      Manipulation.Memory.create_tuple storage db dep invalid_dep
+    with
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | _ -> assert false)
+
+(* Scenario 6: Algebra propagation — select preserves constraints *)
+let%test_unit "constraint propagation: select preserves constraints" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "x" "natural" in
+    let db, _rel =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"constrained"
+          ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"c1" ~relation_name:"constrained"
+          ~body:(Constraint.And [])
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let rel =
+      match Manipulation.Memory.get_relation db ~name:"constrained" with
+      | None -> assert false
+      | Some r -> r
+    in
+    match
+      Algebra.Memory.select_fn storage (fun _ -> true) rel
+    with
+    | Error _ -> assert false
+    | Ok result ->
+      assert (result.Relation.constraints <> None))
+
+(* Scenario 7: Algebra propagation — project filters constraints *)
+let%test_unit "constraint propagation: project filters constraints" =
+  with_storage (fun storage ->
+    let db =
+      match Manipulation.Memory.create_database storage ~name:"test" with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let schema =
+      Schema.empty |> Schema.add "x" "natural" |> Schema.add "y" "natural"
+    in
+    let db, _rel =
+      match
+        Manipulation.Memory.create_relation storage db ~name:"xy" ~schema
+      with
+      | Error _ -> assert false
+      | Ok x -> x
+    in
+    (* Constraint on x only *)
+    let c_on_x =
+      Constraint.MemberOf
+        {
+          target = "some_rel";
+          binding =
+            Constraint.BindingMap.singleton "left" (Constraint.Var "x");
+        }
+    in
+    let db =
+      match
+        Manipulation.Memory.register_constraint storage db
+          ~constraint_name:"x_only" ~relation_name:"xy" ~body:c_on_x
+      with
+      | Error _ -> assert false
+      | Ok db -> db
+    in
+    let rel =
+      match Manipulation.Memory.get_relation db ~name:"xy" with
+      | None -> assert false
+      | Some r -> r
+    in
+    (* Project to only "x" — constraint should survive *)
+    (match Algebra.Memory.project storage [ "x" ] rel with
+     | Error _ -> assert false
+     | Ok result -> assert (result.Relation.constraints <> None));
+    (* Project to only "y" — constraint referencing "x" should be dropped *)
+    match Algebra.Memory.project storage [ "y" ] rel with
+    | Error _ -> assert false
+    | Ok result -> assert (result.Relation.constraints = None))
