@@ -770,9 +770,12 @@ module Make (Storage : Management.Physical.S) = struct
       match store_relation storage relation with
       | Error e -> Error e
       | Ok () ->
-        match store_database storage new_db with
+        match update_catalog_on_create storage new_db relation with
         | Error e -> Error e
-        | Ok () -> Ok (new_db, relation)
+        | Ok final_db ->
+          match store_database storage final_db with
+          | Error e -> Error e
+          | Ok () -> Ok (final_db, relation)
 
   (** Remove a relation from the database.
       Also removes its entries from [sakura:relation] and [sakura:attribute]. *)

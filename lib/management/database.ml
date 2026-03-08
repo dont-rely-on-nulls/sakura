@@ -72,7 +72,13 @@ let has_relation db name =
 
 (** Add a relation to the database *)
 let add_relation db ~(relation : Relation.t) =
-  let relation_hash = Option.get relation.hash in
+  let relation_hash = match relation.hash with
+    | Some h -> h
+    | None ->
+      let tree = Option.value relation.tree ~default:Merkle.empty in
+      Hashing.hash_relation ~name:relation.name ~schema:relation.schema ~tree
+  in
+  let relation = { relation with hash = Some relation_hash } in
   let tree = Merkle.insert relation_hash db.tree in
   let relations = RelationMap.add relation.name relation db.relations in
   update_state db ~relations ~tree

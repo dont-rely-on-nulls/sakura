@@ -4,6 +4,9 @@
     with both attributes in the same domain. The domain's [compare] function
     is used for evaluation — no more spreading [Obj.magic]. *)
 
+(* Helper: wrap a native value in the Attribute.materialized record *)
+let mk v = { Attribute.value = Obj.repr v }
+
 (* ============================================================================
    Comparison relation factory
    ============================================================================ *)
@@ -66,7 +69,7 @@ let less_than_natural : Relation.t =
       let left, right = pair_of_nat_lt position in
       let attributes : Attribute.materialized Tuple.AttributeMap.t =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic left); ("right", Obj.magic right) ]
+          [ ("left", mk left); ("right", mk right) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"less_than" ~attributes,
@@ -90,7 +93,7 @@ let less_than_or_equal_natural : Relation.t =
       let right = max a b in
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic left); ("right", Obj.magic right) ]
+          [ ("left", mk left); ("right", mk right) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"less_than_or_equal" ~attributes,
@@ -110,7 +113,7 @@ let greater_than_natural : Relation.t =
       (* Swap: right > left *)
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic right); ("right", Obj.magic left) ]
+          [ ("left", mk right); ("right", mk left) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"greater_than" ~attributes,
@@ -130,7 +133,7 @@ let greater_than_or_equal_natural : Relation.t =
       let right = min a b in
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic left); ("right", Obj.magic right) ]
+          [ ("left", mk left); ("right", mk right) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"greater_than_or_equal" ~attributes,
@@ -148,7 +151,7 @@ let equal_natural : Relation.t =
     | Some n ->
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic n); ("right", Obj.magic n) ]
+          [ ("left", mk n); ("right", mk n) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"equal" ~attributes, generator )
@@ -166,7 +169,7 @@ let not_equal_natural : Relation.t =
       let left, right = if a = b then (a, b + 1) else (a, b) in
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("left", Obj.magic left); ("right", Obj.magic right) ]
+          [ ("left", mk left); ("right", mk right) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"not_equal" ~attributes, generator )
@@ -192,7 +195,7 @@ let plus_natural : Relation.t =
       let s = a + b in
       let attributes =
         Tuple.AttributeMap.of_list
-          [ ("a", Obj.magic a); ("b", Obj.magic b); ("sum", Obj.magic s) ]
+          [ ("a", mk a); ("b", mk b); ("sum", mk s) ]
       in
       Generator.Value
         ( Tuple.make_materialized ~relation:"plus" ~attributes, generator )
@@ -233,7 +236,7 @@ let times_natural : Relation.t =
       let attributes =
         Tuple.AttributeMap.of_list
           [
-            ("a", Obj.magic a); ("b", Obj.magic b); ("product", Obj.magic p);
+            ("a", mk a); ("b", mk b); ("product", mk p);
           ]
       in
       Generator.Value
@@ -276,9 +279,9 @@ let minus_natural : Relation.t =
       let attributes =
         Tuple.AttributeMap.of_list
           [
-            ("a", Obj.magic a);
-            ("b", Obj.magic b);
-            ("difference", Obj.magic diff);
+            ("a", mk a);
+            ("b", mk b);
+            ("difference", mk diff);
           ]
       in
       Generator.Value
@@ -327,10 +330,10 @@ let divide_natural : Relation.t =
       let attributes =
         Tuple.AttributeMap.of_list
           [
-            ("a", Obj.magic a);
-            ("b", Obj.magic b);
-            ("quotient", Obj.magic q);
-            ("remainder", Obj.magic r);
+            ("a", mk a);
+            ("b", mk b);
+            ("quotient", mk q);
+            ("remainder", mk r);
           ]
       in
       Generator.Value

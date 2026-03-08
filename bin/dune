@@ -5,3 +5,9 @@
  (libraries relational_engine)
  (package sakura)
  (modes byte exe))
+
+(executable
+ (name server)
+ (modules server)
+ (libraries relational_engine unix)
+ (modes byte exe))
