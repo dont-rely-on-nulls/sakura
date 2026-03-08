@@ -7,10 +7,14 @@
     Negation requires an explicit universe relation name, forcing
     closed-world reasoning in first-order logic. *)
 
+(* TODO: lt/lte/gt/gte/eq/neq/between at the bottom reference target names
+   like "less_than" that don't match the prelude relation names
+   (e.g. "natural_natural_less_than"). These constructors are currently dead
+   code and will fail at runtime if used. *)
+
 type relation_name = string
 type attr_name = string
 
-(** Binding expressions resolve against a tuple's attributes *)
 type binding_expr =
   | Var of attr_name
   | Const of Conventions.AbstractValue.t
@@ -27,10 +31,6 @@ type t =
   | Exists of { variable : attr_name; quantifier : relation_name; body : t }
   | Forall of { variable : attr_name; quantifier : relation_name; body : t }
 
-(* ============================================================================
-   Diagnostics
-   ============================================================================ *)
-
 type diagnostic =
   | MembershipFailed of {
       target : string;
@@ -43,11 +43,6 @@ type diagnostic =
     }
   | ConstraintFailures of (string * diagnostic) list
 
-(* ============================================================================
-   Utility functions
-   ============================================================================ *)
-
-(** Collect all [Var] names referenced in a constraint *)
 let rec vars_in : t -> attr_name list = function
   | MemberOf { binding; _ } ->
     BindingMap.fold
@@ -63,7 +58,6 @@ let rec vars_in : t -> attr_name list = function
     if List.mem variable inner then inner
     else variable :: inner
 
-(** Rename [Var] references according to a rename list *)
 let rec rename_vars (renames : (attr_name * attr_name) list) : t -> t = function
   | MemberOf { target; binding } ->
     let binding' =
@@ -94,16 +88,14 @@ let rec rename_vars (renames : (attr_name * attr_name) list) : t -> t = function
       | Some n -> n
       | None -> variable
     in
-    Exists
-      { variable = variable'; quantifier; body = rename_vars renames body }
+    Exists { variable = variable'; quantifier; body = rename_vars renames body }
   | Forall { variable; quantifier; body } ->
     let variable' =
       match List.assoc_opt variable renames with
       | Some n -> n
       | None -> variable
     in
-    Forall
-      { variable = variable'; quantifier; body = rename_vars renames body }
+    Forall { variable = variable'; quantifier; body = rename_vars renames body }
 
 (** Drop constraints referencing attributes not in the given set.
     Returns [None] if the constraint cannot be kept. *)
@@ -121,7 +113,7 @@ let rec filter_by_attrs (attrs : attr_name list) (c : t) : t option =
     let kept = List.filter_map (filter_by_attrs attrs) cs in
     if kept = [] then None else Some (And kept)
   | Or cs ->
-    (* For Or, all branches must survive *)
+    (* All branches must survive for Or to remain sound *)
     let kept = List.filter_map (filter_by_attrs attrs) cs in
     if List.length kept = List.length cs then Some (Or kept) else None
   | Exists { variable; quantifier; body } -> (
@@ -133,11 +125,9 @@ let rec filter_by_attrs (attrs : attr_name list) (c : t) : t option =
     | Some body' -> Some (Forall { variable; quantifier; body = body' })
     | None -> None)
 
-(** AND-merge two named constraint lists *)
 let merge (cs1 : (string * t) list) (cs2 : (string * t) list)
     : (string * t) list =
   let combined = cs1 @ cs2 in
-  (* Group by name and AND-merge duplicates *)
   let tbl = Hashtbl.create 16 in
   List.iter
     (fun (name, c) ->
@@ -151,33 +141,12 @@ let merge (cs1 : (string * t) list) (cs2 : (string * t) list)
       (name, merged) :: acc)
     tbl []
 
-(* ============================================================================
-   Smart constructors
-   ============================================================================ *)
-
 let member_of ~target ~binding = MemberOf { target; binding }
-
 let not_ ~universe body = Not { body; universe }
-
-let and_ cs =
-  match cs with
-  | [ c ] -> c
-  | _ -> And cs
-
-let or_ cs =
-  match cs with
-  | [ c ] -> c
-  | _ -> Or cs
-
-let exists ~variable ~quantifier body =
-  Exists { variable; quantifier; body }
-
-let forall ~variable ~quantifier body =
-  Forall { variable; quantifier; body }
-
-(* ============================================================================
-   Evaluation context (no dependency on Relation/Database/Manipulation)
-   ============================================================================ *)
+let and_ cs = match cs with [ c ] -> c | _ -> And cs
+let or_  cs = match cs with [ c ] -> c | _ -> Or cs
+let exists ~variable ~quantifier body = Exists { variable; quantifier; body }
+let forall ~variable ~quantifier body = Forall { variable; quantifier; body }
 
 type eval_context = {
   check_membership :
@@ -189,11 +158,6 @@ type eval_context = {
     (attr_name * Conventions.AbstractValue.t) list list option;
 }
 
-(* ============================================================================
-   Binding resolution
-   ============================================================================ *)
-
-(** Resolve binding expressions against a materialized tuple *)
 let bind (b : binding) (tuple : Tuple.materialized)
     : (attr_name * Conventions.AbstractValue.t) list =
   BindingMap.fold
@@ -211,13 +175,6 @@ let bind (b : binding) (tuple : Tuple.materialized)
       | None -> acc)
     b []
 
-(* ============================================================================
-   Constraint evaluation
-   ============================================================================ *)
-
-(** Evaluate a constraint against a tuple in the given context.
-    Returns [Ok true] if satisfied, [Ok false] should not occur —
-    failures return [Error diagnostic]. *)
 let rec evaluate (ctx : eval_context) (tuple : Tuple.materialized) (c : t)
     : (bool, diagnostic) result =
   match c with
@@ -227,9 +184,8 @@ let rec evaluate (ctx : eval_context) (tuple : Tuple.materialized) (c : t)
     else Error (MembershipFailed { target; bound_values })
   | Not { body; universe = _ } ->
     (* The universe is a declarative annotation for closed-world reasoning.
-       At runtime, we simply negate the body. The universe ensures logical
-       soundness at the schema level, not as a runtime tuple-existence check
-       (the tuple being validated hasn't been stored yet). *)
+       At runtime we negate the body; the universe enforces logical soundness
+       at the schema level, not as a runtime tuple-existence check. *)
     (match evaluate ctx tuple body with
      | Ok true -> Ok false
      | Ok false -> Ok true
@@ -239,13 +195,11 @@ let rec evaluate (ctx : eval_context) (tuple : Tuple.materialized) (c : t)
   | Or cs -> evaluate_or ctx tuple cs
   | Exists { variable; quantifier; body } -> (
     match ctx.iterate_finite quantifier with
-    | None ->
-      Error (UnboundedQuantifier { variable; quantifier })
+    | None -> Error (UnboundedQuantifier { variable; quantifier })
     | Some rows ->
       let rec check = function
         | [] -> Ok false
         | row :: rest ->
-          (* Bind the quantifier variable into scope *)
           let extended_tuple = extend_tuple tuple variable row in
           (match evaluate ctx extended_tuple body with
            | Ok true -> Ok true
@@ -255,8 +209,7 @@ let rec evaluate (ctx : eval_context) (tuple : Tuple.materialized) (c : t)
       check rows)
   | Forall { variable; quantifier; body } -> (
     match ctx.iterate_finite quantifier with
-    | None ->
-      Error (UnboundedQuantifier { variable; quantifier })
+    | None -> Error (UnboundedQuantifier { variable; quantifier })
     | Some rows ->
       let rec check = function
         | [] -> Ok true
@@ -286,9 +239,6 @@ and evaluate_or ctx tuple = function
     | Ok false -> evaluate_or ctx tuple rest
     | Error _ -> evaluate_or ctx tuple rest)
 
-(** Extend a tuple with bindings from a quantifier row.
-    Each row entry [(attr, value)] gets added with [variable] as prefix
-    if the attr name doesn't match an existing attribute. *)
 and extend_tuple (tuple : Tuple.materialized)
     (_variable : attr_name)
     (row : (attr_name * Conventions.AbstractValue.t) list)
@@ -301,7 +251,6 @@ and extend_tuple (tuple : Tuple.materialized)
   in
   { tuple with attributes = extra_attrs }
 
-(** Evaluate a list of named constraints, collecting all failures *)
 let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
     (named : (string * t) list) : (bool, diagnostic) result =
   let failures =
@@ -318,59 +267,33 @@ let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
   | [] -> Ok true
   | fs -> Error (ConstraintFailures fs)
 
-(* ============================================================================
-   Comparison shorthand constructors
-   ============================================================================ *)
-
 let make_comparison_binding ~left ~right =
   BindingMap.empty
   |> BindingMap.add "left" left
   |> BindingMap.add "right" right
 
 let lt ~left ~right =
-  MemberOf
-    { target = "less_than"; binding = make_comparison_binding ~left ~right }
+  MemberOf { target = "less_than"; binding = make_comparison_binding ~left ~right }
 
 let lte ~left ~right =
-  MemberOf
-    {
-      target = "less_than_or_equal";
-      binding = make_comparison_binding ~left ~right;
-    }
+  MemberOf { target = "less_than_or_equal"; binding = make_comparison_binding ~left ~right }
 
 let gt ~left ~right =
-  MemberOf
-    {
-      target = "greater_than";
-      binding = make_comparison_binding ~left ~right;
-    }
+  MemberOf { target = "greater_than"; binding = make_comparison_binding ~left ~right }
 
 let gte ~left ~right =
-  MemberOf
-    {
-      target = "greater_than_or_equal";
-      binding = make_comparison_binding ~left ~right;
-    }
+  MemberOf { target = "greater_than_or_equal"; binding = make_comparison_binding ~left ~right }
 
 let eq ~left ~right =
-  MemberOf
-    { target = "equal"; binding = make_comparison_binding ~left ~right }
+  MemberOf { target = "equal"; binding = make_comparison_binding ~left ~right }
 
 let neq ~left ~right =
-  MemberOf
-    { target = "not_equal"; binding = make_comparison_binding ~left ~right }
+  MemberOf { target = "not_equal"; binding = make_comparison_binding ~left ~right }
 
 let between ~value ~low ~high =
   And
-    [
-      MemberOf
-        {
-          target = "greater_than_or_equal";
-          binding = make_comparison_binding ~left:value ~right:low;
-        };
-      MemberOf
-        {
-          target = "less_than_or_equal";
-          binding = make_comparison_binding ~left:value ~right:high;
-        };
+    [ MemberOf { target = "greater_than_or_equal";
+                 binding = make_comparison_binding ~left:value ~right:low }
+    ; MemberOf { target = "less_than_or_equal";
+                 binding = make_comparison_binding ~left:value ~right:high }
     ]

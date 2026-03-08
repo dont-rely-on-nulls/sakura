@@ -1,14 +1,13 @@
 (** System catalog helpers.
-
     Pure definitions — no storage access, no manipulation dependency.
     Consumed by {!Manipulation.Make} to bootstrap and maintain the six
     catalog relations that make the database self-describing. *)
 
-let catalog_prefix = "sakura:"
+(* TODO: on_rel_name and timing_rel_name are defined and seeded but never
+   written to by any executor. They appear to be stubs for trigger/timing
+   metadata that was never implemented. *)
 
-(* 
-   Catalog relation names
-    *)
+let catalog_prefix = "sakura:"
 
 let relation_rel_name   = catalog_prefix ^ "relation"
 let domain_rel_name     = catalog_prefix ^ "domain"
@@ -26,12 +25,7 @@ let catalog_relation_names =
   ; timing_rel_name
   ]
 
-let is_catalog_relation name =
-  List.mem name catalog_relation_names
-
-(* 
-   Schema definitions
-    *)
+let is_catalog_relation name = List.mem name catalog_relation_names
 
 let relation_schema : Schema.t =
   Schema.empty |> Schema.add "name" "string"
@@ -56,7 +50,6 @@ let on_schema : Schema.t =
 let timing_schema : Schema.t =
   Schema.empty |> Schema.add "timing" "string"
 
-(** All (name, schema) pairs for the 6 catalog relations, in bootstrap order. *)
 let catalog_definitions =
   [ (relation_rel_name,   relation_schema)
   ; (domain_rel_name,     domain_schema)
@@ -66,9 +59,9 @@ let catalog_definitions =
   ; (timing_rel_name,     timing_schema)
   ]
 
-(* 
-   Tuple builders
-    *)
+(* TODO: all tuple builders use Obj.magic to coerce string values into
+   Attribute.value (Obj.t). This is the same UB pattern fixed in standard.ml;
+   should use Obj.repr instead. *)
 
 let build_relation_tuple rel_name : Tuple.materialized =
   { Tuple.relation = relation_rel_name

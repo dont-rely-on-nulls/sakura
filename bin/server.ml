@@ -3,9 +3,8 @@ open Relational_engine
 let default_port = 7777
 let default_limit = 50
 
-(* ============================================================================
-   Minimal JSON serialisation — no external deps
-   ============================================================================ *)
+(* TODO: move JSON serialisation into its own module; it's grown enough to
+   warrant separation and the server shouldn't own the wire format. *)
 
 let js_str s =
   let buf = Buffer.create (String.length s + 2) in
@@ -30,12 +29,10 @@ let js_arr elems = "[" ^ String.concat "," elems ^ "]"
 let js_bool b    = if b then "true" else "false"
 let js_int  n    = string_of_int n
 
-(* ============================================================================
-   Value serialisation
-   ============================================================================ *)
-
-(** Convert an AbstractValue (Obj.t) to a JSON fragment.
-    Uses Obj tag inspection to recover Int / String / Float. *)
+(* TODO: AbstractValue carries no type tag of its own; we recover the OCaml
+   runtime tag here via Obj introspection. This is fragile — it breaks the
+   moment a domain stores a boxed integer or a custom block. The right fix is
+   a typed value representation in Conventions. *)
 let abstract_to_json (v : Conventions.AbstractValue.t) =
   if Obj.is_int v then js_int (Obj.obj v : int)
   else
@@ -51,11 +48,8 @@ let tuple_to_json (t : Tuple.materialized) =
   let pairs = Tuple.AttributeMap.bindings t.Tuple.attributes in
   js_obj (List.map (fun (k, attr) -> (k, abstract_to_json attr.Attribute.value)) pairs)
 
-(* ============================================================================
-   Relation materialisation
-   ============================================================================ *)
-
-(** Iterate a generator up to [limit] tuples; returns (rows, truncated). *)
+(* TODO: Generator.Error is silently treated as end-of-stream here, hiding
+   real failures from the client. *)
 let materialize_generator gen limit =
   let rec go gen pos acc count =
     if count >= limit then (List.rev acc, true)
@@ -74,14 +68,9 @@ let materialize_generator gen limit =
   in
   go gen 0 [] 0
 
-(** Materialise either a stored or generator-backed relation. *)
 let materialize_relation storage (rel : Relation.t) limit =
   let gen = Algebra.Memory.to_generator storage rel in
   materialize_generator gen limit
-
-(* ============================================================================
-   JSON response builders
-   ============================================================================ *)
 
 let short_hash (h : string) = String.sub h 0 (min 8 (String.length h))
 
@@ -117,31 +106,27 @@ let error_response db_hash msg =
     ("db_hash", js_str (short_hash db_hash));
   ]
 
-(* ============================================================================
-   Error formatting
-   ============================================================================ *)
-
 let manip_err = function
-  | Manipulation.RelationNotFound s    -> "RelationNotFound: " ^ s
+  | Manipulation.RelationNotFound s      -> "RelationNotFound: " ^ s
   | Manipulation.RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-  | Manipulation.TupleNotFound h       -> "TupleNotFound: " ^ h
-  | Manipulation.DuplicateTuple h      -> "DuplicateTuple: " ^ h
-  | Manipulation.ConstraintViolation s -> "ConstraintViolation: " ^ s
-  | Manipulation.StorageError s        -> "StorageError: " ^ s
+  | Manipulation.TupleNotFound h         -> "TupleNotFound: " ^ h
+  | Manipulation.DuplicateTuple h        -> "DuplicateTuple: " ^ h
+  | Manipulation.ConstraintViolation s   -> "ConstraintViolation: " ^ s
+  | Manipulation.StorageError s          -> "StorageError: " ^ s
 
-(* ============================================================================
-   Command execution
-   ============================================================================ *)
-
+(* TODO: language dispatch by trying parsers in sequence is a code smell —
+   a valid DRL expression that happens to also parse as DML would silently
+   be treated as DRL. The three sublanguages should share a common envelope,
+   e.g. a top-level tag distinguishing (Query ...) from (Exec ...). *)
 let execute_command storage db_ref cmd =
   let db = !db_ref in
   let h  = db.Management.Database.hash in
-  (* 0. Special commands *)
+  (* TODO: (schema) is a stopgap. Introspection should be expressible in
+     DRL itself via the catalog relations, not special-cased here. *)
   let cmd = match String.trim cmd with
     | "(schema)" -> {|(Base sakura:attribute)|}
     | s -> s
   in
-  (* 1. Try DRL *)
   match Drl.Parser.of_string cmd with
   | Ok query ->
     (match Drl.Executor.Memory.execute storage db query with
@@ -153,7 +138,6 @@ let execute_command storage db_ref cmd =
      | Error (Drl.Executor.Memory.AlgebraError (Algebra.GeneratorError s)) ->
        error_response h ("GeneratorError: " ^ s))
   | Error _ ->
-    (* 2. Try DML *)
     match Dml.Parser.of_string cmd with
     | Ok stmt ->
       (match Dml.Executor.Memory.execute storage db stmt with
@@ -167,7 +151,6 @@ let execute_command storage db_ref cmd =
        | Error (Dml.Executor.Memory.ParseError s) ->
          error_response h ("ParseError: " ^ s))
     | Error _ ->
-      (* 3. Try DCL *)
       match Dcl.Parser.of_string cmd with
       | Ok stmt ->
         (match Dcl.Executor.Memory.execute storage db stmt with
@@ -181,10 +164,9 @@ let execute_command storage db_ref cmd =
       | Error _ ->
         error_response h "Parse error: not valid DRL, DML, or DCL"
 
-(* ============================================================================
-   Prelude registration
-   ============================================================================ *)
-
+(* TODO: registration failures are silently ignored; a broken prelude
+   relation leaves the catalog in a partially-seeded state with no
+   indication to the user. *)
 let register_prelude_relations storage db =
   let open Prelude.Standard in
   List.fold_left
@@ -211,10 +193,8 @@ let register_prelude_relations storage db =
     ; divide_natural
     ]
 
-(* ============================================================================
-   TCP server
-   ============================================================================ *)
-
+(* TODO: single-threaded accept loop — one slow or hung client blocks all
+   others. Should use threads or non-blocking I/O. *)
 let handle_client storage db_ref fd =
   let ic = Unix.in_channel_of_descr fd in
   let oc = Unix.out_channel_of_descr fd in

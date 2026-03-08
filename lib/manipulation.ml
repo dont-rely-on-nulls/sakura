@@ -45,9 +45,7 @@ let build_membership_criteria _schema : (Tuple.t -> bool) =
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
 
-  (* ============================================================================
-     Constraint evaluation context
-     ============================================================================ *)
+  (* Constraint evaluation context *)
 
   (** Build an eval_context closed over a specific (storage, db) snapshot.
       All relation lookups resolve against this exact database version. *)

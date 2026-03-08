@@ -1,18 +1,14 @@
-(** Domain-parameterized comparison and arithmetic relations.
+(** Comparison and arithmetic relations over the natural domain. *)
 
-    All comparison relations use a two-attribute schema [(left, right)]
-    with both attributes in the same domain. The domain's [compare] function
-    is used for evaluation — no more spreading [Obj.magic]. *)
+(* TODO: all relations here are hardcoded to naturals. The make_comparison
+   factory accepts a domain_name string but membership_criteria always uses
+   Stdlib.compare on Obj.t, which only works correctly for unboxed integers.
+   Extending to other domains requires a proper typed comparison dispatch. *)
 
-(* Helper: wrap a native value in the Attribute.materialized record *)
 let mk v = { Attribute.value = Obj.repr v }
 
-(* ============================================================================
-   Comparison relation factory
-   ============================================================================ *)
-
-(** Build a comparison relation parameterized by domain.
-    [pred] receives the result of [Domain.compare left right]. *)
+(** Build a comparison relation over a single domain.
+    [pred] receives the result of [Stdlib.compare left right]. *)
 let make_comparison ~name ~domain_name ~pred ~cardinality ~generator =
   let schema =
     Schema.empty |> Schema.add "left" domain_name
@@ -34,13 +30,7 @@ let make_comparison ~name ~domain_name ~pred ~cardinality ~generator =
     ~provenance:(Relation.Provenance.Base name)
     ~lineage:(Relation.Lineage.Base name)
 
-(* ============================================================================
-   Pair enumeration for comparison generators
-   ============================================================================ *)
-
-(** Enumerate pairs (a, b) from naturals where a < b.
-    Uses triangular indexing: position n maps to row r, column c
-    where a = c, b = r, and a < b. *)
+(** Enumerate pairs (a, b) where a < b using triangular indexing. *)
 let pair_of_nat_lt n =
   let nf = float_of_int n in
   let r = int_of_float (floor ((1. +. sqrt (1. +. 8. *. nf)) /. 2.)) in
@@ -48,7 +38,7 @@ let pair_of_nat_lt n =
   let left = n - t_prev in
   (left, r)
 
-(** Enumerate all pairs (a, b) from naturals via Cantor pairing. *)
+(** Enumerate all pairs (a, b) via Cantor pairing. *)
 let cantor_pair_of_nat n =
   let w =
     int_of_float (floor ((sqrt (float_of_int (8 * n + 1)) -. 1.) /. 2.))
@@ -58,9 +48,6 @@ let cantor_pair_of_nat n =
   let a = w - b in
   (a, b)
 
-(* ============================================================================
-   Concrete comparison relations (natural domain)
-   ============================================================================ *)
 
 let less_than_natural : Relation.t =
   let rec generator (position : int option) : Generator.result =
@@ -179,9 +166,6 @@ let not_equal_natural : Relation.t =
     ~pred:(fun c -> c <> 0)
     ~cardinality:Conventions.Cardinality.AlephZero ~generator
 
-(* ============================================================================
-   Arithmetic relations (natural domain)
-   ============================================================================ *)
 
 let plus_natural : Relation.t =
   let schema =
