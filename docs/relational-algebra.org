@@ -1,0 +1,191 @@
+* Relational Algebra
+
+Relational algebra is simply that, an algebra. It manipulates objects
+in its space and outputs another element of the same space. SQL is
+often seem as an attempt to encode the relational algebra, however it
+lacks the ability to represent its objects from its algebra by a
+substitution and weakening statics, which typed lambda calculus
+can. It also cannot separate properly the boundaries of its
+sublanguages, which are all mashed together in a huge mess. Our DRL
+(Data Retrieval Language) is concerned with relational algebra
+operations on relations (that is, no such thing as "denormalized
+relations" should be accepted) in first order predicate
+logic. =lib/algebra.ml= implements the core transformations that query
+and manipulate relations. It's essentially an OCaml functor that works
+with any storage backend, producing =ephemeral relations=.
+
+* Ephemeral Relations
+
+Ephemeral relations are generated objects that do not persist its own
+tuples in storage. In other words, they are objects that are fully
+relations themselves, but their data retrieval is by composition atop
+of other base relations. Saying that a relation is *stored* is
+logical-physical confusion (LPC). Only its data is. Since we are
+attempting to apply a theory to a computer, we cannot resort however
+to infinite relations where each transformation by constraints is
+given by the axiom of choice over a substitution static, but we
+simulate such by composition of defined relations over our DML
+sublanguage; it's a compromise for simplicity. In a sense, the name
+*ephemeral relation* is a contradiction in terms, but it is our way of
+calling for the composition nature of such relations, while trying to
+get away from R-tables as a representation, which are not relations,
+only a tabular view of data; extension.
+
+* Implementation: The Functor Pattern
+
+=algebra.ml= is structured as an OCaml functor:
+
+#+begin_src ocaml
+module Make(Storage : Management.Physical.S) = struct
+  (* implementation *)
+end
+
+module Memory = Make(Management.Physical.Memory)
+#+end_src
+
+This design allows the relational algebra to be agnostic of the
+storage backend. The same algebra operations work with in-memory
+storage, disk storage, or any future backend that implements the
+=Physical.S= signature.
+
+* Generator-Based Lazy Evaluation
+
+Rather than materializing entire relations, =algebra.ml= uses lazy
+generators (=Generator.t=, a function from position to the next value)
+to produce tuples on demand. This avoids the overhead of computing and
+storing all intermediate results.
+
+** Core Generator Utilities
+
+- =to_generator rel= :: Converts a relation into a generator. If the
+  relation is already ephemeral (has a generator), returns it; if
+  stored, loads tuples from the hash tree and wraps them in a
+  generator.
+
+- =drain gen= :: Exhausts a generator completely into a list. Used
+  when an operation needs all tuples at once (e.g., for the right side
+  of a join).
+
+- =list_generator ts= :: Creates a generator from a concrete tuple
+  list.
+
+- =of_generator ~name ~schema gen= :: Wraps a generator with metadata
+  (name, schema, constraints, cardinality) to create an ephemeral
+  =Relation.t=. All algebraic operations produce relations this way.
+
+* The Operators
+
+Each operator accepts one or two relations and returns a new ephemeral
+relation whose generator lazily computes the result.
+
+** Selection (σ): Filtering by Predicate
+
+#+begin_src ocaml
+select_fn storage predicate rel
+#+end_src
+
+Filters tuples that satisfy the boolean predicate. The schema and
+constraints are preserved unchanged. The resulting generator only
+yields tuples for which =predicate t = true=.
+
+** Projection (π): Attribute Subset
+
+#+begin_src ocaml
+project storage attrs rel
+#+end_src
+
+Keeps only the specified attributes. The schema is reduced to match.
+Importantly, constraints are filtered: only constraints that reference
+only the projected attributes are retained. Constraints mentioning
+dropped attributes are discarded to avoid invalidity.
+
+** Rename (ρ): Attribute Renaming
+
+#+begin_src ocaml
+rename storage renames rel
+#+end_src
+
+Applies a list of =(old_name, new_name)= pairs to rename attributes.
+The schema is updated, and all constraints have their variable names
+updated to match the renamed attributes.
+
+** Equijoin (⋈): Relation Joining
+
+#+begin_src ocaml
+equijoin storage join_attrs left right
+#+end_src
+
+Joins two relations on matching values of =join_attrs=. The operation:
+1. Drains the right relation (materializes all right tuples)
+2. Streams the left relation through a generator
+3. For each left tuple, filters right tuples matching on the join attributes
+4. Merges matching tuples by combining their attribute maps
+
+The resulting schema is the left schema plus non-join attributes from
+the right (avoiding duplicates). Constraints from both relations are
+merged if they coexist.
+
+** Union (∪): Relation Combination
+
+#+begin_src ocaml
+union storage rel1 rel2
+#+end_src
+
+Chains two generators: first exhausts =rel1=, then =rel2=. The schema
+is from the left relation. Constraints are dropped conservatively
+(constraints only hold if both inputs agree on them).
+
+** Difference (−): Set Subtraction
+
+#+begin_src ocaml
+diff storage rel1 rel2
+#+end_src
+
+Yields tuples from =rel1= that do not appear in =rel2=. Drains =rel2=
+to materialize it for comparison, then streams =rel1= and filters out
+matching tuples (using attribute equality). Constraints from =rel1=
+are preserved.
+
+** Take (τ): Cardinality Limiting
+
+#+begin_src ocaml
+take storage n rel
+#+end_src
+
+Limits output to =n= tuples. The resulting relation's cardinality is
+marked as =Finite n=. Schema and constraints are preserved.
+
+* Constraint Propagation
+
+Constraints attached to relations describe membership predicates on
+tuples. As operations transform relations, constraints must be
+updated:
+
+- *Preserved* (select): Filtering does not invalidate constraints;
+  they still apply to the output.
+- *Filtered* (project): Constraints mentioning dropped attributes are
+  removed.
+- *Renamed* (rename): Constraint variable names are updated to match
+  attribute renames.
+- *Merged* (join, union): Constraints from both input relations are
+  combined, or dropped if uncertain (conservative approach).
+- *Preserved* (diff, take): Constraints from the input relation carry
+  forward.
+
+* Materialization
+
+For cases where a concrete tuple list is needed (rather than a lazy
+generator), the =materialize= function exhausts an ephemeral relation
+into =Tuple.materialized list=. This is rarely needed in typical
+algebraic compositions, but useful for final results or debugging.
+
+#+begin_src ocaml
+materialize storage rel : Tuple.materialized list
+#+end_src
+
+* Constant Relations
+
+The =const_relation= utility creates a single-tuple relation from a
+list of key-value pairs. Useful for embedding literal values into
+algebraic expressions.
+
