@@ -3,50 +3,10 @@ open Relational_engine
 let default_port = 7777
 let default_limit = 50
 
-(* TODO: move JSON serialisation into its own module; it's grown enough to
-   warrant separation and the server shouldn't own the wire format. *)
-
-let js_str s =
-  let buf = Buffer.create (String.length s + 2) in
-  Buffer.add_char buf '"';
-  String.iter (function
-    | '"'  -> Buffer.add_string buf {|\"|}
-    | '\\' -> Buffer.add_string buf {|\\|}
-    | '\n' -> Buffer.add_string buf {|\n|}
-    | '\r' -> Buffer.add_string buf {|\r|}
-    | '\t' -> Buffer.add_string buf {|\t|}
-    | c    -> Buffer.add_char buf c) s;
-  Buffer.add_char buf '"';
-  Buffer.contents buf
-
-let js_obj pairs =
-  "{" ^
-  String.concat ","
-    (List.map (fun (k, v) -> js_str k ^ ":" ^ v) pairs) ^
-  "}"
-
-let js_arr elems = "[" ^ String.concat "," elems ^ "]"
-let js_bool b    = if b then "true" else "false"
-let js_int  n    = string_of_int n
-
 (* TODO: AbstractValue carries no type tag of its own; we recover the OCaml
    runtime tag here via Obj introspection. This is fragile — it breaks the
    moment a domain stores a boxed integer or a custom block. The right fix is
    a typed value representation in Conventions. *)
-let abstract_to_json (v : Conventions.AbstractValue.t) =
-  if Obj.is_int v then js_int (Obj.obj v : int)
-  else
-    let tag = Obj.tag v in
-    if tag = Obj.string_tag then js_str (Obj.obj v : string)
-    else if tag = Obj.double_tag then
-      let f = (Obj.obj v : float) in
-      if Float.is_nan f || Float.is_infinite f then "null"
-      else string_of_float f
-    else js_str "<opaque>"
-
-let tuple_to_json (t : Tuple.materialized) =
-  let pairs = Tuple.AttributeMap.bindings t.Tuple.attributes in
-  js_obj (List.map (fun (k, attr) -> (k, abstract_to_json attr.Attribute.value)) pairs)
 
 (* TODO: Generator.Error is silently treated as end-of-stream here, hiding
    real failures from the client. *)
@@ -74,36 +34,43 @@ let materialize_relation storage (rel : Relation.t) limit =
 
 let short_hash (h : string) = String.sub h 0 (min 8 (String.length h))
 
-let relation_to_json storage (db_hash : string) (rel : Relation.t) limit =
-  let schema_json =
-    js_arr (List.map (fun (a, d) ->
-      js_obj [("attr", js_str a); ("domain", js_str d)]
-    ) rel.Relation.schema)
+let tuple_to_sexp (t : Tuple.materialized) =
+  let open Sexplib.Sexp in
+  List (Tuple.AttributeMap.bindings t.Tuple.attributes
+        |> List.map (fun (k, attr) ->
+               List [Atom k; Conventions.AbstractValue.sexp_of_t attr.Attribute.value]))
+
+let relation_to_sexp storage (db_hash : string) (rel : Relation.t) limit =
+  let open Sexplib.Sexp in
+  let schema_sexp =
+    List (List.map (fun (a, d) -> List [Atom a; Atom d]) rel.Relation.schema)
   in
   let (tuples, truncated) = materialize_relation storage rel limit in
-  let rows_json = js_arr (List.map tuple_to_json tuples) in
-  js_obj [
-    ("type",      js_str "relation");
-    ("name",      js_str rel.Relation.name);
-    ("schema",    schema_json);
-    ("rows",      rows_json);
-    ("row_count", js_int (List.length tuples));
-    ("truncated", js_bool truncated);
-    ("db_hash",   js_str (short_hash db_hash));
+  let rows_sexp = List (List.map tuple_to_sexp tuples) in
+  to_string @@ List [
+    Atom "relation";
+    List [Atom "name";      Atom rel.Relation.name];
+    List [Atom "schema";    schema_sexp];
+    List [Atom "rows";      rows_sexp];
+    List [Atom "row_count"; Atom (string_of_int (List.length tuples))];
+    List [Atom "truncated"; Atom (string_of_bool truncated)];
+    List [Atom "db_hash";   Atom (short_hash db_hash)];
   ]
 
 let ok_response db_hash msg =
-  js_obj [
-    ("type",    js_str "ok");
-    ("message", js_str msg);
-    ("db_hash", js_str (short_hash db_hash));
+  let open Sexplib.Sexp in
+  to_string @@ List [
+    Atom "ok";
+    List [Atom "message"; Atom msg];
+    List [Atom "db_hash"; Atom (short_hash db_hash)];
   ]
 
 let error_response db_hash msg =
-  js_obj [
-    ("type",    js_str "error");
-    ("message", js_str msg);
-    ("db_hash", js_str (short_hash db_hash));
+  let open Sexplib.Sexp in
+  to_string @@ List [
+    Atom "error";
+    List [Atom "message"; Atom msg];
+    List [Atom "db_hash"; Atom (short_hash db_hash)];
   ]
 
 let manip_err = function
@@ -130,7 +97,7 @@ let execute_command storage db_ref cmd =
   match Drl.Parser.of_string cmd with
   | Ok query ->
     (match Drl.Executor.Memory.execute storage db query with
-     | Ok rel -> relation_to_json storage h rel default_limit
+     | Ok rel -> relation_to_sexp storage h rel default_limit
      | Error (Drl.Executor.Memory.RelationNotFound s) ->
        error_response h ("RelationNotFound: " ^ s)
      | Error (Drl.Executor.Memory.AlgebraError (Algebra.StorageError s)) ->
