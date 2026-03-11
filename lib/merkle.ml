@@ -54,6 +54,12 @@ module HashSet : S = struct
   let member hash tree = StringSet.mem hash tree
 
   let keys tree = StringSet.elements tree
+  (* TODO: Streaming/pagination for large tuple sets. Currently materializes
+     entire keyset into memory, which fails for relations with billions of tuples.
+     Replace with paginated access (keys_paginated offset limit) or lazy generator
+     to avoid loading all hashes upfront. Consider replacing HashSet with proper
+     radix-merkle tree (plebeia) for native lazy traversal. *)
+
 
   let root_hash tree =
     if StringSet.is_empty tree then

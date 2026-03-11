@@ -24,6 +24,12 @@ module Make(Storage : Management.Physical.S) = struct
     match rel.Relation.generator with
     | Some gen -> gen
     | None ->
+      (* TODO: Avoid materializing all tuple hashes/tuples at once.
+         Current implementation calls tuple_hashes rel which loads all hashes
+         into memory, then load_tuples which loads all tuples. This defeats
+         lazy evaluation and scales badly (fails for billions of tuples).
+         Replace with paginated tuple_hashes or Merkle streaming to load
+         hashes/tuples on demand in chunks. *)
       let hashes = Ops.tuple_hashes rel in
       (match Ops.load_tuples storage hashes with
        | Error _ -> (fun _pos -> Generator.Error ("Failed to load: " ^ rel.Relation.name))
