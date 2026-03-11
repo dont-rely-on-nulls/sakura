@@ -1,0 +1,206 @@
+#+TITLE: N-Way Binding in DCL Constraints
+#+DATE: 2026-03-11
+
+* Overview
+
+The DCL constraint language supports quantified membership checks via ~Exists~ and ~Forall~.
+This document illustrates the hotel/building/room/suite example to motivate n-ary quantification
+and show how 3-wise (and deeper) relational composition is expressed.
+
+* DML — Schema
+
+#+begin_src lisp
+(CreateRelation
+  (name "Building")
+  (schema
+    ((building_id "integer")
+     (building_name "string")
+     (floors "integer"))))
+
+(CreateRelation
+  (name "Room")
+  (schema
+    ((room_id "integer")
+     (building_id "integer")
+     (floor "integer")
+     (room_number "string"))))
+
+(CreateRelation
+  (name "Suite")
+  (schema
+    ((suite_id "integer")
+     (room_id "integer")
+     (suite_name "string")
+     (capacity "integer"))))
+#+end_src
+
+* DML — Data
+
+Tower B has only 2 floors, which is what causes the ~suite_in_tall_building~ constraint
+to fire when suites referencing its rooms are inserted.
+
+#+begin_src lisp
+(InsertTuple
+  (relation "Building")
+  (attributes
+    ((building_id (Int 1))
+     (building_name (Str "Tower A"))
+     (floors (Int 10)))))
+
+(InsertTuple
+  (relation "Building")
+  (attributes
+    ((building_id (Int 2))
+     (building_name (Str "Tower B"))
+     (floors (Int 2)))))   ;; ≤ 3 — suites in rooms here will be rejected
+
+(InsertTuples
+  (relation "Room")
+  (tuples
+    (((room_id (Int 101)) (building_id (Int 1)) (floor (Int 1)) (room_number (Str "1A")))
+     ((room_id (Int 102)) (building_id (Int 1)) (floor (Int 2)) (room_number (Str "2A")))
+     ((room_id (Int 201)) (building_id (Int 2)) (floor (Int 1)) (room_number (Str "1B"))))))
+
+;; Suites 1001 and 1002 reference room 101 (Tower A, 10 floors) — accepted.
+;; Suite 1002 references room 102 (Tower A, 10 floors) — accepted.
+;; Suite 1003 references room 201 (Tower B, 2 floors) — rejected by suite_in_tall_building.
+(InsertTuples
+  (relation "Suite")
+  (tuples
+    (((suite_id (Int 1001)) (room_id (Int 101)) (suite_name (Str "Presidential")) (capacity (Int 4)))
+     ((suite_id (Int 1002)) (room_id (Int 101)) (suite_name (Str "Standard"))     (capacity (Int 2)))
+     ((suite_id (Int 1003)) (room_id (Int 102)) (suite_name (Str "Deluxe"))       (capacity (Int 3))))))
+#+end_src
+
+* DCL — Constraints
+
+Binary FK constraints compose to enforce referential integrity along the chain
+~Suite → Room → Building~. Each link is declared independently.
+
+#+begin_src lisp
+;; FK: every Room must belong to an existing Building
+(RegisterConstraint
+  (constraint_name "fk_room_building")
+  (relation_name "Room")
+  (body (MemberOf
+    (target "Building")
+    (binding ((building_id (Var "building_id")))))))
+
+;; FK: every Suite must belong to an existing Room
+(RegisterConstraint
+  (constraint_name "fk_suite_room")
+  (relation_name "Suite")
+  (body (MemberOf
+    (target "Room")
+    (binding ((room_id (Var "room_id")))))))
+#+end_src
+
+* DRL — Queries
+
+The 3-wise join is expressed by composing binary joins. No special n-ary syntax is needed
+in DRL — the relational model handles this naturally through join composition.
+
+#+begin_src lisp
+;; All suites with their room and building — full 3-way join
+(Join
+  (room_id)
+  (Base "Suite")
+  (Join
+    (building_id)
+    (Base "Room")
+    (Base "Building")))
+
+;; Suites in Building 1 only
+(Select
+  (Const ((building_id (Int 1))))
+  (Join
+    (room_id)
+    (Base "Suite")
+    (Join
+      (building_id)
+      (Base "Room")
+      (Base "Building"))))
+
+;; Just suite names and the building they ultimately belong to
+(Project
+  (suite_name building_name)
+  (Join
+    (room_id)
+    (Base "Suite")
+    (Join
+      (building_id)
+      (Base "Room")
+      (Base "Building"))))
+#+end_src
+
+* Motivation for N-Ary ~Exists~
+
+The binary FK constraints above can be decomposed into independent ~MemberOf~ checks.
+However, some constraints require joining through intermediate variables before a
+membership check can be made. These cannot be decomposed.
+
+Example: /a suite is only valid if its room belongs to a building with more than 3 floors/.
+The chain ~suite.room_id → room.building_id → building.floors~ requires two intermediate
+variables — it is inherently a 3-wise constraint.
+
+Each ~Exists~ record field must be wrapped by name when written in s-expression form, as
+required by ~[@@deriving sexp]~. The ~body~ field of the inner ~Exists~ must be written
+explicitly as ~(body ...)~, not passed positionally.
+
+#+begin_src lisp
+(RegisterConstraint
+  (constraint_name "suite_in_tall_building")
+  (relation_name "Suite")
+  (body
+    (Exists (variable "r") (quantifier "Room")
+      (body
+        (Exists (variable "b") (quantifier "Building")
+          (body
+            (And
+              ((MemberOf (target "Room")
+                 (binding ((room_id (Var "room_id")))))
+               (MemberOf (target "Building")
+                 (binding ((building_id (Var "r.building_id")))))
+               (MemberOf (target "greater_than_natural")
+                 (binding ((left (Var "b.floors")) (right (Const (Int 3)))))))))))))
+#+end_src
+
+With the current single-binding ~Exists~, this requires nesting. With the proposed n-ary form,
+it becomes flat and the quantifier chain is explicit:
+
+#+begin_src lisp
+;; Proposed n-ary Exists (not yet implemented)
+(RegisterConstraint
+  (constraint_name "suite_in_tall_building")
+  (relation_name "Suite")
+  (body
+    (Exists
+      (bindings ((r "Room") (b "Building")))
+      (body
+        (And
+          ((MemberOf (target "Room")
+             (binding ((room_id (Var "room_id")))))
+           (MemberOf (target "Building")
+             (binding ((building_id (Var "r.building_id")))))
+           (MemberOf (target "greater_than_natural")
+             (binding ((left (Var "b.floors")) (right (Const (Int 3))))))))))))
+#+end_src
+
+* Namespacing
+
+Attributes from quantifier rows are namespaced by the variable name in ~extend_tuple~,
+so that same-named attributes from different scopes do not overwrite each other.
+~Var "attr"~ without a namespace refers to the tuple being checked (the relation the
+constraint is registered on). ~Var "x.attr"~ refers to attribute ~attr~ from the row
+bound to variable ~x~.
+
+| Expression              | Resolves to                                   |
+|-------------------------+-----------------------------------------------|
+| ~(Var "room_id")~       | ~suite.room_id~ (the incoming tuple)          |
+| ~(Var "r.building_id")~ | ~building_id~ from the ~r~ (Room) quantifier  |
+| ~(Var "b.floors")~      | ~floors~ from the ~b~ (Building) quantifier   |
+
+Without namespacing, ~extend_tuple~ would overwrite the incoming tuple's attributes
+with same-named attributes from the quantifier row, silently making ~Var~ resolve to
+the wrong scope. See ~lib/constraint.ml~ and ~docs/dcl-quantification.org~ for a full
+account of this failure mode and the provenance TODO.

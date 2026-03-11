@@ -1,0 +1,480 @@
+#+TITLE: DCL Quantification: Runtime Model and Evaluation
+
+* Overview
+
+This document describes precisely how DCL constraints are represented, compiled,
+and evaluated at runtime. It covers the full stack from the s-expression syntax
+through AST compilation, context construction, and recursive evaluation — with
+particular attention to the cost model of quantifiers, which is the primary target
+for future performance work.
+
+* Constraint Type (~lib/constraint.ml~)
+
+The runtime constraint type is an algebraic tree:
+
+#+begin_src ocaml
+type t =
+  | MemberOf of { target : relation_name; binding : binding }
+  | Not      of { body : t; universe : relation_name }
+  | And      of t list
+  | Or       of t list
+  | Exists   of { variable : attr_name; quantifier : relation_name; body : t }
+  | Forall   of { variable : attr_name; quantifier : relation_name; body : t }
+#+end_src
+
+A ~binding~ is a ~BindingMap~ (a ~Map.Make(String)~) from target attribute names
+to ~binding_expr~:
+
+#+begin_src ocaml
+type binding_expr =
+  | Var   of attr_name               (* resolved from current tuple at eval time *)
+  | Const of Conventions.AbstractValue.t  (* literal, resolved at compile time *)
+#+end_src
+
+The ~variable~ field in ~Exists~ and ~Forall~ names the bound tuple for use in
+~Var~ expressions inside the body. Attributes from the quantifier row are merged
+into the evaluation tuple under the prefix ~variable ^ "."~, so ~(Var "d.dept_id")~
+unambiguously refers to the ~dept_id~ attribute of the tuple bound to variable ~"d"~.
+See [[*Tuple Extension: ~extend_tuple~][Tuple Extension: extend_tuple]] for the implementation and [[*The Variable Namespacing Problem][The Variable Namespacing Problem]]
+for the history of the bug this fixes.
+
+* Evaluation Context (~eval_context~)
+
+Evaluation does not access storage or the database directly. It works through an
+~eval_context~ record built once per insert operation and closed over a specific
+~(storage, db)~ snapshot:
+
+#+begin_src ocaml
+type eval_context = {
+  check_membership :
+    relation_name ->
+    (attr_name * Conventions.AbstractValue.t) list ->
+    bool;
+  iterate_finite :
+    relation_name ->
+    (attr_name * Conventions.AbstractValue.t) list list option;
+}
+#+end_src
+
+Both fields are closures. This indirection decouples ~Constraint.evaluate~ from
+the storage backend and allows the same constraint tree to be evaluated against
+different snapshots.
+
+** ~check_membership~
+
+Built in ~Manipulation.Make.build_eval_context~. Given a relation name and a list
+of ~(attr_name, value)~ pairs, it returns ~true~ iff a tuple exists in the named
+relation whose attributes match every pair in the list.
+
+The implementation:
+1. Looks up the relation in the ~db~ snapshot.
+2. Constructs a synthetic ~Tuple.Materialized~ from the bound pairs and runs
+   ~rel.membership_criteria~ against it. If it fails, returns ~false~ immediately.
+3. If the relation has no Merkle tree (ephemeral/generator relation),
+   ~membership_criteria~ alone is trusted and the function returns ~true~.
+4. If the relation has a tree, it calls ~Merkle.keys tree~ to obtain *all* tuple
+   hashes, then linearly scans them. For each hash it:
+   a. Loads the raw bytes from storage (~Storage.load_raw~).
+   b. Deserialises the ~Storable.Tuple.t~ to get the attribute hash list.
+   c. For each bound pair ~(bk, bv)~, finds the matching attribute by name, loads
+      its value bytes from storage (~Storage.load_raw~ again), unmarshals it, and
+      compares with ~Stdlib.(=)~.
+   d. Short-circuits to ~true~ on the first tuple that satisfies all pairs.
+   e. Returns ~false~ if no tuple matches.
+
+The cost of a single ~check_membership~ call on a relation of cardinality /n/ with
+/a/ bound attributes and average /k/ attributes per stored tuple is:
+
+  O(n · (1 + a · k))   storage round-trips in the worst case.
+
+No indexes exist. Every check is a full table scan at the storage level.
+
+** ~iterate_finite~
+
+Given a relation name, returns ~Some rows~ where ~rows~ is a fully materialised
+list of rows, each a ~(attr_name * AbstractValue.t) list~. Returns ~None~ if the
+relation has infinite or unconstrained cardinality
+(~AlephZero~ or ~Continuum~ in ~Conventions.Cardinality~).
+
+Only relations with cardinality ~Finite _~ or ~ConstrainedFinite~ are iterable.
+Generator-based relations with no tree return ~Some []~.
+
+The materialisation path:
+1. ~Merkle.keys tree~ — loads all tuple hashes.
+2. For each hash: ~Storage.load_raw~ → ~Storable.Tuple.of_bytes~ → attribute hash list.
+3. For each attribute hash: ~Storage.load_raw~ → ~Marshal.from_bytes~.
+
+This eagerly materialises the *entire* quantifier relation into memory before
+evaluation begins. For a relation of cardinality /n/ with /k/ attributes each,
+the cost is O(n · k) storage loads and the full result occupies O(n · k) memory.
+
+* Variable Resolution: ~bind~
+
+Before a ~MemberOf~ check is executed, the binding map is resolved against the
+current tuple via ~bind~:
+
+#+begin_src ocaml
+let bind (b : binding) (tuple : Tuple.materialized)
+    : (attr_name * Conventions.AbstractValue.t) list =
+  BindingMap.fold
+    (fun target_attr expr acc ->
+      let value = match expr with
+        | Const v    -> Some v
+        | Var src_attr ->
+          match Tuple.AttributeMap.find_opt src_attr tuple.attributes with
+          | Some attr -> Some attr.Attribute.value
+          | None      -> None
+      in
+      match value with
+      | Some v -> (target_attr, v) :: acc
+      | None   -> acc)
+    b []
+#+end_src
+
+Key behaviour:
+- ~Const v~ is lifted directly; no attribute lookup.
+- ~Var src_attr~ looks up ~src_attr~ in ~tuple.attributes~. If the attribute is
+  absent, the pair is *silently dropped* from the bound list. A ~MemberOf~ with
+  incomplete bindings may match unintended tuples or always pass if the target
+  relation contains tuples with fewer attributes.
+- The result is a plain assoc list, not a map; duplicate keys are possible if
+  the binding contains both a ~Const~ and a ~Var~ targeting the same name.
+
+* Tuple Extension: ~extend_tuple~
+
+When a quantifier (~Exists~ or ~Forall~) iterates over a row, it extends the
+current evaluation tuple by merging that row's attributes in:
+
+#+begin_src ocaml
+and extend_tuple (tuple : Tuple.materialized)
+    (variable : attr_name)
+    (row : (attr_name * Conventions.AbstractValue.t) list)
+    : Tuple.materialized =
+  let extra_attrs =
+    List.fold_left
+      (fun acc (k, v) ->
+        Tuple.AttributeMap.add (variable ^ "." ^ k) { Attribute.value = v } acc)
+      tuple.attributes row
+  in
+  { tuple with attributes = extra_attrs }
+#+end_src
+
+Two important facts:
+
+1. *Quantifier attributes are namespaced by the variable name.* Each attribute ~k~
+   from the quantifier row is inserted as ~variable ^ "." ^ k~. The incoming tuple's
+   own attributes are never overwritten. ~(Var "dept_id")~ resolves to the base
+   tuple's value; ~(Var "d.dept_id")~ resolves to the value contributed by the
+   quantifier bound to ~"d"~. See [[*The Variable Namespacing Problem][The Variable Namespacing Problem]] for the
+   earlier behaviour where ~variable~ was ignored and overwrites were silent.
+
+2. *A new ~AttributeMap~ is allocated on every extend call.* With /a/ existing
+   attributes and /r/ new attributes from the row, ~fold_left~ performs /r/
+   ~AttributeMap.add~ operations each building on the previous map. For /q/
+   nested quantifiers of cardinalities /n₁, n₂, ..., nq/, ~extend_tuple~ is
+   called /n₁ · n₂ · ... · nq/ times total — once per combination.
+
+* Recursive Evaluation: ~evaluate~
+
+#+begin_src ocaml
+let rec evaluate (ctx : eval_context) (tuple : Tuple.materialized) (c : t)
+    : (bool, diagnostic) result =
+#+end_src
+
+The function is structurally recursive over the constraint tree. Each case:
+
+** ~MemberOf~
+
+#+begin_src ocaml
+| MemberOf { target; binding } ->
+  let bound_values = bind binding tuple in
+  if ctx.check_membership target bound_values then Ok true
+  else Error (MembershipFailed { target; bound_values })
+#+end_src
+
+Resolves bindings from the current tuple (O(|binding|) attribute lookups), then
+delegates to ~check_membership~. Returns ~Ok true~ or ~Error~ (never ~Ok false~)
+— the ~Ok false~ branch of ~Exists~/~Forall~ is distinguished from ~Error~.
+
+** ~Not~
+
+#+begin_src ocaml
+| Not { body; universe = _ } ->
+  match evaluate ctx tuple body with
+  | Ok true              -> Ok false
+  | Ok false             -> Ok true
+  | Error (MembershipFailed _) -> Ok true
+  | Error d              -> Error d
+#+end_src
+
+~MembershipFailed~ from the body is treated as ~Ok true~ (negation of a failed
+membership = the tuple is not a member = negation succeeds). The ~universe~ field
+is a declarative annotation for closed-world reasoning and is not used at runtime.
+
+** ~And~ / ~Or~
+
+Both use short-circuit evaluation:
+- ~And~: stops at the first ~Ok false~ or ~Error~.
+- ~Or~: stops at the first ~Ok true~; swallows ~Error~ branches and continues.
+
+Neither produces diagnostics for the other branches once a decision is reached.
+Note that ~evaluate_named~ (which evaluates all named constraints on a tuple) does
+*not* short-circuit — it collects all failures before returning.
+
+** ~Exists~
+
+#+begin_src ocaml
+| Exists { variable; quantifier; body } ->
+  match ctx.iterate_finite quantifier with
+  | None      -> Error (UnboundedQuantifier { variable; quantifier })
+  | Some rows ->
+    let rec check = function
+      | []           -> Ok false
+      | row :: rest  ->
+        let extended_tuple = extend_tuple tuple variable row in
+        match evaluate ctx extended_tuple body with
+        | Ok true  -> Ok true
+        | Ok false -> check rest
+        | Error _  -> check rest
+    in
+    check rows
+#+end_src
+
+The execution model:
+1. ~iterate_finite~ is called, fully materialising the quantifier relation.
+2. Rows are iterated sequentially. For each row, ~extend_tuple~ merges it into
+   the current tuple, and ~evaluate~ recurses into the body.
+3. The first ~Ok true~ short-circuits: remaining rows are not evaluated.
+4. Both ~Ok false~ and ~Error~ from the body are treated identically — the row is
+   skipped and iteration continues. *Errors inside the body of an ~Exists~ are
+   silently discarded.*
+5. If all rows are exhausted without ~Ok true~, returns ~Ok false~.
+
+An ~Exists~ over a relation of cardinality /n/ with a body whose evaluation cost
+is /C/ has worst-case cost O(n · C). Nesting two ~Exists~ quantifiers over
+relations of cardinalities /n/ and /m/ has worst-case cost O(n · m · C).
+In general, /q/ nested quantifiers produce O(∏ nᵢ · C) body evaluations — a
+Cartesian product.
+
+** ~Forall~
+
+#+begin_src ocaml
+| Forall { variable; quantifier; body } ->
+  match ctx.iterate_finite quantifier with
+  | None      -> Error (UnboundedQuantifier { variable; quantifier })
+  | Some rows ->
+    let rec check = function
+      | []          -> Ok true
+      | row :: rest ->
+        let extended_tuple = extend_tuple tuple variable row in
+        match evaluate ctx extended_tuple body with
+        | Ok true               -> check rest
+        | Ok false              -> Ok false
+        | Error (MembershipFailed _) -> Ok false
+        | Error d               -> Error d
+    in
+    check rows
+#+end_src
+
+Symmetric to ~Exists~ but short-circuits on ~Ok false~ or ~MembershipFailed~.
+Unlike ~Exists~, other ~Error~ variants (e.g., ~UnboundedQuantifier~) are
+propagated rather than silently consumed. The cost model is identical: O(∏ nᵢ · C).
+
+* The Variable Namespacing Problem
+
+This section documents the original bug and explains why the current implementation
+is correct. In the initial implementation, ~extend_tuple~ took ~variable~ as
+~_variable~ — a named-but-discarded argument — and merged quantifier row attributes
+flat into the tuple under their original names. This had two consequences.
+
+** Attribute Shadowing (fixed)
+
+If the incoming tuple and the quantifier row shared an attribute name, the
+quantifier's value won silently. Concretely: an Employee with ~dept_id=99~ being
+checked by an ~Exists~ over Department rows would have its ~dept_id~ overwritten
+by each Department row's ~dept_id~ in turn. ~(Var "dept_id")~ in the body then
+resolved to the Department's own id, not the Employee's. An FK constraint written
+as ~(MemberOf (target "Department") (binding ((dept_id (Var "dept_id")))))~ inside
+an ~Exists~ over Department would always pass — it was validating the Department
+against itself rather than checking whether the Employee's ~dept_id~ existed.
+
+** Multi-Quantifier Ambiguity (fixed)
+
+With two nested quantifiers over relations sharing attribute names, the inner
+quantifier's pass through ~extend_tuple~ overwrote what the outer one had written.
+There was no way to write a body that simultaneously referred to attributes from
+two distinct quantifier rows of the same name.
+
+** Resolution
+
+Both problems are resolved by namespacing: each attribute ~k~ from the quantifier
+row is stored as ~variable ^ "." ^ k~. The base tuple is never modified. The
+~variable~ argument, previously discarded as ~_variable~, is now the namespace
+prefix. The fix is in ~lib/constraint.ml~ with an inline TODO describing the
+deeper issue of tuple-level provenance as a structural solution.
+
+* N-Ary Quantification
+
+The current AST represents each quantifier as a single ~(variable, quantifier)~
+pair. N-ary constraints across three or more relations require nesting:
+
+#+begin_src lisp
+(Exists (variable "b") (quantifier "Building")
+  (Exists (variable "r") (quantifier "Room")
+    (Exists (variable "s") (quantifier "Suite")
+      ...)))
+#+end_src
+
+This is semantically correct once namespacing is in place, but verbose and implies
+a strict left-to-right evaluation order with no opportunity for reordering.
+
+The proposed n-ary form makes the binding list first-class:
+
+#+begin_src lisp
+(Exists
+  (bindings ((b "Building") (r "Room") (s "Suite")))
+  (body ...))
+#+end_src
+
+The executor folds over the binding list left-to-right, extending the tuple at
+each step — equivalent to nested ~Exists~ but expressed as a single node:
+
+#+begin_src ocaml
+| Exists { bindings; body } ->
+  let rec go bindings tuple =
+    match bindings with
+    | [] -> evaluate ctx tuple body
+    | (variable, quantifier) :: rest ->
+      match ctx.iterate_finite quantifier with
+      | None -> Error (UnboundedQuantifier { variable; quantifier })
+      | Some rows ->
+        let rec check = function
+          | []           -> Ok false
+          | row :: rest' ->
+            let extended = extend_tuple tuple variable row in
+            match go rest extended with
+            | Ok true  -> Ok true
+            | Ok false | Error _ -> check rest'
+        in
+        check rows
+  in
+  go bindings tuple
+#+end_src
+
+The cost remains O(∏ nᵢ · C) — the n-ary form does not change the complexity,
+but it makes the binding structure explicit and opens the door to reordering
+optimisations (e.g., evaluate the smallest relation first).
+
+* Performance Inventory
+
+The following is a precise account of known costs and inefficiencies, intended
+as a reference for future optimisation work.
+
+** Eager Full Materialisation of Quantifier Relations
+
+~iterate_finite~ loads every tuple in the quantifier relation from storage before
+the first body evaluation begins. For a ~Forall~ whose first body call returns
+~Ok false~, all subsequent tuples were loaded needlessly. A streaming/lazy
+iterator would allow early termination before full materialisation.
+
+** Linear Scan in ~check_membership~
+
+Every ~MemberOf~ check performs a full linear scan over all tuple hashes in the
+target relation's Merkle tree. There are no secondary indexes. For a relation of
+cardinality /n/:
+
+- /n/ calls to ~Storage.load_raw~ to fetch stored tuples.
+- For each tuple, up to /a/ additional ~Storage.load_raw~ calls to fetch
+  attribute values.
+- Comparison via structural equality (~Stdlib.(=)~) on unmarshalled ~Obj.t~ values.
+
+An index mapping ~(relation_name, attr_name, value_hash)~ to tuple hashes would
+reduce this to O(log n) or O(1) per ~MemberOf~ check.
+
+** AttributeMap Allocation per ~extend_tuple~ Call
+
+~extend_tuple~ allocates a new ~AttributeMap~ on every invocation by folding over
+the row into the existing map. For nested quantifiers of cardinalities
+/n₁ × n₂ × ... × nq/, this allocates ∏ nᵢ maps during a single constraint check.
+A persistent/functional map amortises this somewhat (structural sharing), but
+each call still produces a new root node.
+
+A flat association list or array, indexed by a fixed schema, would be cheaper
+for extend and lookup at the cost of schema rigidity.
+
+** Redundant Storage Loads Across Constraints
+
+The ~eval_context~ is built once per ~create_tuple~ call, but it is not a cache —
+every ~check_membership~ and ~iterate_finite~ call re-reads from storage. If a
+relation is referenced in multiple constraints or multiple ~MemberOf~ nodes within
+one constraint tree, its tuples are loaded multiple times.
+
+A constraint-session cache (a ~Hashtbl~ from relation_name to materialised rows,
+populated lazily on first access) would eliminate redundant loads within a single
+tuple insertion.
+
+** No Short-Circuit Across Named Constraints
+
+~evaluate_named~ evaluates every constraint in the named list, collecting all
+failures before returning:
+
+#+begin_src ocaml
+let failures =
+  List.filter_map
+    (fun (name, c) ->
+      match evaluate ctx tuple c with
+      | Ok true  -> None
+      | Ok false -> Some (name, ...)
+      | Error d  -> Some (name, d))
+    named
+in
+#+end_src
+
+For a tuple that violates the first constraint, all remaining constraints are
+still evaluated at full cost. Short-circuiting on first failure is correct when
+complete diagnostics are not required (e.g., interactive insertion). A lazy stream
+of failures, computed on demand, would support both use cases.
+
+** Cartesian Product Complexity of Nested Quantifiers
+
+For /q/ nested ~Exists~/~Forall~ quantifiers over relations of cardinalities
+/n₁, n₂, ..., nq/ with body cost /C/:
+
+  Worst-case body evaluations = n₁ × n₂ × ... × nq
+
+  Worst-case storage loads = (∑ nᵢ · kᵢ) + n₁ · n₂ · ... · nq · C_membership
+
+Where /kᵢ/ is the attribute count of relation /i/ and /C_membership/ is the cost
+of ~check_membership~ on the body's target relation.
+
+Mitigations:
+- *Evaluate smallest relation first* (selectivity-based reordering): reduces the
+  Cartesian product by pruning earlier.
+- *Push ~MemberOf~ filters into the iteration*: instead of iterating all rows of
+  the quantifier relation and then checking membership, filter the quantifier rows
+  during iteration using the same index that would accelerate ~check_membership~.
+- *Semi-join reduction*: for FK-style constraints, a single hash lookup suffices
+  and no Cartesian product is needed.
+
+* Summary of Call Chain for a Single Tuple Insertion
+
+#+begin_example
+create_tuple
+  └── build_eval_context (storage, db)            [once per insertion]
+  └── evaluate_named ctx tuple named_constraints  [once per insertion]
+        └── evaluate ctx tuple c                  [once per named constraint]
+              ├── Exists / Forall
+              │     └── iterate_finite quantifier  [materialises full relation]
+              │           ├── Merkle.keys tree
+              │           └── Storage.load_raw × (n × k)
+              │     └── for each row:
+              │           ├── extend_tuple          [allocates new AttributeMap]
+              │           └── evaluate ctx extended_tuple body
+              │                 └── MemberOf
+              │                       ├── bind      [resolves Vars from extended tuple]
+              │                       └── check_membership target bound_values
+              │                             ├── Merkle.keys tree
+              │                             └── Storage.load_raw × (n' × (1 + a))
+              └── And / Or / Not
+                    └── evaluate (recursive)
+#+end_example

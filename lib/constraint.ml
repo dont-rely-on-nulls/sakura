@@ -240,17 +240,37 @@ and evaluate_or ctx tuple = function
     | Error _ -> evaluate_or ctx tuple rest)
 
 and extend_tuple (tuple : Tuple.materialized)
-    (_variable : attr_name)
+    (variable : attr_name)
     (row : (attr_name * Conventions.AbstractValue.t) list)
     : Tuple.materialized =
+  (* TODO: Provenance for tuples at the relation level.
+     Attributes from quantifier rows are namespaced by the variable name
+     (e.g. "d.dept_id") to avoid silent overwriting of same-named attributes
+     from the base tuple or other quantifiers. Without namespacing, the
+     following FK constraint silently passes for an invalid insertion:
+       - Employee { emp_id=1, dept_id=99 } is being inserted.
+       - Constraint: Exists d in Department, MemberOf Department (dept_id = Var "dept_id").
+       - Department contains only { dept_id=1, dept_name="Engineering" }.
+       - extend_tuple overwrites dept_id=99 with dept_id=1 from the Department row.
+       - Var "dept_id" resolves to 1, check_membership succeeds trivially.
+       - The insertion is accepted even though dept_id=99 does not exist.
+     Namespacing is a syntactic encoding of provenance: the variable prefix
+     records which quantifier scope each value came from. A more principled
+     solution would attach provenance metadata directly to each attribute in
+     the relation, making the origin of every value explicit and queryable
+     without relying on name conventions. This would also eliminate the
+     ambiguity that arises when two quantifiers range over relations sharing
+     attribute names — currently resolved by namespacing, but ideally enforced
+     structurally by the type system or relation schema. *)
   let extra_attrs =
     List.fold_left
       (fun acc (k, v) ->
-        Tuple.AttributeMap.add k { Attribute.value = v } acc)
+        Tuple.AttributeMap.add (variable ^ "." ^ k) { Attribute.value = v } acc)
       tuple.attributes row
   in
   { tuple with attributes = extra_attrs }
 
+(* TODO: Sometimes it's more efficient and sufficient to simply halt at the first constraint violated. However, it's also important to be able to adjudicate which constraints failed on the tuple materialization. For that reason, we should likely return a lazy stream that computes the constraints on demand. *)
 let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
     (named : (string * t) list) : (bool, diagnostic) result =
   let failures =
