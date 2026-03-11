@@ -170,14 +170,20 @@ let handle_client storage db_ref fd =
        let line = input_line ic in
        let line = String.trim line in
        if line <> "" then begin
-         let response = execute_command storage db_ref line in
+         let response =
+           try execute_command storage db_ref line
+           with e ->
+             let db = !db_ref in
+             error_response db.Management.Database.hash
+               ("Uncaught error: " ^ Printexc.to_string e)
+         in
          output_string oc (response ^ "\n");
          flush oc
        end
      done
    with End_of_file | Unix.Unix_error _ -> ())
 
-let () =
+let _x () =
   let port = default_port in
   match Management.Physical.Memory.create () with
   | Error _ -> failwith "Failed to create storage"
@@ -199,3 +205,129 @@ let () =
         handle_client storage db_ref client_fd;
         (try Unix.close client_fd with _ -> ())
       done
+(*
+let create_dept = "(CreateRelation (name \"Department\") (schema ((dept_id \"integer\") (dept_name \"string\") (location \"string\"))))"
+
+let create_emp = "(CreateRelation (name \"Employee\") (schema ((emp_id \"integer\") (emp_name \"string\") (salary \"float\") (dept_id \"integer\") (hire_date \"string\"))))"
+
+let const_salary = "(RegisterConstraint(constraint_name \"salary_positive\")(relation_name \"Employee\")(body (MemberOf(target \"positive_reals\")(binding ((salary (Var \"salary\")))))))"
+
+let const_fk = "(RegisterConstraint
+   (constraint_name \"fk_employee_dept\")
+   (relation_name \"Employee\")
+   (body (MemberOf
+     (target \"Department\")
+     (binding ((dept_id (Var \"dept_id\")))))))"
+
+let insert_dept = "(InsertTuple (relation \"Department\") (attributes ((dept_id (Int 1)) (location (Str \"Gifu\")) (dept_name (Str \"Nippon Ichi\")))))"
+
+let insert_emp = "(InsertTuples (relation \"Employee\") (tuples (((emp_id (Int 101)) (emp_name (Str \"Alice Johnson\")) (salary (Float 95000.0)) (dept_id (Int 1)) (hire_date (Str \"2020-01-15\"))))))"
+                 *)
+(* let () = *)
+(*   match Management.Physical.Memory.create () with *)
+(*   | Error _ -> failwith "Failed to create storage" *)
+(*   | Ok storage -> *)
+(*     match Manipulation.Memory.create_database storage ~name:"sakura" with *)
+(*     | Error _ -> failwith "Failed to create initial database" *)
+(*     | Ok db -> *)
+(*       let db = register_prelude_relations storage db in *)
+(*       let db_ref = ref db in *)
+(*       Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash); *)
+(*       print_endline @@ execute_command storage db_ref create_dept; *)
+(*       print_endline @@ execute_command storage db_ref create_emp; *)
+(*       print_endline @@ execute_command storage db_ref const_salary; *)
+(*       print_endline @@ execute_command storage db_ref const_fk; *)
+(*       print_endline @@ execute_command storage db_ref insert_emp; *)
+(*       print_endline @@ execute_command storage db_ref insert_dept; *)
+(*       () *)
+
+let n_way = [
+    "(CreateRelation
+  (name \"Building\")
+  (schema
+    ((building_id \"integer\")
+     (building_name \"string\")
+     (floors \"integer\"))))";
+    "(CreateRelation
+     (name \"Room\")
+  (schema
+    ((room_id \"integer\")
+     (building_id \"integer\")
+     (floor \"integer\")
+     (room_number \"string\"))))";
+"(CreateRelation
+  (name \"Suite\")
+  (schema
+    ((suite_id \"integer\")
+     (room_id \"integer\")
+     (suite_name \"string\")
+ (capacity \"integer\"))))";
+(* FK: every Room must belong to an existing Building *)
+"(RegisterConstraint
+  (constraint_name \"fk_room_building\")
+  (relation_name \"Room\")
+  (body (MemberOf
+    (target \"Building\")
+    (binding ((building_id (Var \"building_id\")))))))";
+(* FK: every Suite must belong to an existing Room *)
+"(RegisterConstraint
+  (constraint_name \"fk_suite_room\")
+  (relation_name \"Suite\")
+  (body (MemberOf
+    (target \"Room\")
+ (binding ((room_id (Var \"room_id\")))))))";
+(* A suite is only valid if its room belongs to a building with more than 3 floors *)
+"(RegisterConstraint
+  (constraint_name \"suite_in_tall_building\")
+  (relation_name \"Suite\")
+  (body
+    (Exists (variable \"r\") (quantifier \"Room\")
+      (body
+        (Exists (variable \"b\") (quantifier \"Building\")
+          (body
+            (And
+              ((MemberOf (target \"Room\")
+                 (binding ((room_id (Var \"room_id\")))))
+               (MemberOf (target \"Building\")
+                 (binding ((building_id (Var \"r.building_id\")))))
+               (MemberOf (target \"greater_than_natural\")
+                 (binding ((left (Var \"b.floors\")) (right (Const (Int 3))))))))))))))";
+"(InsertTuple
+  (relation \"Building\")
+  (attributes
+    ((building_id (Int 2))
+     (building_name (Str \"Tower B\"))
+ (floors (Int 2)))))";
+    "(InsertTuple
+  (relation \"Building\")
+  (attributes
+    ((building_id (Int 1))
+     (building_name (Str \"Tower A\"))
+     (floors (Int 10)))))";
+"(InsertTuples
+  (relation \"Room\")
+  (tuples
+    (((room_id (Int 101)) (building_id (Int 1)) (floor (Int 1)) (room_number (Str \"1A\")))
+     ((room_id (Int 102)) (building_id (Int 1)) (floor (Int 2)) (room_number (Str \"2A\")))
+ ((room_id (Int 201)) (building_id (Int 2)) (floor (Int 1)) (room_number (Str \"1B\"))))))";
+"(InsertTuples
+  (relation \"Suite\")
+  (tuples
+    (((suite_id (Int 1001)) (room_id (Int 101)) (suite_name (Str \"Presidential\")) (capacity (Int 4)))
+     ((suite_id (Int 1002)) (room_id (Int 101)) (suite_name (Str \"Standard\"))     (capacity (Int 2)))
+     ((suite_id (Int 1003)) (room_id (Int 102)) (suite_name (Str \"Deluxe\"))       (capacity (Int 3))))))";
+  ]
+
+let () =
+  match Management.Physical.Memory.create () with
+  | Error _ -> failwith "Failed to create storage"
+  | Ok storage ->
+    match Manipulation.Memory.create_database storage ~name:"sakura" with
+    | Error _ -> failwith "Failed to create initial database"
+    | Ok db ->
+      let db = register_prelude_relations storage db in
+      let db_ref = ref db in
+      Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
+      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd) n_way;
+      (* print_endline @@ execute_command storage db_ref create_dept; *)
+      ()
