@@ -183,8 +183,21 @@ let handle_client storage db_ref fd =
      done
    with End_of_file | Unix.Unix_error _ -> ())
 
-let _x () =
-  let port = default_port in
+let depart_emp = [
+    "(CreateRelation (name \"Department\") (schema ((dept_id \"integer\") (dept_name \"string\") (location \"string\"))))";
+    "(CreateRelation (name \"Employee\") (schema ((emp_id \"integer\") (emp_name \"string\") (salary \"float\") (dept_id \"integer\") (hire_date \"string\"))))";
+    "(RegisterConstraint(constraint_name \"salary_positive\")(relation_name \"Employee\")(body (MemberOf(target \"positive_reals\")(binding ((salary (Var \"salary\")))))))";
+    "(RegisterConstraint
+   (constraint_name \"fk_employee_dept\")
+   (relation_name \"Employee\")
+   (body (MemberOf
+     (target \"Department\")
+     (binding ((dept_id (Var \"dept_id\")))))))";
+    "(InsertTuple (relation \"Department\") (attributes ((dept_id (Int 1)) (location (Str \"Gifu\")) (dept_name (Str \"Nippon Ichi\")))))";
+    "(InsertTuples (relation \"Employee\") (tuples (((emp_id (Int 101)) (emp_name (Str \"Alice Johnson\")) (salary (Float 95000.0)) (dept_id (Int 1)) (hire_date (Str \"2020-01-15\"))))))"
+  ]
+
+let _depart_emp () =
   match Management.Physical.Memory.create () with
   | Error _ -> failwith "Failed to create storage"
   | Ok storage ->
@@ -193,53 +206,10 @@ let _x () =
     | Ok db ->
       let db = register_prelude_relations storage db in
       let db_ref = ref db in
-      let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-      Unix.setsockopt sock Unix.SO_REUSEADDR true;
-      Unix.setsockopt sock Unix.SO_REUSEPORT true;
-      Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
-      Unix.listen sock 5;
-      Printf.printf "Sakura server listening on 127.0.0.1:%d\n" port;
       Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
-      while true do
-        let (client_fd, _addr) = Unix.accept sock in
-        handle_client storage db_ref client_fd;
-        (try Unix.close client_fd with _ -> ())
-      done
-(*
-let create_dept = "(CreateRelation (name \"Department\") (schema ((dept_id \"integer\") (dept_name \"string\") (location \"string\"))))"
-
-let create_emp = "(CreateRelation (name \"Employee\") (schema ((emp_id \"integer\") (emp_name \"string\") (salary \"float\") (dept_id \"integer\") (hire_date \"string\"))))"
-
-let const_salary = "(RegisterConstraint(constraint_name \"salary_positive\")(relation_name \"Employee\")(body (MemberOf(target \"positive_reals\")(binding ((salary (Var \"salary\")))))))"
-
-let const_fk = "(RegisterConstraint
-   (constraint_name \"fk_employee_dept\")
-   (relation_name \"Employee\")
-   (body (MemberOf
-     (target \"Department\")
-     (binding ((dept_id (Var \"dept_id\")))))))"
-
-let insert_dept = "(InsertTuple (relation \"Department\") (attributes ((dept_id (Int 1)) (location (Str \"Gifu\")) (dept_name (Str \"Nippon Ichi\")))))"
-
-let insert_emp = "(InsertTuples (relation \"Employee\") (tuples (((emp_id (Int 101)) (emp_name (Str \"Alice Johnson\")) (salary (Float 95000.0)) (dept_id (Int 1)) (hire_date (Str \"2020-01-15\"))))))"
-                 *)
-(* let () = *)
-(*   match Management.Physical.Memory.create () with *)
-(*   | Error _ -> failwith "Failed to create storage" *)
-(*   | Ok storage -> *)
-(*     match Manipulation.Memory.create_database storage ~name:"sakura" with *)
-(*     | Error _ -> failwith "Failed to create initial database" *)
-(*     | Ok db -> *)
-(*       let db = register_prelude_relations storage db in *)
-(*       let db_ref = ref db in *)
-(*       Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash); *)
-(*       print_endline @@ execute_command storage db_ref create_dept; *)
-(*       print_endline @@ execute_command storage db_ref create_emp; *)
-(*       print_endline @@ execute_command storage db_ref const_salary; *)
-(*       print_endline @@ execute_command storage db_ref const_fk; *)
-(*       print_endline @@ execute_command storage db_ref insert_emp; *)
-(*       print_endline @@ execute_command storage db_ref insert_dept; *)
-(*       () *)
+      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd)
+        depart_emp;
+      ()
 
 let n_way = [
     "(CreateRelation
@@ -318,7 +288,7 @@ let n_way = [
      ((suite_id (Int 1003)) (room_id (Int 102)) (suite_name (Str \"Deluxe\"))       (capacity (Int 3))))))";
   ]
 
-let () =
+let _n_way () =
   match Management.Physical.Memory.create () with
   | Error _ -> failwith "Failed to create storage"
   | Ok storage ->
@@ -328,6 +298,29 @@ let () =
       let db = register_prelude_relations storage db in
       let db_ref = ref db in
       Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
-      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd) n_way;
-      (* print_endline @@ execute_command storage db_ref create_dept; *)
+      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd)
+        n_way;
       ()
+
+let () =
+  let port = default_port in
+  match Management.Physical.Memory.create () with
+  | Error _ -> failwith "Failed to create storage"
+  | Ok storage ->
+    match Manipulation.Memory.create_database storage ~name:"sakura" with
+    | Error _ -> failwith "Failed to create initial database"
+    | Ok db ->
+      let db = register_prelude_relations storage db in
+      let db_ref = ref db in
+      let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+      Unix.setsockopt sock Unix.SO_REUSEADDR true;
+      Unix.setsockopt sock Unix.SO_REUSEPORT true;
+      Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
+      Unix.listen sock 5;
+      Printf.printf "Sakura server listening on 127.0.0.1:%d\n" port;
+      Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
+      while true do
+        let (client_fd, _addr) = Unix.accept sock in
+        handle_client storage db_ref client_fd;
+        (try Unix.close client_fd with _ -> ())
+      done
