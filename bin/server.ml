@@ -34,13 +34,20 @@ let materialize_relation storage (rel : Relation.t) limit =
 
 let short_hash (h : string) = String.sub h 0 (min 8 (String.length h))
 
+module BranchOps = Management.Branch.Make(Management.Physical.Memory)
+
+let get_branch storage =
+  match BranchOps.get_head storage with
+  | Ok (Some name) -> name
+  | _ -> "--"
+
 let tuple_to_sexp (t : Tuple.materialized) =
   let open Sexplib.Sexp in
   List (Tuple.AttributeMap.bindings t.Tuple.attributes
         |> List.map (fun (k, attr) ->
                List [Atom k; Conventions.AbstractValue.sexp_of_t attr.Attribute.value]))
 
-let relation_to_sexp storage (db_hash : string) (rel : Relation.t) limit =
+let relation_to_sexp storage db_name db_hash (rel : Relation.t) limit =
   let open Sexplib.Sexp in
   let schema_sexp =
     List (List.map (fun (a, d) -> List [Atom a; Atom d]) rel.Relation.schema)
@@ -55,22 +62,28 @@ let relation_to_sexp storage (db_hash : string) (rel : Relation.t) limit =
     List [Atom "row_count"; Atom (string_of_int (List.length tuples))];
     List [Atom "truncated"; Atom (string_of_bool truncated)];
     List [Atom "db_hash";   Atom (short_hash db_hash)];
+    List [Atom "db_name";   Atom db_name];
+    List [Atom "branch";    Atom (get_branch storage)];
   ]
 
-let ok_response db_hash msg =
+let ok_response storage db_name db_hash msg =
   let open Sexplib.Sexp in
   to_string @@ List [
     Atom "ok";
     List [Atom "message"; Atom msg];
     List [Atom "db_hash"; Atom (short_hash db_hash)];
+    List [Atom "db_name"; Atom db_name];
+    List [Atom "branch";  Atom (get_branch storage)];
   ]
 
-let error_response db_hash msg =
+let error_response storage db_name db_hash msg =
   let open Sexplib.Sexp in
   to_string @@ List [
     Atom "error";
     List [Atom "message"; Atom msg];
     List [Atom "db_hash"; Atom (short_hash db_hash)];
+    List [Atom "db_name"; Atom db_name];
+    List [Atom "branch";  Atom (get_branch storage)];
   ]
 
 let manip_err = function
@@ -85,9 +98,18 @@ let manip_err = function
    a valid DRL expression that happens to also parse as DML would silently
    be treated as DRL. The three sublanguages should share a common envelope,
    e.g. a top-level tag distinguishing (Query ...) from (Exec ...). *)
+let advance_head_branch storage new_hash =
+  match BranchOps.get_head storage with
+  | Ok (Some branch_name) ->
+    ignore (BranchOps.update_tip storage ~name:branch_name ~tip:new_hash)
+  | _ -> ()
+
 let execute_command storage db_ref cmd =
-  let db = !db_ref in
-  let h  = db.Management.Database.hash in
+  let db   = !db_ref in
+  let h    = db.Management.Database.hash in
+  let name = db.Management.Database.name in
+  let ok   = ok_response    storage name in
+  let err  = error_response storage name in
   (* TODO: (schema) is a stopgap. Introspection should be expressible in
      DRL itself via the catalog relations, not special-cased here. *)
   let cmd = match String.trim cmd with
@@ -97,39 +119,53 @@ let execute_command storage db_ref cmd =
   match Drl.Parser.of_string cmd with
   | Ok query ->
     (match Drl.Executor.Memory.execute storage db query with
-     | Ok rel -> relation_to_sexp storage h rel default_limit
+     | Ok rel -> relation_to_sexp storage name h rel default_limit
      | Error (Drl.Executor.Memory.RelationNotFound s) ->
-       error_response h ("RelationNotFound: " ^ s)
+       err h ("RelationNotFound: " ^ s)
      | Error (Drl.Executor.Memory.AlgebraError (Algebra.StorageError s)) ->
-       error_response h ("StorageError: " ^ s)
+       err h ("StorageError: " ^ s)
      | Error (Drl.Executor.Memory.AlgebraError (Algebra.GeneratorError s)) ->
-       error_response h ("GeneratorError: " ^ s))
+       err h ("GeneratorError: " ^ s))
   | Error _ ->
     match Dml.Parser.of_string cmd with
     | Ok stmt ->
       (match Dml.Executor.Memory.execute storage db stmt with
        | Ok new_db ->
          db_ref := new_db;
-         ok_response new_db.Management.Database.hash "Database updated"
+         advance_head_branch storage new_db.Management.Database.hash;
+         ok new_db.Management.Database.hash "updated"
        | Error (Dml.Executor.Memory.ManipulationError me) ->
-         error_response h (manip_err me)
+         err h (manip_err me)
        | Error (Dml.Executor.Memory.RelationNotFound s) ->
-         error_response h ("RelationNotFound: " ^ s)
+         err h ("RelationNotFound: " ^ s)
        | Error (Dml.Executor.Memory.ParseError s) ->
-         error_response h ("ParseError: " ^ s))
+         err h ("ParseError: " ^ s))
     | Error _ ->
-      match Dcl.Parser.of_string cmd with
+      match Icl.Parser.of_string cmd with
       | Ok stmt ->
-        (match Dcl.Executor.Memory.execute storage db stmt with
-         | Ok new_db ->
+        (match Icl.Executor.Memory.execute storage db stmt with
+         | Ok (new_db, msg) ->
            db_ref := new_db;
-           ok_response new_db.Management.Database.hash "Constraint registered"
-         | Error (Dcl.Executor.Memory.ManipulationError me) ->
-           error_response h (manip_err me)
-         | Error (Dcl.Executor.Memory.ConversionError s) ->
-           error_response h ("ConversionError: " ^ s))
+           advance_head_branch storage new_db.Management.Database.hash;
+           ok new_db.Management.Database.hash msg
+         | Error (Icl.Executor.Memory.ManipulationError me) ->
+           err h (manip_err me)
+         | Error (Icl.Executor.Memory.ConversionError s) ->
+           err h ("ConversionError: " ^ s))
       | Error _ ->
-        error_response h "Parse error: not valid DRL, DML, or DCL"
+        match Dcl.Parser.of_string cmd with
+        | Ok stmt ->
+          (match Dcl.Executor.Memory.execute storage db stmt with
+           | Ok (new_db, msg) ->
+             db_ref := new_db;
+             advance_head_branch storage new_db.Management.Database.hash;
+             ok new_db.Management.Database.hash msg
+           | Error (Dcl.Executor.Memory.BranchError s) ->
+             err h ("BranchError: " ^ s)
+           | Error (Dcl.Executor.Memory.MergeError s) ->
+             err h ("MergeError: " ^ s))
+        | Error _ ->
+          err h "ParseError: not valid DRL, DML, ICL, or DCL"
 
 (* TODO: registration failures are silently ignored; a broken prelude
    relation leaves the catalog in a partially-seeded state with no
@@ -146,7 +182,10 @@ let register_prelude_relations storage db =
               ~cardinality:rel.cardinality
       with
       | Ok (new_db, _) -> new_db
-      | Error _        -> db)
+      | Error e        ->
+        Printf.eprintf "Warning: failed to register prelude relation %s: %s\n%!"
+          rel.name (manip_err e);
+        db)
     db
     [ less_than_natural
     ; less_than_or_equal_natural
@@ -174,7 +213,8 @@ let handle_client storage db_ref fd =
            try execute_command storage db_ref line
            with e ->
              let db = !db_ref in
-             error_response db.Management.Database.hash
+             error_response storage db.Management.Database.name
+               db.Management.Database.hash
                ("Uncaught error: " ^ Printexc.to_string e)
          in
          output_string oc (response ^ "\n");
@@ -311,6 +351,37 @@ let () =
     | Error _ -> failwith "Failed to create initial database"
     | Ok db ->
       let db = register_prelude_relations storage db in
+      (* Register ephemeral sakura:branch and sakura:head relations backed by
+         the raw branch registry — no stored tuples, no circularity. *)
+      let db =
+        let register db rel =
+          match Manipulation.Memory.create_immutable_relation storage db
+                  ~name:rel.Relation.name
+                  ~schema:rel.Relation.schema
+                  ~generator:(Option.get rel.Relation.generator)
+                  ~membership_criteria:rel.Relation.membership_criteria
+                  ~cardinality:rel.Relation.cardinality
+          with
+          | Ok (db, _) -> db
+          | Error e ->
+            Printf.eprintf "Warning: failed to register %s: %s\n%!"
+              rel.Relation.name (match e with
+                | Manipulation.RelationAlreadyExists s -> "already exists: " ^ s
+                | Manipulation.StorageError s -> s | _ -> "error");
+            db
+        in
+        let db = register db (BranchOps.branch_relation storage) in
+        let db = register db (BranchOps.head_relation storage) in
+        db
+      in
+      (* Create default master branch in raw registry and set HEAD *)
+      (match BranchOps.create storage ~name:"master"
+               ~tip:db.Management.Database.hash with
+       | Error e -> Printf.eprintf "Warning: failed to create master branch: %s\n%!" e
+       | Ok () -> ());
+      (match BranchOps.checkout storage "master" with
+       | Error e -> Printf.eprintf "Warning: failed to checkout master: %s\n%!" e
+       | Ok () -> ());
       let db_ref = ref db in
       let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
       Unix.setsockopt sock Unix.SO_REUSEADDR true;
