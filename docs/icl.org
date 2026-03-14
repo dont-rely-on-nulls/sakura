@@ -1,0 +1,108 @@
+#+TITLE: ICL — Integrity Control Language
+
+ICL registers integrity constraints on relations. A constraint is a
+membership check: before any tuple is inserted, Sakura verifies that
+the tuple belongs to every constraint-relation attached to the target
+relation.
+
+Constraints are expressed as S-expressions and sent over the wire like
+any other command.
+
+* Syntax
+
+#+begin_src
+(RegisterConstraint
+  (constraint_name "<name>")
+  (relation_name   "<target-relation>")
+  (body            <constraint-body>))
+#+end_src
+
+A ~<constraint-body>~ is one of:
+
+| Form                                            | Meaning                        |
+|-------------------------------------------------+--------------------------------|
+| ~(MemberOf (target R) (binding (...)))~         | Tuple must be in relation R    |
+| ~(Not (body B) (universe R))~                   | Negation (closed-world over R) |
+| ~(And (B1 B2 ...))~                             | All must hold                  |
+| ~(Or  (B1 B2 ...))~                             | At least one must hold         |
+| ~(Exists (variable v) (quantifier R) (body B))~ | ∃ v ∈ R such that B holds      |
+| ~(Forall (variable v) (quantifier R) (body B))~ | ∀ v ∈ R, B holds               |
+
+Bindings map target-relation attribute names to values drawn from the
+tuple being checked:
+
+| Binding expr        | Meaning                        |
+|---------------------+--------------------------------|
+| ~(Var "attr")~      | Value of ~attr~ from the tuple |
+| ~(Const (Int N))~   | Literal integer N              |
+| ~(Const (Str "s"))~ | Literal string s               |
+| ~(Const (Float f))~ | Literal float f                |
+
+* Examples
+
+** Foreign key
+
+#+begin_src sexp
+(CreateRelation (name "Department") (schema ((dept_id "integer") (dept_name "string"))))
+(CreateRelation (name "Employee")   (schema ((emp_id "integer") (emp_name "string") (dept_id "integer"))))
+
+(RegisterConstraint
+  (constraint_name "fk_employee_dept")
+  (relation_name   "Employee")
+  (body (MemberOf
+    (target "Department")
+    (binding ((dept_id (Var "dept_id")))))))
+#+end_src
+
+** Range check
+
+#+begin_src sexp
+(CreateRelation (name "Result") (schema ((student_id "integer") (score "integer"))))
+
+(RegisterConstraint
+  (constraint_name "score_range")
+  (relation_name   "Result")
+  (body (And
+    ((MemberOf (target "greater_than_or_equal_natural")
+               (binding ((left (Var "score")) (right (Const (Int 0))))))
+     (MemberOf (target "less_than_or_equal_natural")
+               (binding ((left (Var "score")) (right (Const (Int 100))))))))))
+#+end_src
+
+** Existential (FK through a join)
+
+A ~Suite~ is only valid if its room belongs to a building with more
+than 3 floors:
+
+#+begin_src sexp
+(CreateRelation (name "Building") (schema ((building_id "integer") (building_name "string") (floors "integer"))))
+(CreateRelation (name "Room")     (schema ((room_id "integer") (building_id "integer") (floor "integer"))))
+(CreateRelation (name "Suite")    (schema ((suite_id "integer") (room_id "integer") (suite_name "string"))))
+
+(RegisterConstraint
+  (constraint_name "suite_in_tall_building")
+  (relation_name   "Suite")
+  (body
+    (Exists (variable "r") (quantifier "Room")
+      (body
+        (Exists (variable "b") (quantifier "Building")
+          (body
+            (And
+              ((MemberOf (target "Room")
+                         (binding ((room_id (Var "room_id")))))
+               (MemberOf (target "Building")
+                         (binding ((building_id (Var "r.building_id")))))
+               (MemberOf (target "greater_than_natural")
+                         (binding ((left (Var "b.floors"))
+                                   (right (Const (Int 3))))))))))))))
+#+end_src
+
+Note: quantifier variables are namespaced — attributes from variable
+~r~ are accessed as ~r.attr_name~ inside nested scopes.
+
+* See also
+
+- ~lib/icl/~ — AST, parser, executor
+- ~lib/constraint.ml~ — runtime constraint representation and evaluator
+- ~docs/icl-quantification.org~ — full runtime model for ~Exists~/~Forall~
+- ~docs/constraints.org~ — conceptual background

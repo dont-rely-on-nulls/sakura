@@ -14,10 +14,26 @@ Here's an overview of the sublanguages and how they are manifested in Karuta:
 - Pure querying, total/terminating subset;
 - No user recursion with no self references.
 
-** DCL (Data Constraint Language)
+** ICL (Integrity Control Language)
 
 - Integrity rules (key, FK-like, checks, assertions, aggregates-for-integrity).
 - Semantically predicates, but with enforcement timing (on write/commit), not free query operators.
+- Implemented in =lib/icl/= (=Ast=, =Parser=, =Executor=).
+
+** DCL (Database Control Language)
+
+- Branch management: create/checkout branches, query HEAD and tip hashes.
+- Merge: 3-way merge of two branch tips with configurable conflict strategy (=PreferLeft=, =PreferRight=, =RevertToAncestor=).
+- Implemented in =lib/dcl/= (=Ast=, =Parser=, =Executor=).
+- Example commands:
+  #+begin_src sexp
+  (CreateBranch (name "feature") (tip "<hash>"))
+  (Checkout "feature")
+  (GetHead)
+  (GetBranchTip "main")
+  (UpdateBranchTip (name "main") (tip "<hash>"))
+  (Merge (left "main") (right "feature") (strategy PreferLeft))
+  #+end_src
 
 ** DML (Data Manipulation Language)
 
@@ -35,7 +51,7 @@ Here's an overview of the sublanguages and how they are manifested in Karuta:
 ** PPL (Procedural Predicate Language)
 
 - Stored procedures/functions, recursion allowed, orchestration logic.
-- Can call DRL/DML/DCL-aware operations, but not all PPL predicates are DRL-safe.
+- Can call DRL/DML/ICL/DCL-aware operations, but not all PPL predicates are DRL-safe.
   
 ** ACL (Authorization/Policy Language) (optional early, important later)
 
@@ -62,21 +78,21 @@ Here's an overview of the sublanguages and how they are manifested in Karuta:
       person[string, natural] :: sakura:persisted
       person[Name, Age] :- valid_age[Age].
 
-      % DCL
+      % ICL
       another-constraint[list[person], string, natural] :: sakura:constraint
       another-constraint[[], _, _].
       another-constraint[[person[Name, Age]|Rest], Whatever1, Whatever2] :-
         (eq[Name, Whatever1] ; !eq[Name, Whatever1], !eq[Age, Whatever2]),
         another-constraint[Rest, Whatever1, Whatever2].
 
-      % DCL
+      % ICL
       my-predicate[int, string, nat] :: sakura:constraint
       my-predicate[Arg1, Arg2, Arg3] :- 
         another-module:my-predicate[Arg1, Arg2, Arg3],
         on[insert, update],
         timing[immediate].
 
-      % DCL
+      % ICL
       valid_age/1 :: sakura:constraint
       valid_age[Age] with [karuta, sakura] :-
         nat[Age],

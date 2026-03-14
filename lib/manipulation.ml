@@ -44,6 +44,8 @@ let build_membership_criteria _schema : (Tuple.t -> bool) =
 (** Functor to create manipulation operations with a storage backend *)
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
+  type nonrec error = error
+  let of_string_error s = StorageError s
 
   (* Constraint evaluation context *)
 

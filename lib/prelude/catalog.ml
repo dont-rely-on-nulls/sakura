@@ -15,6 +15,8 @@ let attribute_rel_name  = catalog_prefix ^ "attribute"
 let constraint_rel_name = catalog_prefix ^ "constraint"
 let on_rel_name         = catalog_prefix ^ "on"
 let timing_rel_name     = catalog_prefix ^ "timing"
+let branch_rel_name     = catalog_prefix ^ "branch"
+let head_rel_name       = catalog_prefix ^ "head"
 
 let catalog_relation_names =
   [ relation_rel_name
@@ -111,3 +113,4 @@ let build_timing_tuple timing : Tuple.materialized =
       Tuple.AttributeMap.singleton "timing"
         { Attribute.value = Obj.magic timing }
   }
+

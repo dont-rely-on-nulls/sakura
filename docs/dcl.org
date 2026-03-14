@@ -1,0 +1,105 @@
+#+TITLE: DCL — Database Control Language
+
+DCL manages branches: named pointers to database states. It provides
+Git-like operations built on Sakura's append-only, content-addressed
+storage. Every mutation automatically advances the current branch tip,
+so you never need to track hashes manually.
+
+* Syntax reference
+
+| Command                                    | Effect                               |
+|--------------------------------------------+--------------------------------------|
+| ~(CreateBranch (name N))~                  | Create branch N at current state     |
+| ~(CreateBranch (name N) (hash H))~         | Create branch N at a specific hash   |
+| ~(Checkout N)~                             | Switch to branch N, restore its db   |
+| ~(GetHead)~                                | Print the current HEAD branch name   |
+| ~(GetBranchTip N)~                         | Print the stored hash of branch N    |
+| ~(UpdateBranchTip (name N) (hash H))~      | Manually advance branch N to hash H  |
+| ~(Merge (left L) (right R) (strategy S))~  | 3-way merge branch R into L          |
+
+Branch state is always queryable as relations:
+
+#+begin_src sexp
+(Base sakura:branch)   ; name × hash for every branch
+(Base sakura:head)     ; single-tuple: current branch name
+#+end_src
+
+Merge strategies:
+
+| Strategy           | Behaviour on conflict                        |
+|--------------------+----------------------------------------------|
+| ~PreferLeft~       | Keep the left branch's version               |
+| ~PreferRight~      | Keep the right branch's version              |
+| ~RevertToAncestor~ | Revert conflicting relation to the LCA state |
+
+* Example: travelling through history
+
+#+begin_src sexp
+(CreateRelation (name "scores") (schema ((player "string") (pts "integer"))))
+
+(CreateBranch (name "v0"))
+
+(InsertTuple (relation "scores") (attributes ((player (Str "Alice")) (pts (Int 10)))))
+
+(CreateBranch (name "v1"))
+
+(InsertTuple (relation "scores") (attributes ((player (Str "Bob")) (pts (Int 25)))))
+
+(CreateBranch (name "v2"))
+#+end_src
+
+Now jump around and watch the relation change:
+
+#+begin_src sexp
+(Checkout "v0")
+(Base scores)
+; (0 rows)
+
+(Checkout "v1")
+(Base scores)
+; ┌────────┬─────┐
+; │ player │ pts │
+; ├────────┼─────┤
+; │ Alice  │  10 │
+; └────────┴─────┘
+
+(Checkout "v2")
+(Base scores)
+; ┌────────┬─────┐
+; │ player │ pts │
+; ├────────┼─────┤
+; │ Alice  │  10 │
+; │ Bob    │  25 │
+; └────────┴─────┘
+#+end_src
+
+* Example: diverge and merge
+
+#+begin_src sexp
+(Checkout "master")
+(CreateBranch (name "feature"))
+
+(Checkout "master")
+(InsertTuple (relation "users") (attributes ((id (Int 1)) (name (Str "Alice")))))
+
+(Checkout "feature")
+(InsertTuple (relation "users") (attributes ((id (Int 2)) (name (Str "Bob")))))
+
+(Merge (left "master") (right "feature") (strategy PreferLeft))
+
+(Checkout "master")
+(Base users)
+; ┌────┬───────┐
+; │ id │ name  │
+; ├────┼───────┤
+; │  1 │ Alice │
+; │  2 │ Bob   │
+; └────┴───────┘
+#+end_src
+
+* See also
+
+- ~lib/dcl/~ — AST, parser, executor
+- ~lib/management/branch.ml~ — branch registry and ephemeral relations
+- ~lib/management/merge.ml~ — 3-way merge engine
+- ~lib/management/diff.ml~ — relation diff used internally by merge

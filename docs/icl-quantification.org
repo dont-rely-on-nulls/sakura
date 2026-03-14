@@ -1,8 +1,8 @@
-#+TITLE: DCL Quantification: Runtime Model and Evaluation
+#+TITLE: ICL Quantification: Runtime Model and Evaluation
 
 * Overview
 
-This document describes precisely how DCL constraints are represented, compiled,
+This document describes precisely how ICL constraints are represented, compiled,
 and evaluated at runtime. It covers the full stack from the s-expression syntax
 through AST compilation, context construction, and recursive evaluation — with
 particular attention to the cost model of quantifiers, which is the primary target
