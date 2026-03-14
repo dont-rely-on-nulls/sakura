@@ -1,9 +1,9 @@
-#+TITLE: N-Way Binding in DCL Constraints
+#+TITLE: N-Way Binding in ICL Constraints
 #+DATE: 2026-03-11
 
 * Overview
 
-The DCL constraint language supports quantified membership checks via ~Exists~ and ~Forall~.
+The ICL constraint language supports quantified membership checks via ~Exists~ and ~Forall~.
 This document illustrates the hotel/building/room/suite example to motivate n-ary quantification
 and show how 3-wise (and deeper) relational composition is expressed.
 
@@ -72,7 +72,7 @@ to fire when suites referencing its rooms are inserted.
      ((suite_id (Int 1003)) (room_id (Int 102)) (suite_name (Str "Deluxe"))       (capacity (Int 3))))))
 #+end_src
 
-* DCL — Constraints
+* ICL — Constraints
 
 Binary FK constraints compose to enforce referential integrity along the chain
 ~Suite → Room → Building~. Each link is declared independently.
@@ -202,5 +202,5 @@ bound to variable ~x~.
 
 Without namespacing, ~extend_tuple~ would overwrite the incoming tuple's attributes
 with same-named attributes from the quantifier row, silently making ~Var~ resolve to
-the wrong scope. See ~lib/constraint.ml~ and ~docs/dcl-quantification.org~ for a full
+the wrong scope. See ~lib/constraint.ml~ and ~docs/icl-quantification.org~ for a full
 account of this failure mode and the provenance TODO.

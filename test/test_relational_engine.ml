@@ -1630,7 +1630,7 @@ let%test_unit "constraint: evaluate Exists over finite relation" =
   let b =
     Constraint.BindingMap.empty
     |> Constraint.BindingMap.add "left" (Constraint.Var "x")
-    |> Constraint.BindingMap.add "right" (Constraint.Var "value")
+    |> Constraint.BindingMap.add "right" (Constraint.Var "value.value")
   in
   let c =
     Constraint.Exists
@@ -1674,7 +1674,7 @@ let%test_unit "constraint: evaluate Forall fails when not all match" =
   let b =
     Constraint.BindingMap.empty
     |> Constraint.BindingMap.add "left" (Constraint.Var "x")
-    |> Constraint.BindingMap.add "right" (Constraint.Var "value")
+    |> Constraint.BindingMap.add "right" (Constraint.Var "value.value")
   in
   let c =
     Constraint.Forall
@@ -2583,41 +2583,41 @@ let%test_unit "dml: insert into nonexistent relation returns error" =
    ============================================================================ *)
 
 let%test_unit "dcl: round-trip RegisterConstraint MemberOf" =
-  let src = Dcl.Ast.RegisterConstraint {
+  let src = Icl.Ast.RegisterConstraint {
     constraint_name = "fk_order";
     relation_name = "order_items";
-    body = Dcl.Ast.MemberOf { target = "orders"; binding = [("order_id", Dcl.Ast.Var "order_id")] }
+    body = Icl.Ast.MemberOf { target = "orders"; binding = [("order_id", Icl.Ast.Var "order_id")] }
   } in
-  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  match Icl.Parser.of_string (Icl.Parser.to_string src) with
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
 let%test_unit "dcl: round-trip And constraint" =
-  let src = Dcl.Ast.RegisterConstraint {
+  let src = Icl.Ast.RegisterConstraint {
     constraint_name = "valid_range";
     relation_name = "scores";
-    body = Dcl.Ast.And [
-      Dcl.Ast.MemberOf { target = "ge_zero";
-        binding = [("left", Dcl.Ast.Var "score"); ("right", Dcl.Ast.Const (Drl.Ast.Int 0))] };
-      Dcl.Ast.MemberOf { target = "le_hundred";
-        binding = [("left", Dcl.Ast.Var "score"); ("right", Dcl.Ast.Const (Drl.Ast.Int 100))] };
+    body = Icl.Ast.And [
+      Icl.Ast.MemberOf { target = "ge_zero";
+        binding = [("left", Icl.Ast.Var "score"); ("right", Icl.Ast.Const (Drl.Ast.Int 0))] };
+      Icl.Ast.MemberOf { target = "le_hundred";
+        binding = [("left", Icl.Ast.Var "score"); ("right", Icl.Ast.Const (Drl.Ast.Int 100))] };
     ]
   } in
-  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  match Icl.Parser.of_string (Icl.Parser.to_string src) with
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
 let%test_unit "dcl: round-trip Not constraint" =
-  let src = Dcl.Ast.RegisterConstraint {
+  let src = Icl.Ast.RegisterConstraint {
     constraint_name = "not_closed";
     relation_name = "open_ticket";
-    body = Dcl.Ast.Not {
-      body = Dcl.Ast.MemberOf { target = "closed_ticket";
-        binding = [("ticket_id", Dcl.Ast.Var "ticket_id")] };
+    body = Icl.Ast.Not {
+      body = Icl.Ast.MemberOf { target = "closed_ticket";
+        binding = [("ticket_id", Icl.Ast.Var "ticket_id")] };
       universe = "open_ticket"
     }
   } in
-  match Dcl.Parser.of_string (Dcl.Parser.to_string src) with
+  match Icl.Parser.of_string (Icl.Parser.to_string src) with
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
@@ -2630,14 +2630,14 @@ let%test_unit "dcl: execute RegisterConstraint attaches constraint" =
     let db = match Manipulation.Memory.create_relation storage db ~name:"order_items" ~schema with
       | Error _ -> assert false | Ok (db, _) -> db
     in
-    let stmt = Dcl.Ast.RegisterConstraint {
+    let stmt = Icl.Ast.RegisterConstraint {
       constraint_name = "fk_order";
       relation_name = "order_items";
-      body = Dcl.Ast.MemberOf { target = "orders"; binding = [("order_id", Dcl.Ast.Var "order_id")] }
+      body = Icl.Ast.MemberOf { target = "orders"; binding = [("order_id", Icl.Ast.Var "order_id")] }
     } in
-    match Dcl.Executor.Memory.execute storage db stmt with
+    match Icl.Executor.Memory.execute storage db stmt with
     | Error _ -> assert false
-    | Ok db ->
+    | Ok (db, _) ->
       let rel = match Management.Database.get_relation db "order_items" with
         | None -> assert false | Some r -> r
       in
@@ -2662,13 +2662,13 @@ let%test_unit "dcl: FK constraint enforced on insert" =
       | Error _ -> assert false | Ok (db, _) -> db
     in
     (* Register FK: order_id in order_items must match id in orders *)
-    let db = match Dcl.Executor.Memory.execute storage db
-      (Dcl.Ast.RegisterConstraint {
+    let db = match Icl.Executor.Memory.execute storage db
+      (Icl.Ast.RegisterConstraint {
         constraint_name = "fk_order";
         relation_name = "order_items";
-        body = Dcl.Ast.MemberOf { target = "orders"; binding = [("id", Dcl.Ast.Var "order_id")] }
+        body = Icl.Ast.MemberOf { target = "orders"; binding = [("id", Icl.Ast.Var "order_id")] }
       }) with
-      | Error _ -> assert false | Ok db -> db
+      | Error _ -> assert false | Ok (db, _) -> db
     in
     (* Valid insert: order_id=1 exists in orders *)
     let db = match Dml.Executor.Memory.execute storage db
@@ -2684,3 +2684,249 @@ let%test_unit "dcl: FK constraint enforced on insert" =
       (Dml.Ast.InsertTuple { relation = "order_items"; attributes = [("order_id", Drl.Ast.Int 99)] }) with
     | Error (Dml.Executor.Memory.ManipulationError (Manipulation.ConstraintViolation _)) -> ()
     | _ -> assert false)
+
+(* ============================================================================
+   Branch Tests
+   ============================================================================ *)
+
+module BranchMemory = Management.Branch.Make(Management.Physical.Memory)
+
+let%test_unit "branch: create and get_tip" =
+  with_storage (fun storage ->
+    let tip = "deadbeef" in
+    (match BranchMemory.create storage ~name:"main" ~tip with
+     | Error _ -> assert false
+     | Ok () -> ());
+    match BranchMemory.get_tip storage "main" with
+    | Error _ -> assert false
+    | Ok None -> assert false
+    | Ok (Some t) -> assert (t = tip))
+
+let%test_unit "branch: get_tip returns None for unknown branch" =
+  with_storage (fun storage ->
+    match BranchMemory.get_tip storage "nonexistent" with
+    | Error _ -> assert false
+    | Ok None -> ()
+    | Ok (Some _) -> assert false)
+
+let%test_unit "branch: checkout and get_head" =
+  with_storage (fun storage ->
+    (match BranchMemory.create storage ~name:"main" ~tip:"abc" with
+     | Error _ -> assert false | Ok () -> ());
+    (match BranchMemory.checkout storage "main" with
+     | Error _ -> assert false | Ok () -> ());
+    match BranchMemory.get_head storage with
+    | Error _ -> assert false
+    | Ok None -> assert false
+    | Ok (Some h) -> assert (h = "main"))
+
+let%test_unit "branch: get_head returns None when not set" =
+  with_storage (fun storage ->
+    match BranchMemory.get_head storage with
+    | Error _ -> assert false
+    | Ok None -> ()
+    | Ok (Some _) -> assert false)
+
+let%test_unit "branch: update_tip advances the branch" =
+  with_storage (fun storage ->
+    (match BranchMemory.create storage ~name:"main" ~tip:"v1" with
+     | Error _ -> assert false | Ok () -> ());
+    (match BranchMemory.update_tip storage ~name:"main" ~tip:"v2" with
+     | Error _ -> assert false | Ok () -> ());
+    match BranchMemory.get_tip storage "main" with
+    | Error _ -> assert false
+    | Ok None -> assert false
+    | Ok (Some t) -> assert (t = "v2"))
+
+let%test_unit "branch: update_tip fails on unknown branch" =
+  with_storage (fun storage ->
+    match BranchMemory.update_tip storage ~name:"ghost" ~tip:"v1" with
+    | Error _ -> ()
+    | Ok () -> assert false)
+
+let%test_unit "branch: multiple branches are independent" =
+  with_storage (fun storage ->
+    (match BranchMemory.create storage ~name:"main"    ~tip:"hash-main"    with
+     | Error _ -> assert false | Ok () -> ());
+    (match BranchMemory.create storage ~name:"feature" ~tip:"hash-feature" with
+     | Error _ -> assert false | Ok () -> ());
+    let main_tip = match BranchMemory.get_tip storage "main" with
+      | Ok (Some t) -> t | _ -> assert false
+    in
+    let feat_tip = match BranchMemory.get_tip storage "feature" with
+      | Ok (Some t) -> t | _ -> assert false
+    in
+    assert (main_tip = "hash-main");
+    assert (feat_tip = "hash-feature");
+    assert (main_tip <> feat_tip))
+
+(* ============================================================================
+   Diff Tests
+   ============================================================================ *)
+
+let%test_unit "diff: identical databases produce empty diff" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let diffs = Management.Diff.diff ~ancestor:db ~target:db in
+    assert (diffs = []))
+
+let%test_unit "diff: added relation detected" =
+  with_storage (fun storage ->
+    let ancestor = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let schema = Schema.empty |> Schema.add "x" "natural" in
+    let target, _ = match Manipulation.Memory.create_relation storage ancestor
+      ~name:"new_rel" ~schema with
+      | Error _ -> assert false | Ok p -> p
+    in
+    let diffs = Management.Diff.diff ~ancestor ~target in
+    let added = List.filter_map (function
+      | Management.Diff.RelationAdded r -> Some r
+      | _ -> None) diffs
+    in
+    assert (List.exists (fun r -> r.Relation.name = "new_rel") added))
+
+let%test_unit "diff: removed relation detected" =
+  with_storage (fun storage ->
+    let schema = Schema.empty |> Schema.add "x" "natural" in
+    let ancestor = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let ancestor, _ = match Manipulation.Memory.create_relation storage ancestor
+      ~name:"gone" ~schema with
+      | Error _ -> assert false | Ok p -> p
+    in
+    let target = match Manipulation.Memory.retract_relation storage ancestor ~name:"gone" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let diffs = Management.Diff.diff ~ancestor ~target in
+    let removed = List.filter_map (function
+      | Management.Diff.RelationRemoved n -> Some n
+      | _ -> None) diffs
+    in
+    assert (List.mem "gone" removed))
+
+let%test_unit "diff: modified relation detected with added tuple" =
+  with_storage (fun storage ->
+    let schema = Schema.empty |> Schema.add "val" "natural" in
+    let ancestor = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let ancestor, _ = match Manipulation.Memory.create_relation storage ancestor
+      ~name:"r" ~schema with
+      | Error _ -> assert false | Ok p -> p
+    in
+    let rel = Option.get (Management.Database.get_relation ancestor "r") in
+    let t : Tuple.materialized = {
+      Tuple.relation = "r";
+      attributes = Tuple.AttributeMap.singleton "val" { Attribute.value = Obj.repr 42 };
+    } in
+    let (target, _, _) = match Manipulation.Memory.create_tuple storage ancestor rel t with
+      | Error _ -> assert false | Ok p -> p
+    in
+    let diffs = Management.Diff.diff ~ancestor ~target in
+    assert (List.length diffs = 1);
+    match diffs with
+    | [ Management.Diff.RelationModified { name; added_tuples; removed_tuples; _ } ] ->
+      assert (name = "r");
+      assert (List.length added_tuples = 1);
+      assert (removed_tuples = [])
+    | _ -> assert false)
+
+(* ============================================================================
+   Merge Tests
+   ============================================================================ *)
+
+module MergeMemory = Management.Merge.Make
+  (Management.Physical.Memory)
+  (Manipulation.Memory)
+
+let%test_unit "merge: fast-forward when only one side changed" =
+  with_storage (fun storage ->
+    let schema = Schema.empty |> Schema.add "val" "natural" in
+    let base_db = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let base_db, _ = match Manipulation.Memory.create_relation storage base_db
+      ~name:"r" ~schema with
+      | Error _ -> assert false | Ok p -> p
+    in
+    (match Manipulation.Memory.store_database storage base_db with
+     | Error _ -> assert false | Ok () -> ());
+    let rel = Option.get (Management.Database.get_relation base_db "r") in
+    let t1 : Tuple.materialized = {
+      Tuple.relation = "r";
+      attributes = Tuple.AttributeMap.singleton "val" { Attribute.value = Obj.repr 1 };
+    } in
+    let (left_db, _, _) = match Manipulation.Memory.create_tuple storage base_db rel t1 with
+      | Error _ -> assert false | Ok p -> p
+    in
+    (match Manipulation.Memory.store_database storage left_db with
+     | Error _ -> assert false | Ok () -> ());
+    match MergeMemory.merge ~storage ~strategy:Management.Merge.PreferLeft
+      ~left_tip:left_db.Management.Database.hash
+      ~right_tip:base_db.Management.Database.hash with
+    | Error _ -> assert false
+    | Ok (Management.Merge.Failed _) -> assert false
+    | Ok (Management.Merge.Clean merged) ->
+      let merged_rel = Option.get (Management.Database.get_relation merged "r") in
+      assert (Manipulation.Memory.tuple_count merged_rel = 1))
+
+let%test_unit "merge: independent tuple additions produce union" =
+  with_storage (fun storage ->
+    let schema = Schema.empty |> Schema.add "val" "natural" in
+    let base_db = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let base_db, _ = match Manipulation.Memory.create_relation storage base_db
+      ~name:"r" ~schema with
+      | Error _ -> assert false | Ok p -> p
+    in
+    (match Manipulation.Memory.store_database storage base_db with
+     | Error _ -> assert false | Ok () -> ());
+    let rel = Option.get (Management.Database.get_relation base_db "r") in
+    let t_left : Tuple.materialized = {
+      Tuple.relation = "r";
+      attributes = Tuple.AttributeMap.singleton "val" { Attribute.value = Obj.repr 10 };
+    } in
+    let (left_db, _, _) = match Manipulation.Memory.create_tuple storage base_db rel t_left with
+      | Error _ -> assert false | Ok p -> p
+    in
+    (match Manipulation.Memory.store_database storage left_db with
+     | Error _ -> assert false | Ok () -> ());
+    let t_right : Tuple.materialized = {
+      Tuple.relation = "r";
+      attributes = Tuple.AttributeMap.singleton "val" { Attribute.value = Obj.repr 20 };
+    } in
+    let (right_db, _, _) = match Manipulation.Memory.create_tuple storage base_db rel t_right with
+      | Error _ -> assert false | Ok p -> p
+    in
+    (match Manipulation.Memory.store_database storage right_db with
+     | Error _ -> assert false | Ok () -> ());
+    match MergeMemory.merge ~storage ~strategy:Management.Merge.PreferLeft
+      ~left_tip:left_db.Management.Database.hash
+      ~right_tip:right_db.Management.Database.hash with
+    | Error _ -> assert false
+    | Ok (Management.Merge.Failed _) -> assert false
+    | Ok (Management.Merge.Clean merged) ->
+      let merged_rel = Option.get (Management.Database.get_relation merged "r") in
+      assert (Manipulation.Memory.tuple_count merged_rel = 2))
+
+let%test_unit "merge: no-op when both sides are identical" =
+  with_storage (fun storage ->
+    let base_db = match Manipulation.Memory.create_database storage ~name:"db" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (match Manipulation.Memory.store_database storage base_db with
+     | Error _ -> assert false | Ok () -> ());
+    match MergeMemory.merge ~storage ~strategy:Management.Merge.PreferLeft
+      ~left_tip:base_db.Management.Database.hash
+      ~right_tip:base_db.Management.Database.hash with
+    | Error _ -> assert false
+    | Ok (Management.Merge.Failed _) -> assert false
+    | Ok (Management.Merge.Clean merged) ->
+      assert (Management.Database.get_relation_names merged =
+              Management.Database.get_relation_names base_db))
