@@ -43,7 +43,7 @@ val remove_attrs : attr_name list -> schema -> schema
 
 val rename_in_schema : (attr_name * attr_name) list -> schema -> schema
 
-type value = Obj.t
+type value (* AXIOM TO BE REALIZED *)
 
 val value_eqb : value -> value -> bool
 
@@ -60,7 +60,7 @@ val merge_tuples : tuple -> tuple -> tuple
 val tuples_agree_on : attr_name list -> tuple -> tuple -> bool
 
 type relation = { rel_name : char list; rel_schema : schema;
-                  rel_tuples : tuple list; rel_finite : bool }
+                  rel_tuples : tuple list }
 
 type database = (char list * relation) list
 
@@ -84,8 +84,6 @@ type query =
 | Take of int * query
 
 val predicted_schema : database -> query -> schema option
-
-val predicted_finite : database -> query -> bool option
 
 val literal_to_value : literal -> value
 
