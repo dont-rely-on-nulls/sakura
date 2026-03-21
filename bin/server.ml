@@ -162,6 +162,18 @@ let register_prelude_relations storage db =
     ; divide_natural
     ]
 
+let print_with_time str =
+  let now = Unix.gettimeofday () in
+  let tm = Unix.localtime now in
+  let orange = "\027[38;5;208m" in
+  let reset = "\027[0m" in
+  let formatted_time = 
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d"
+      (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+  in 
+  print_endline @@ Printf.sprintf "%s[%s]%s %s" orange formatted_time reset str
+
 (* TODO: single-threaded accept loop — one slow or hung client blocks all
    others. Should use threads or non-blocking I/O. *)
 let handle_client storage db_ref fd =
@@ -180,6 +192,7 @@ let handle_client storage db_ref fd =
                db.Management.Database.hash
                ("Uncaught error: " ^ Printexc.to_string e)
          in
+         print_with_time response;
          output_string oc (response ^ "\n");
          flush oc
        end
