@@ -20,6 +20,8 @@ module Make (Storage : Management.Physical.S) = struct
 
   let ( let* ) = Result.bind
 
+  let ( let* ) = Result.bind
+
   let wrap_manip r = Result.map_error (fun e -> ManipulationError e) r
 
   let wrap_alg e = AlgebraError e
