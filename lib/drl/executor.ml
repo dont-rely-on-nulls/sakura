@@ -3,8 +3,17 @@ module Make(Storage : Management.Physical.S) = struct
   module Ops = Manipulation.Make(Storage)
 
   type error =
+    | ParseError       of string
     | RelationNotFound of string
-    | AlgebraError of Algebra.error
+    | AlgebraError     of Algebra.error
+
+  let sexp_of_error e =
+    let open Sexplib.Sexp in
+    match e with
+    | ParseError s                            -> List [Atom "parse-error";       Atom s]
+    | RelationNotFound s                      -> List [Atom "relation-not-found"; Atom s]
+    | AlgebraError (Algebra.StorageError s)   -> List [Atom "storage-error";     Atom s]
+    | AlgebraError (Algebra.GeneratorError s) -> List [Atom "generator-error";   Atom s]
 
   let wrap = Result.map_error (fun e -> AlgebraError e)
 

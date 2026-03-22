@@ -275,6 +275,10 @@
               ppx_protocol_conv
               ppx_protocol_conv_xml_light
               ocamlPackages.earlybird
+              # Formal verification
+              legacyPackages.coq
+              legacyPackages.coqPackages.stdlib
+              legacyPackages.z3
             ];
 
 

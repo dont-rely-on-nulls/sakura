@@ -2391,20 +2391,20 @@ let%test_unit "constraint propagation: project filters constraints" =
 
 (* Parse tests use canonical flat sexp format: (Constructor (field val) ...) *)
 
-let%test_unit "dml: parse CreateDatabase" =
-  match Dml.Parser.of_string {|(CreateDatabase "shop")|} with
+let%test_unit "ddl: parse CreateDatabase" =
+  match Ddl.Parser.of_string {|(CreateDatabase "shop")|} with
   | Error _ -> assert false
-  | Ok stmt -> assert (stmt = Dml.Ast.CreateDatabase "shop")
+  | Ok stmt -> assert (stmt = Ddl.Ast.CreateDatabase "shop")
 
-let%test_unit "dml: parse RetractRelation" =
-  match Dml.Parser.of_string {|(RetractRelation "users")|} with
+let%test_unit "ddl: parse RetractRelation" =
+  match Ddl.Parser.of_string {|(RetractRelation "users")|} with
   | Error _ -> assert false
-  | Ok stmt -> assert (stmt = Dml.Ast.RetractRelation "users")
+  | Ok stmt -> assert (stmt = Ddl.Ast.RetractRelation "users")
 
-let%test_unit "dml: parse ClearRelation" =
-  match Dml.Parser.of_string {|(ClearRelation "users")|} with
+let%test_unit "ddl: parse ClearRelation" =
+  match Ddl.Parser.of_string {|(ClearRelation "users")|} with
   | Error _ -> assert false
-  | Ok stmt -> assert (stmt = Dml.Ast.ClearRelation "users")
+  | Ok stmt -> assert (stmt = Ddl.Ast.ClearRelation "users")
 
 let%test_unit "dml: round-trip InsertTuple" =
   let src = Dml.Ast.InsertTuple {
@@ -2415,12 +2415,12 @@ let%test_unit "dml: round-trip InsertTuple" =
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
-let%test_unit "dml: round-trip CreateRelation" =
-  let src = Dml.Ast.CreateRelation {
+let%test_unit "ddl: round-trip CreateRelation" =
+  let src = Ddl.Ast.CreateRelation {
     name = "users";
     schema = [("name", "string"); ("age", "natural")]
   } in
-  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+  match Ddl.Parser.of_string (Ddl.Parser.to_string src) with
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
@@ -2436,31 +2436,31 @@ let%test_unit "dml: round-trip InsertTuples" =
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
-let%test_unit "dml: round-trip RegisterDomain" =
-  let src = Dml.Ast.RegisterDomain { name = "money"; cardinality = Dml.Ast.AlephZero } in
-  match Dml.Parser.of_string (Dml.Parser.to_string src) with
+let%test_unit "ddl: round-trip RegisterDomain" =
+  let src = Ddl.Ast.RegisterDomain { name = "money"; cardinality = Ddl.Ast.AlephZero } in
+  match Ddl.Parser.of_string (Ddl.Parser.to_string src) with
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
 (* Executor tests construct AST directly — no dependency on sexp format *)
 
-let%test_unit "dml: execute CreateDatabase" =
+let%test_unit "ddl: execute CreateDatabase" =
   with_storage (fun storage ->
     let db = Management.Database.empty ~name:"" in
-    let stmt = Dml.Ast.CreateDatabase "shop" in
-    match Dml.Executor.Memory.execute storage db stmt with
+    let stmt = Ddl.Ast.CreateDatabase "shop" in
+    match Ddl.Executor.Memory.execute storage db stmt with
     | Error _ -> assert false
-    | Ok db -> assert (db.name = "shop"))
+    | Ok (db, _msg) -> assert (db.name = "shop"))
 
-let%test_unit "dml: execute CreateRelation" =
+let%test_unit "ddl: execute CreateRelation" =
   with_storage (fun storage ->
     let db = match Manipulation.Memory.create_database storage ~name:"shop" with
       | Error _ -> assert false | Ok db -> db
     in
-    let stmt = Dml.Ast.CreateRelation { name = "users"; schema = [("name", "string"); ("age", "natural")] } in
-    match Dml.Executor.Memory.execute storage db stmt with
+    let stmt = Ddl.Ast.CreateRelation { name = "users"; schema = [("name", "string"); ("age", "natural")] } in
+    match Ddl.Executor.Memory.execute storage db stmt with
     | Error _ -> assert false
-    | Ok db -> assert (Management.Database.has_relation db "users"))
+    | Ok (db, _msg) -> assert (Management.Database.has_relation db "users"))
 
 let%test_unit "dml: execute InsertTuple" =
   with_storage (fun storage ->
@@ -2523,7 +2523,7 @@ let%test_unit "dml: execute DeleteTuple" =
       in
       assert (Manipulation.Memory.tuple_count rel = 0))
 
-let%test_unit "dml: execute RetractRelation" =
+let%test_unit "ddl: execute RetractRelation" =
   with_storage (fun storage ->
     let db = match Manipulation.Memory.create_database storage ~name:"shop" with
       | Error _ -> assert false | Ok db -> db
@@ -2532,11 +2532,11 @@ let%test_unit "dml: execute RetractRelation" =
     let db = match Manipulation.Memory.create_relation storage db ~name:"users" ~schema with
       | Error _ -> assert false | Ok (db, _) -> db
     in
-    match Dml.Executor.Memory.execute storage db (Dml.Ast.RetractRelation "users") with
+    match Ddl.Executor.Memory.execute storage db (Ddl.Ast.RetractRelation "users") with
     | Error _ -> assert false
-    | Ok db -> assert (not (Management.Database.has_relation db "users")))
+    | Ok (db, _msg) -> assert (not (Management.Database.has_relation db "users")))
 
-let%test_unit "dml: execute ClearRelation" =
+let%test_unit "ddl: execute ClearRelation" =
   with_storage (fun storage ->
     let db = match Manipulation.Memory.create_database storage ~name:"shop" with
       | Error _ -> assert false | Ok db -> db
@@ -2550,23 +2550,23 @@ let%test_unit "dml: execute ClearRelation" =
         tuples = [[("name", Drl.Ast.Str "Alice")]; [("name", Drl.Ast.Str "Bob")]] }) with
       | Error _ -> assert false | Ok db -> db
     in
-    match Dml.Executor.Memory.execute storage db (Dml.Ast.ClearRelation "users") with
+    match Ddl.Executor.Memory.execute storage db (Ddl.Ast.ClearRelation "users") with
     | Error _ -> assert false
-    | Ok db ->
+    | Ok (db, _msg) ->
       let rel = match Management.Database.get_relation db "users" with
         | None -> assert false | Some r -> r
       in
       assert (Manipulation.Memory.tuple_count rel = 0))
 
-let%test_unit "dml: execute RegisterDomain" =
+let%test_unit "ddl: execute RegisterDomain" =
   with_storage (fun storage ->
     let db = match Manipulation.Memory.create_database storage ~name:"shop" with
       | Error _ -> assert false | Ok db -> db
     in
-    let stmt = Dml.Ast.RegisterDomain { name = "money"; cardinality = Dml.Ast.AlephZero } in
-    match Dml.Executor.Memory.execute storage db stmt with
+    let stmt = Ddl.Ast.RegisterDomain { name = "money"; cardinality = Ddl.Ast.AlephZero } in
+    match Ddl.Executor.Memory.execute storage db stmt with
     | Error _ -> assert false
-    | Ok db -> assert (Management.Database.has_domain db "money"))
+    | Ok (db, _msg) -> assert (Management.Database.has_domain db "money"))
 
 let%test_unit "dml: insert into nonexistent relation returns error" =
   with_storage (fun storage ->
