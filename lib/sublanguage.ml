@@ -29,5 +29,5 @@ module type S = sig
     Management.Database.t ->
     ast ->
     (result, error) Result.t
-  val string_of_error : error -> string
+  val sexp_of_error : error -> Sexplib.Sexp.t
 end

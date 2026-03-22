@@ -76,23 +76,15 @@ let ok_response storage db_name db_hash msg =
     List [Atom "branch";  Atom (get_branch storage)];
   ]
 
-let error_response storage db_name db_hash msg =
+let error_response storage db_name db_hash err_sexp =
   let open Sexplib.Sexp in
   to_string @@ List [
     Atom "error";
-    List [Atom "message"; Atom msg];
+    err_sexp;
     List [Atom "db_hash"; Atom (short_hash db_hash)];
     List [Atom "db_name"; Atom db_name];
     List [Atom "branch";  Atom (get_branch storage)];
   ]
-
-let manip_err = function
-  | Manipulation.RelationNotFound s      -> "RelationNotFound: " ^ s
-  | Manipulation.RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-  | Manipulation.TupleNotFound h         -> "TupleNotFound: " ^ h
-  | Manipulation.DuplicateTuple h        -> "DuplicateTuple: " ^ h
-  | Manipulation.ConstraintViolation s   -> "ConstraintViolation: " ^ s
-  | Manipulation.StorageError s          -> "StorageError: " ^ s
 
 let advance_head_branch storage new_hash =
   match BranchOps.get_head storage with
@@ -128,7 +120,7 @@ let execute_command storage db_ref cmd =
     advance_head_branch storage new_db.Management.Database.hash;
     ok new_db.Management.Database.hash msg
   | Error e ->
-    err h (Dbms_language.string_of_dispatch_error e)
+    err h (Dbms_language.sexp_of_dispatch_error e)
 
 (* TODO: registration failures are silently ignored; a broken prelude
    relation leaves the catalog in a partially-seeded state with no
@@ -147,7 +139,7 @@ let register_prelude_relations storage db =
       | Ok (new_db, _) -> new_db
       | Error e        ->
         Printf.eprintf "Warning: failed to register prelude relation %s: %s\n%!"
-          rel.name (manip_err e);
+          rel.name (Manipulation.string_of_error e);
         db)
     db
     [ less_than_natural
@@ -190,7 +182,7 @@ let handle_client storage db_ref fd =
              let db = !db_ref in
              error_response storage db.Management.Database.name
                db.Management.Database.hash
-               ("Uncaught error: " ^ Printexc.to_string e)
+               Sexplib.Sexp.(List [Atom "uncaught-error"; Atom (Printexc.to_string e)])
          in
          print_with_time response;
          output_string oc (response ^ "\n");
@@ -222,9 +214,7 @@ let () =
           | Ok (db, _) -> db
           | Error e ->
             Printf.eprintf "Warning: failed to register %s: %s\n%!"
-              rel.Relation.name (match e with
-                | Manipulation.RelationAlreadyExists s -> "already exists: " ^ s
-                | Manipulation.StorageError s -> s | _ -> "error");
+              rel.Relation.name (Manipulation.string_of_error e);
             db
         in
         let db = register db (BranchOps.branch_relation storage) in

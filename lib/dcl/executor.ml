@@ -4,21 +4,19 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
   module MergeOps = Management.Merge.Make(Storage)(Ops)
 
   type error =
+    | ParseError  of string
     | BranchError of string
     | MergeError  of string
+
+  let sexp_of_error = function
+    | ParseError  s -> Sexplib.Sexp.(List [Atom "parse-error";  Atom s])
+    | BranchError s -> Sexplib.Sexp.(List [Atom "branch-error"; Atom s])
+    | MergeError  s -> Sexplib.Sexp.(List [Atom "merge-error";  Atom s])
 
   let convert_strategy : Ast.merge_strategy -> Management.Merge.strategy = function
     | Ast.PreferLeft       -> Management.Merge.PreferLeft
     | Ast.PreferRight      -> Management.Merge.PreferRight
     | Ast.RevertToAncestor -> Management.Merge.RevertToAncestor
-
-  let manip_err = function
-    | Manipulation.RelationNotFound s      -> "RelationNotFound: " ^ s
-    | Manipulation.RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-    | Manipulation.TupleNotFound h         -> "TupleNotFound: " ^ h
-    | Manipulation.DuplicateTuple h        -> "DuplicateTuple: " ^ h
-    | Manipulation.ConstraintViolation s   -> "ConstraintViolation: " ^ s
-    | Manipulation.StorageError s          -> "StorageError: " ^ s
 
   let execute
       (storage : Storage.t)
@@ -45,7 +43,7 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
           | Error e -> Error (BranchError e)
           | Ok ()   ->
             (match Ops.load_database storage tip with
-             | Error e -> Error (BranchError (manip_err e))
+             | Error e -> Error (BranchError (Manipulation.string_of_error e))
              | Ok None -> Error (BranchError ("No database at hash: " ^ tip))
              | Ok (Some loaded_db) ->
                Ok (loaded_db, "HEAD:" ^ branch_name))))
@@ -75,7 +73,7 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
        | Ok (Some left_tip), Ok (Some right_tip) ->
          let strat = convert_strategy strategy in
          (match MergeOps.merge ~storage ~strategy:strat ~left_tip ~right_tip with
-          | Error e -> Error (MergeError (manip_err e))
+          | Error e -> Error (MergeError (Manipulation.string_of_error e))
           | Ok (Management.Merge.Failed conflicts) ->
             let msgs = List.map (function
               | Management.Merge.TupleConflict    { relation; hash } ->

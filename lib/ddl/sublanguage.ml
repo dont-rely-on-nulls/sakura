@@ -1,29 +1,23 @@
-let manip_err = function
-  | Manipulation.RelationNotFound s      -> "RelationNotFound: " ^ s
-  | Manipulation.RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-  | Manipulation.TupleNotFound h         -> "TupleNotFound: " ^ h
-  | Manipulation.DuplicateTuple h        -> "DuplicateTuple: " ^ h
-  | Manipulation.ConstraintViolation s   -> "ConstraintViolation: " ^ s
-  | Manipulation.StorageError s          -> "StorageError: " ^ s
-
 include (struct
   type ast = Ast.statement
-  type error = Parser.error
+  type error = Executor.Memory.error
 
   let name = "ddl"
 
-  let parse = Parser.of_string
+  let parse s =
+    match Parser.of_string s with
+    | Ok ast -> Ok ast
+    | Error (Parser.ParseError s) -> Error (Executor.Memory.ParseError s)
 
-  let parse_sexp = Parser.of_sexp
+  let parse_sexp sexp =
+    match Parser.of_sexp sexp with
+    | Ok ast -> Ok ast
+    | Error (Parser.ParseError s) -> Error (Executor.Memory.ParseError s)
 
   let execute storage db ast =
     match Executor.Memory.execute storage db ast with
     | Ok (db, msg) -> Ok (Sublanguage.Transition (db, msg))
-    | Error (Executor.Memory.ManipulationError e) ->
-      Error (Parser.ParseError (manip_err e))
-    | Error (Executor.Memory.RelationNotFound s) ->
-      Error (Parser.ParseError ("RelationNotFound: " ^ s))
+    | Error e -> Error e
 
-  let string_of_error = function
-    | Parser.ParseError s -> s
+  let sexp_of_error = Executor.Memory.sexp_of_error
 end : Sublanguage.S)

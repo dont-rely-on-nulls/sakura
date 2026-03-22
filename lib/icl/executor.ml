@@ -2,8 +2,14 @@ module Make (Storage : Management.Physical.S) = struct
   module Ops = Manipulation.Make(Storage)
 
   type error =
+    | ParseError        of string
     | ManipulationError of Manipulation.error
-    | ConversionError of string
+    | ConversionError   of string
+
+  let sexp_of_error = function
+    | ParseError s        -> Sexplib.Sexp.(List [Atom "parse-error";       Atom s])
+    | ManipulationError e -> Manipulation.sexp_of_error e
+    | ConversionError s   -> Sexplib.Sexp.(List [Atom "conversion-error";  Atom s])
 
   let wrap_manip = Result.map_error (fun e -> ManipulationError e)
 

@@ -4,9 +4,14 @@ module Make (Storage : Management.Physical.S) = struct
   module DrlExec = Drl.Executor.Make(Storage)
 
   type error =
+    | ParseError        of string
     | ManipulationError of Manipulation.error
-    | RelationNotFound of string
-    | ParseError of string
+    | RelationNotFound  of string
+
+  let sexp_of_error = function
+    | ParseError s        -> Sexplib.Sexp.(List [Atom "parse-error";        Atom s])
+    | ManipulationError e -> Manipulation.sexp_of_error e
+    | RelationNotFound s  -> Sexplib.Sexp.(List [Atom "relation-not-found"; Atom s])
 
   let ( let* ) = Result.bind
 
@@ -39,9 +44,10 @@ module Make (Storage : Management.Physical.S) = struct
   let eval_query storage db query =
     match DrlExec.execute storage db query with
     | Ok rel -> Ok rel
-    | Error (DrlExec.RelationNotFound s) -> Error (RelationNotFound s)
-    | Error (DrlExec.AlgebraError (Algebra.StorageError s)) -> Error (ParseError ("StorageError: " ^ s))
-    | Error (DrlExec.AlgebraError (Algebra.GeneratorError s)) -> Error (ParseError ("GeneratorError: " ^ s))
+    | Error (DrlExec.ParseError s)                          -> Error (ParseError s)
+    | Error (DrlExec.RelationNotFound s)                    -> Error (RelationNotFound s)
+    | Error (DrlExec.AlgebraError (Algebra.StorageError s)) -> Error (ParseError s)
+    | Error (DrlExec.AlgebraError (Algebra.GeneratorError s)) -> Error (ParseError s)
 
   let materialize_tuples storage rel =
     match Alg.materialize storage rel with

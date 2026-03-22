@@ -23,6 +23,22 @@ type error =
   | ConstraintViolation of string
   | StorageError of string
 
+let string_of_error = function
+  | RelationNotFound s      -> "RelationNotFound: " ^ s
+  | RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
+  | TupleNotFound h         -> "TupleNotFound: " ^ h
+  | DuplicateTuple h        -> "DuplicateTuple: " ^ h
+  | ConstraintViolation s   -> "ConstraintViolation: " ^ s
+  | StorageError s          -> "StorageError: " ^ s
+
+let sexp_of_error = function
+  | RelationNotFound s      -> Sexplib.Sexp.(List [Atom "relation-not-found";      Atom s])
+  | RelationAlreadyExists s -> Sexplib.Sexp.(List [Atom "relation-already-exists"; Atom s])
+  | TupleNotFound h         -> Sexplib.Sexp.(List [Atom "tuple-not-found";         Atom h])
+  | DuplicateTuple h        -> Sexplib.Sexp.(List [Atom "duplicate-tuple";         Atom h])
+  | ConstraintViolation s   -> Sexplib.Sexp.(List [Atom "constraint-violation";    Atom s])
+  | StorageError s          -> Sexplib.Sexp.(List [Atom "storage-error";           Atom s])
+
 (** Result type for operations *)
 type 'a result = ('a, error) Result.t
 
