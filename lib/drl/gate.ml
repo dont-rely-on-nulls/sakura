@@ -61,15 +61,8 @@ let is_finite (c : Conventions.Cardinality.t) : bool =
 let database_snapshot (db : Management.Database.t) : Drl_verified.database =
   Management.Database.RelationMap.fold
     (fun name (rel : Relation.t) acc ->
-       let schema =
-         List.map
-           (fun (attr, dom) -> (string_to_chars attr, string_to_chars dom))
-           rel.schema
-       in
        let entry : Drl_verified.relation =
-         { rel_name = string_to_chars name;
-           rel_schema = schema;
-           rel_tuples = [];
+         { rel_name   = string_to_chars name;
            rel_finite = is_finite rel.cardinality }
        in
        (string_to_chars name, entry) :: acc)
