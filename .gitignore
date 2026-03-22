@@ -1,5 +1,5 @@
-_build/
-.direnv/
+_build
+.direnv
 
 # Nix build/link artifacts
 result
