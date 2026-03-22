@@ -1,26 +1,31 @@
-include (struct
+module Make (Storage : Management.Physical.S) = struct
+  module Exec = Executor.Make(Storage)
+
+  type storage = Storage.t
   type ast = Ast.query
-  type error = Executor.Memory.error
+  type error = Exec.error
 
   let name = "drl"
 
   let parse s =
     match Parser.of_string s with
     | Ok ast -> Ok ast
-    | Error (Parser.ParseError s) -> Error (Executor.Memory.ParseError s)
+    | Error (Parser.ParseError s) -> Error (Exec.ParseError s)
 
   let parse_sexp sexp =
     match Parser.of_sexp sexp with
     | Ok ast -> Ok ast
-    | Error (Parser.ParseError s) -> Error (Executor.Memory.ParseError s)
+    | Error (Parser.ParseError s) -> Error (Exec.ParseError s)
 
   let execute storage db ast =
     match Gate.admit db ast with
-    | Error msg -> Error (Executor.Memory.ParseError msg)
+    | Error msg -> Error (Exec.ParseError msg)
     | Ok () ->
-      match Executor.Memory.execute storage db ast with
+      match Exec.execute storage db ast with
       | Ok rel -> Ok (Sublanguage.Query rel)
       | Error e -> Error e
 
-  let sexp_of_error = Executor.Memory.sexp_of_error
-end : Sublanguage.S)
+  let sexp_of_error = Exec.sexp_of_error
+end
+
+module Memory = Make(Management.Physical.Memory)

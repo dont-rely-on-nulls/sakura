@@ -34,7 +34,8 @@ let materialize_relation storage (rel : Relation.t) limit =
 
 let short_hash (h : string) = String.sub h 0 (min 8 (String.length h))
 
-module BranchOps = Management.Branch.Make(Management.Physical.Memory)
+module BranchOps  = Management.Branch.Make(Management.Physical.Memory)
+module Dispatch   = Dbms_language.Memory
 
 let get_branch storage =
   match BranchOps.get_head storage with
@@ -92,12 +93,12 @@ let advance_head_branch storage new_hash =
     ignore (BranchOps.update_tip storage ~name:branch_name ~tip:new_hash)
   | _ -> ()
 
-let dbms_dispatch = Dbms_language.create [
-  (module Drl.Sublanguage : Sublanguage.S);
-  (module Ddl.Sublanguage : Sublanguage.S);
-  (module Dml.Sublanguage : Sublanguage.S);
-  (module Icl.Sublanguage : Sublanguage.S);
-  (module Dcl.Sublanguage : Sublanguage.S);
+let dbms_dispatch = Dispatch.create [
+  (module Drl.Sublanguage.Memory : Dispatch.SubS);
+  (module Ddl.Sublanguage.Memory : Dispatch.SubS);
+  (module Dml.Sublanguage.Memory : Dispatch.SubS);
+  (module Icl.Sublanguage.Memory : Dispatch.SubS);
+  (module Dcl.Sublanguage.Memory : Dispatch.SubS);
 ]
 
 let execute_command storage db_ref cmd =
@@ -112,7 +113,7 @@ let execute_command storage db_ref cmd =
     | "(schema)" -> {|(Base sakura:attribute)|}
     | s -> s
   in
-  match Dbms_language.execute dbms_dispatch storage db cmd with
+  match Dispatch.execute dbms_dispatch storage db cmd with
   | Ok (Sublanguage.Query rel) ->
     relation_to_sexp storage name h rel default_limit
   | Ok (Sublanguage.Transition (new_db, msg)) ->
@@ -120,7 +121,7 @@ let execute_command storage db_ref cmd =
     advance_head_branch storage new_db.Management.Database.hash;
     ok new_db.Management.Database.hash msg
   | Error e ->
-    err h (Dbms_language.sexp_of_dispatch_error e)
+    err h (Dispatch.sexp_of_dispatch_error e)
 
 (* TODO: registration failures are silently ignored; a broken prelude
    relation leaves the catalog in a partially-seeded state with no
