@@ -94,15 +94,19 @@ let manip_err = function
   | Manipulation.ConstraintViolation s   -> "ConstraintViolation: " ^ s
   | Manipulation.StorageError s          -> "StorageError: " ^ s
 
-(* TODO: language dispatch by trying parsers in sequence is a code smell —
-   a valid DRL expression that happens to also parse as DML would silently
-   be treated as DRL. The three sublanguages should share a common envelope,
-   e.g. a top-level tag distinguishing (Query ...) from (Exec ...). *)
 let advance_head_branch storage new_hash =
   match BranchOps.get_head storage with
   | Ok (Some branch_name) ->
     ignore (BranchOps.update_tip storage ~name:branch_name ~tip:new_hash)
   | _ -> ()
+
+let dbms_dispatch = Dbms_language.create [
+  (module Drl.Sublanguage : Sublanguage.S);
+  (module Ddl.Sublanguage : Sublanguage.S);
+  (module Dml.Sublanguage : Sublanguage.S);
+  (module Icl.Sublanguage : Sublanguage.S);
+  (module Dcl.Sublanguage : Sublanguage.S);
+]
 
 let execute_command storage db_ref cmd =
   let db   = !db_ref in
@@ -110,62 +114,21 @@ let execute_command storage db_ref cmd =
   let name = db.Management.Database.name in
   let ok   = ok_response    storage name in
   let err  = error_response storage name in
-  (* TODO: (schema) is a stopgap. Introspection should be expressible in
-     DRL itself via the catalog relations, not special-cased here. *)
+  (* (schema) is a stopgap — introspection should be expressible in
+     DRL via catalog relations, not special-cased here. *)
   let cmd = match String.trim cmd with
     | "(schema)" -> {|(Base sakura:attribute)|}
     | s -> s
   in
-  match Drl.Parser.of_string cmd with
-  | Ok query ->
-    (match Drl.Executor.Memory.execute storage db query with
-     | Ok rel -> relation_to_sexp storage name h rel default_limit
-     | Error (Drl.Executor.Memory.RelationNotFound s) ->
-       err h ("RelationNotFound: " ^ s)
-     | Error (Drl.Executor.Memory.AlgebraError (Algebra.StorageError s)) ->
-       err h ("StorageError: " ^ s)
-     | Error (Drl.Executor.Memory.AlgebraError (Algebra.GeneratorError s)) ->
-       err h ("GeneratorError: " ^ s))
-  | Error _ ->
-    match Dml.Parser.of_string cmd with
-    | Ok stmt ->
-      (match Dml.Executor.Memory.execute storage db stmt with
-       | Ok new_db ->
-         db_ref := new_db;
-         advance_head_branch storage new_db.Management.Database.hash;
-         ok new_db.Management.Database.hash "updated"
-       | Error (Dml.Executor.Memory.ManipulationError me) ->
-         err h (manip_err me)
-       | Error (Dml.Executor.Memory.RelationNotFound s) ->
-         err h ("RelationNotFound: " ^ s)
-       | Error (Dml.Executor.Memory.ParseError s) ->
-         err h ("ParseError: " ^ s))
-    | Error _ ->
-      match Icl.Parser.of_string cmd with
-      | Ok stmt ->
-        (match Icl.Executor.Memory.execute storage db stmt with
-         | Ok (new_db, msg) ->
-           db_ref := new_db;
-           advance_head_branch storage new_db.Management.Database.hash;
-           ok new_db.Management.Database.hash msg
-         | Error (Icl.Executor.Memory.ManipulationError me) ->
-           err h (manip_err me)
-         | Error (Icl.Executor.Memory.ConversionError s) ->
-           err h ("ConversionError: " ^ s))
-      | Error _ ->
-        match Dcl.Parser.of_string cmd with
-        | Ok stmt ->
-          (match Dcl.Executor.Memory.execute storage db stmt with
-           | Ok (new_db, msg) ->
-             db_ref := new_db;
-             advance_head_branch storage new_db.Management.Database.hash;
-             ok new_db.Management.Database.hash msg
-           | Error (Dcl.Executor.Memory.BranchError s) ->
-             err h ("BranchError: " ^ s)
-           | Error (Dcl.Executor.Memory.MergeError s) ->
-             err h ("MergeError: " ^ s))
-        | Error _ ->
-          err h "ParseError: not valid DRL, DML, ICL, or DCL"
+  match Dbms_language.execute dbms_dispatch storage db cmd with
+  | Ok (Sublanguage.Query rel) ->
+    relation_to_sexp storage name h rel default_limit
+  | Ok (Sublanguage.Transition (new_db, msg)) ->
+    db_ref := new_db;
+    advance_head_branch storage new_db.Management.Database.hash;
+    ok new_db.Management.Database.hash msg
+  | Error e ->
+    err h (Dbms_language.string_of_dispatch_error e)
 
 (* TODO: registration failures are silently ignored; a broken prelude
    relation leaves the catalog in a partially-seeded state with no
@@ -199,6 +162,18 @@ let register_prelude_relations storage db =
     ; divide_natural
     ]
 
+let print_with_time str =
+  let now = Unix.gettimeofday () in
+  let tm = Unix.localtime now in
+  let orange = "\027[38;5;208m" in
+  let reset = "\027[0m" in
+  let formatted_time = 
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d"
+      (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+  in 
+  print_endline @@ Printf.sprintf "%s[%s]%s %s" orange formatted_time reset str
+
 (* TODO: single-threaded accept loop — one slow or hung client blocks all
    others. Should use threads or non-blocking I/O. *)
 let handle_client storage db_ref fd =
@@ -217,130 +192,12 @@ let handle_client storage db_ref fd =
                db.Management.Database.hash
                ("Uncaught error: " ^ Printexc.to_string e)
          in
+         print_with_time response;
          output_string oc (response ^ "\n");
          flush oc
        end
      done
    with End_of_file | Unix.Unix_error _ -> ())
-
-let depart_emp = [
-    "(CreateRelation (name \"Department\") (schema ((dept_id \"integer\") (dept_name \"string\") (location \"string\"))))";
-    "(CreateRelation (name \"Employee\") (schema ((emp_id \"integer\") (emp_name \"string\") (salary \"float\") (dept_id \"integer\") (hire_date \"string\"))))";
-    "(RegisterConstraint(constraint_name \"salary_positive\")(relation_name \"Employee\")(body (MemberOf(target \"positive_reals\")(binding ((salary (Var \"salary\")))))))";
-    "(RegisterConstraint
-   (constraint_name \"fk_employee_dept\")
-   (relation_name \"Employee\")
-   (body (MemberOf
-     (target \"Department\")
-     (binding ((dept_id (Var \"dept_id\")))))))";
-    "(InsertTuple (relation \"Department\") (attributes ((dept_id (Int 1)) (location (Str \"Gifu\")) (dept_name (Str \"Nippon Ichi\")))))";
-    "(InsertTuples (relation \"Employee\") (tuples (((emp_id (Int 101)) (emp_name (Str \"Alice Johnson\")) (salary (Float 95000.0)) (dept_id (Int 1)) (hire_date (Str \"2020-01-15\"))))))"
-  ]
-
-let _depart_emp () =
-  match Management.Physical.Memory.create () with
-  | Error _ -> failwith "Failed to create storage"
-  | Ok storage ->
-    match Manipulation.Memory.create_database storage ~name:"sakura" with
-    | Error _ -> failwith "Failed to create initial database"
-    | Ok db ->
-      let db = register_prelude_relations storage db in
-      let db_ref = ref db in
-      Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
-      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd)
-        depart_emp;
-      ()
-
-let n_way = [
-    "(CreateRelation
-  (name \"Building\")
-  (schema
-    ((building_id \"integer\")
-     (building_name \"string\")
-     (floors \"integer\"))))";
-    "(CreateRelation
-     (name \"Room\")
-  (schema
-    ((room_id \"integer\")
-     (building_id \"integer\")
-     (floor \"integer\")
-     (room_number \"string\"))))";
-"(CreateRelation
-  (name \"Suite\")
-  (schema
-    ((suite_id \"integer\")
-     (room_id \"integer\")
-     (suite_name \"string\")
- (capacity \"integer\"))))";
-(* FK: every Room must belong to an existing Building *)
-"(RegisterConstraint
-  (constraint_name \"fk_room_building\")
-  (relation_name \"Room\")
-  (body (MemberOf
-    (target \"Building\")
-    (binding ((building_id (Var \"building_id\")))))))";
-(* FK: every Suite must belong to an existing Room *)
-"(RegisterConstraint
-  (constraint_name \"fk_suite_room\")
-  (relation_name \"Suite\")
-  (body (MemberOf
-    (target \"Room\")
- (binding ((room_id (Var \"room_id\")))))))";
-(* A suite is only valid if its room belongs to a building with more than 3 floors *)
-"(RegisterConstraint
-  (constraint_name \"suite_in_tall_building\")
-  (relation_name \"Suite\")
-  (body
-    (Exists (variable \"r\") (quantifier \"Room\")
-      (body
-        (Exists (variable \"b\") (quantifier \"Building\")
-          (body
-            (And
-              ((MemberOf (target \"Room\")
-                 (binding ((room_id (Var \"room_id\")))))
-               (MemberOf (target \"Building\")
-                 (binding ((building_id (Var \"r.building_id\")))))
-               (MemberOf (target \"greater_than_natural\")
-                 (binding ((left (Var \"b.floors\")) (right (Const (Int 3))))))))))))))";
-"(InsertTuple
-  (relation \"Building\")
-  (attributes
-    ((building_id (Int 2))
-     (building_name (Str \"Tower B\"))
- (floors (Int 2)))))";
-    "(InsertTuple
-  (relation \"Building\")
-  (attributes
-    ((building_id (Int 1))
-     (building_name (Str \"Tower A\"))
-     (floors (Int 10)))))";
-"(InsertTuples
-  (relation \"Room\")
-  (tuples
-    (((room_id (Int 101)) (building_id (Int 1)) (floor (Int 1)) (room_number (Str \"1A\")))
-     ((room_id (Int 102)) (building_id (Int 1)) (floor (Int 2)) (room_number (Str \"2A\")))
- ((room_id (Int 201)) (building_id (Int 2)) (floor (Int 1)) (room_number (Str \"1B\"))))))";
-"(InsertTuples
-  (relation \"Suite\")
-  (tuples
-    (((suite_id (Int 1001)) (room_id (Int 101)) (suite_name (Str \"Presidential\")) (capacity (Int 4)))
-     ((suite_id (Int 1002)) (room_id (Int 101)) (suite_name (Str \"Standard\"))     (capacity (Int 2)))
-     ((suite_id (Int 1003)) (room_id (Int 102)) (suite_name (Str \"Deluxe\"))       (capacity (Int 3))))))";
-  ]
-
-let _n_way () =
-  match Management.Physical.Memory.create () with
-  | Error _ -> failwith "Failed to create storage"
-  | Ok storage ->
-    match Manipulation.Memory.create_database storage ~name:"sakura" with
-    | Error _ -> failwith "Failed to create initial database"
-    | Ok db ->
-      let db = register_prelude_relations storage db in
-      let db_ref = ref db in
-      Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
-      List.iter (fun cmd -> print_endline @@ execute_command storage db_ref cmd)
-        n_way;
-      ()
 
 let () =
   let port = default_port in

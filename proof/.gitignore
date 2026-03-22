@@ -1,0 +1,11 @@
+# Coq build artifacts
+*.vo
+*.vos
+*.vok
+*.glob
+*.aux
+.*.aux
+Makefile.coq
+Makefile.coq.conf
+.Makefile.coq.d
+.coqdeps.d
