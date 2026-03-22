@@ -7,21 +7,22 @@ module Make (Storage : Management.Physical.S) = struct
     | ParseError        of string
     | ManipulationError of Manipulation.error
     | RelationNotFound  of string
+    | AlgebraError      of Algebra.error
 
   let sexp_of_error e =
     let open Sexplib.Sexp in
     match e with
-    | ParseError s        -> List [Atom "parse-error";        Atom s]
-    | ManipulationError e -> Manipulation.sexp_of_error e
-    | RelationNotFound s  -> List [Atom "relation-not-found"; Atom s]
+    | ParseError s                            -> List [Atom "parse-error";        Atom s]
+    | ManipulationError e                     -> Manipulation.sexp_of_error e
+    | RelationNotFound s                      -> List [Atom "relation-not-found"; Atom s]
+    | AlgebraError (Algebra.StorageError s)   -> List [Atom "storage-error";      Atom s]
+    | AlgebraError (Algebra.GeneratorError s) -> List [Atom "generator-error";    Atom s]
 
   let ( let* ) = Result.bind
 
   let wrap_manip r = Result.map_error (fun e -> ManipulationError e) r
 
-  let wrap_alg = function
-    | Algebra.StorageError s   -> ParseError ("StorageError: " ^ s)
-    | Algebra.GeneratorError s -> ParseError ("GeneratorError: " ^ s)
+  let wrap_alg e = AlgebraError e
 
   let get_rel db name =
     match Ops.get_relation db ~name with
@@ -46,10 +47,9 @@ module Make (Storage : Management.Physical.S) = struct
   let eval_query storage db query =
     match DrlExec.execute storage db query with
     | Ok rel -> Ok rel
-    | Error (DrlExec.ParseError s)                          -> Error (ParseError s)
-    | Error (DrlExec.RelationNotFound s)                    -> Error (RelationNotFound s)
-    | Error (DrlExec.AlgebraError (Algebra.StorageError s)) -> Error (ParseError s)
-    | Error (DrlExec.AlgebraError (Algebra.GeneratorError s)) -> Error (ParseError s)
+    | Error (DrlExec.ParseError s)       -> Error (ParseError s)
+    | Error (DrlExec.RelationNotFound s) -> Error (RelationNotFound s)
+    | Error (DrlExec.AlgebraError e)     -> Error (AlgebraError e)
 
   let materialize_tuples storage rel =
     Result.map_error wrap_alg (Alg.materialize storage rel)

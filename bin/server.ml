@@ -192,54 +192,66 @@ let handle_client storage db_ref fd =
      done
    with End_of_file | Unix.Unix_error _ -> ())
 
+let setup () =
+  let ( let* ) = Result.bind in
+  let* storage =
+    Management.Physical.Memory.create ()
+    |> Result.map_error (Fun.const "Failed to create storage")
+  in
+  let* db =
+    Manipulation.Memory.create_database storage ~name:"sakura"
+    |> Result.map_error (Fun.const "Failed to create initial database")
+  in
+  Ok (storage, db)
+
+let register_branch_relations storage db =
+  (* Register ephemeral sakura:branch and sakura:head relations backed by
+     the raw branch registry — no stored tuples, no circularity. *)
+  let register db rel =
+    match Manipulation.Memory.create_immutable_relation storage db
+            ~name:rel.Relation.name
+            ~schema:rel.Relation.schema
+            ~generator:(Option.get rel.Relation.generator)
+            ~membership_criteria:rel.Relation.membership_criteria
+            ~cardinality:rel.Relation.cardinality
+    with
+    | Ok (db, _) -> db
+    | Error e ->
+      Printf.eprintf "Warning: failed to register %s: %s\n%!"
+        rel.Relation.name (Manipulation.string_of_error e);
+      db
+  in
+  db
+  |> Fun.flip register (BranchOps.branch_relation storage)
+  |> Fun.flip register (BranchOps.head_relation storage)
+
+let warn_on_error fmt = function
+  | Ok ()   -> ()
+  | Error e -> Printf.eprintf fmt e
+
 let () =
-  let port = default_port in
-  match Management.Physical.Memory.create () with
-  | Error _ -> failwith "Failed to create storage"
-  | Ok storage ->
-    match Manipulation.Memory.create_database storage ~name:"sakura" with
-    | Error _ -> failwith "Failed to create initial database"
-    | Ok db ->
-      let db = register_prelude_relations storage db in
-      (* Register ephemeral sakura:branch and sakura:head relations backed by
-         the raw branch registry — no stored tuples, no circularity. *)
-      let db =
-        let register db rel =
-          match Manipulation.Memory.create_immutable_relation storage db
-                  ~name:rel.Relation.name
-                  ~schema:rel.Relation.schema
-                  ~generator:(Option.get rel.Relation.generator)
-                  ~membership_criteria:rel.Relation.membership_criteria
-                  ~cardinality:rel.Relation.cardinality
-          with
-          | Ok (db, _) -> db
-          | Error e ->
-            Printf.eprintf "Warning: failed to register %s: %s\n%!"
-              rel.Relation.name (Manipulation.string_of_error e);
-            db
-        in
-        let db = register db (BranchOps.branch_relation storage) in
-        let db = register db (BranchOps.head_relation storage) in
-        db
-      in
-      (* Create default master branch in raw registry and set HEAD *)
-      (match BranchOps.create storage ~name:"master"
-               ~tip:db.Management.Database.hash with
-       | Error e -> Printf.eprintf "Warning: failed to create master branch: %s\n%!" e
-       | Ok () -> ());
-      (match BranchOps.checkout storage "master" with
-       | Error e -> Printf.eprintf "Warning: failed to checkout master: %s\n%!" e
-       | Ok () -> ());
-      let db_ref = ref db in
-      let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-      Unix.setsockopt sock Unix.SO_REUSEADDR true;
-      Unix.setsockopt sock Unix.SO_REUSEPORT true;
-      Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
-      Unix.listen sock 5;
-      Printf.printf "Sakura server listening on 127.0.0.1:%d\n" port;
-      Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
-      while true do
-        let (client_fd, _addr) = Unix.accept sock in
-        handle_client storage db_ref client_fd;
-        (try Unix.close client_fd with _ -> ())
-      done
+  match setup () with
+  | Error msg -> failwith msg
+  | Ok (storage, db) ->
+    let db = db
+      |> register_prelude_relations storage
+      |> register_branch_relations storage
+    in
+    (* Create default master branch in raw registry and set HEAD *)
+    BranchOps.create storage ~name:"master" ~tip:db.Management.Database.hash
+    |> warn_on_error "Warning: failed to create master branch: %s\n%!";
+    BranchOps.checkout storage "master"
+    |> warn_on_error "Warning: failed to checkout master: %s\n%!";
+    let db_ref = ref db in
+    let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.setsockopt sock Unix.SO_REUSEADDR true;
+    Unix.setsockopt sock Unix.SO_REUSEPORT true;
+    Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, default_port));
+    Unix.listen sock 5;
+    Printf.printf "Sakura server listening on 127.0.0.1:%d\n" default_port;
+    Printf.printf "Database hash: %s\n%!" (short_hash db.Management.Database.hash);
+    while true do
+      let (client_fd, _addr) = Unix.accept sock in
+      handle_client storage db_ref client_fd;
+      (try Unix.close client_fd with _ -> ())
+    done
