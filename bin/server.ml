@@ -107,12 +107,6 @@ let execute_command storage db_ref cmd =
   let name = db.Management.Database.name in
   let ok   = ok_response    storage name in
   let err  = error_response storage name in
-  (* (schema) is a stopgap — introspection should be expressible in
-     DRL via catalog relations, not special-cased here. *)
-  let cmd = match String.trim cmd with
-    | "(schema)" -> {|(Base sakura:attribute)|}
-    | s -> s
-  in
   match Dispatch.execute dbms_dispatch storage db cmd with
   | Ok (Sublanguage.Query rel) ->
     relation_to_sexp storage name h rel default_limit
