@@ -6,17 +6,25 @@ module Make (Storage : Management.Physical.S) = struct
     | ManipulationError of Manipulation.error
     | RelationNotFound  of string
 
-  let sexp_of_error = function
-    | ParseError s        -> Sexplib.Sexp.(List [Atom "parse-error";        Atom s])
+  let sexp_of_error e =
+    let open Sexplib.Sexp in
+    match e with
+    | ParseError s        -> List [Atom "parse-error";        Atom s]
     | ManipulationError e -> Manipulation.sexp_of_error e
-    | RelationNotFound s  -> Sexplib.Sexp.(List [Atom "relation-not-found"; Atom s])
+    | RelationNotFound s  -> List [Atom "relation-not-found"; Atom s]
+
+  let ( let* ) = Result.bind
 
   let wrap_manip r = Result.map_error (fun e -> ManipulationError e) r
 
+  let get_rel db name =
+    Ops.get_relation db ~name
+    |> Option.to_result ~none:(RelationNotFound name)
+
   let convert_cardinality : Ast.cardinality_spec -> Conventions.Cardinality.t = function
-    | Ast.Finite n -> Conventions.Cardinality.Finite n
-    | Ast.AlephZero -> Conventions.Cardinality.AlephZero
-    | Ast.Continuum -> Conventions.Cardinality.Continuum
+    | Ast.Finite n          -> Conventions.Cardinality.Finite n
+    | Ast.AlephZero         -> Conventions.Cardinality.AlephZero
+    | Ast.Continuum         -> Conventions.Cardinality.Continuum
     | Ast.ConstrainedFinite -> Conventions.Cardinality.ConstrainedFinite
 
   let execute
@@ -26,33 +34,24 @@ module Make (Storage : Management.Physical.S) = struct
     : (Management.Database.t * string, error) result =
     match stmt with
     | Ast.CreateDatabase name ->
-      (match Ops.create_database storage ~name |> wrap_manip with
-       | Ok new_db -> Ok (new_db, "Database created: " ^ name)
-       | Error e -> Error e)
+      let* db = Ops.create_database storage ~name |> wrap_manip in
+      Ok (db, "Database created: " ^ name)
 
     | Ast.CreateRelation { name; schema = schema_pairs } ->
       let schema =
-        List.fold_left
-          (fun s (attr, dom) -> Schema.add attr dom s)
-          Schema.empty
-          schema_pairs
+        List.fold_left (fun s (attr, dom) -> Schema.add attr dom s) Schema.empty schema_pairs
       in
-      (match Ops.create_relation storage db ~name ~schema |> wrap_manip with
-       | Ok (db, _rel) -> Ok (db, "Relation created: " ^ name)
-       | Error e -> Error e)
+      let* (db, _) = Ops.create_relation storage db ~name ~schema |> wrap_manip in
+      Ok (db, "Relation created: " ^ name)
 
     | Ast.RetractRelation name ->
-      (match Ops.retract_relation storage db ~name |> wrap_manip with
-       | Ok new_db -> Ok (new_db, "Relation retracted: " ^ name)
-       | Error e -> Error e)
+      let* db = Ops.retract_relation storage db ~name |> wrap_manip in
+      Ok (db, "Relation retracted: " ^ name)
 
     | Ast.ClearRelation name ->
-      (match Ops.get_relation db ~name with
-       | None -> Error (RelationNotFound name)
-       | Some rel ->
-         match Ops.clear_relation storage db rel |> wrap_manip with
-         | Ok (db, _rel) -> Ok (db, "Relation cleared: " ^ name)
-         | Error e -> Error e)
+      let* rel    = get_rel db name in
+      let* (db, _) = Ops.clear_relation storage db rel |> wrap_manip in
+      Ok (db, "Relation cleared: " ^ name)
 
     | Ast.RegisterDomain { name; cardinality } ->
       let domain = Domain.make
@@ -62,9 +61,8 @@ module Make (Storage : Management.Physical.S) = struct
         ~cardinality:(convert_cardinality cardinality)
         ~compare:Stdlib.compare
       in
-      (match Ops.register_domain storage db domain |> wrap_manip with
-       | Ok new_db -> Ok (new_db, "Domain registered: " ^ name)
-       | Error e -> Error e)
+      let* db = Ops.register_domain storage db domain |> wrap_manip in
+      Ok (db, "Domain registered: " ^ name)
 end
 
 module Memory = Make(Management.Physical.Memory)

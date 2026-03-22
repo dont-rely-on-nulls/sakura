@@ -23,7 +23,6 @@ module type S = sig
   type ast
   type error
   val name : string
-  val parse : string -> (ast, error) Result.t
   val parse_sexp : Sexplib.Sexp.t -> (ast, error) Result.t
   val execute : storage -> Management.Database.t -> ast -> (result, error) Result.t
   val sexp_of_error : error -> Sexplib.Sexp.t

@@ -19,23 +19,21 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
       (db : Management.Database.t)
       (input : string)
     : (Sublanguage.result, dispatch_error) Result.t =
+    let no_match s = Error (NoMatch Sexplib.Sexp.(List [Atom "parse-error"; Atom s])) in
     match Envelope.parse input with
-    | Error msg ->
-      Error (NoMatch Sexplib.Sexp.(List [Atom "parse-error"; Atom msg]))
+    | Error msg -> no_match msg
     | Ok { tag; payload } ->
       match List.find_opt (fun (module L : SubS) -> L.name = tag) langs with
-      | None ->
-        Error (NoMatch Sexplib.Sexp.(List [Atom "parse-error"; Atom ("unknown sublanguage: " ^ tag)]))
+      | None -> no_match ("unknown sublanguage: " ^ tag)
       | Some (module L) ->
         match L.parse_sexp payload with
         | Error e -> Error (NoMatch (L.sexp_of_error e))
         | Ok ast ->
           match L.execute storage db ast with
           | Ok result -> Ok result
-          | Error e -> Error (NoMatch (L.sexp_of_error e))
+          | Error e   -> Error (NoMatch (L.sexp_of_error e))
 
-  let sexp_of_dispatch_error = function
-    | NoMatch sexp -> sexp
+  let sexp_of_dispatch_error (NoMatch sexp) = sexp
 end
 
 module Memory = Make(Management.Physical.Memory)

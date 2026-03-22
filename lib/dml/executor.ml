@@ -8,10 +8,12 @@ module Make (Storage : Management.Physical.S) = struct
     | ManipulationError of Manipulation.error
     | RelationNotFound  of string
 
-  let sexp_of_error = function
-    | ParseError s        -> Sexplib.Sexp.(List [Atom "parse-error";        Atom s])
+  let sexp_of_error e =
+    let open Sexplib.Sexp in
+    match e with
+    | ParseError s        -> List [Atom "parse-error";        Atom s]
     | ManipulationError e -> Manipulation.sexp_of_error e
-    | RelationNotFound s  -> Sexplib.Sexp.(List [Atom "relation-not-found"; Atom s])
+    | RelationNotFound s  -> List [Atom "relation-not-found"; Atom s]
 
   let ( let* ) = Result.bind
 
@@ -50,10 +52,7 @@ module Make (Storage : Management.Physical.S) = struct
     | Error (DrlExec.AlgebraError (Algebra.GeneratorError s)) -> Error (ParseError s)
 
   let materialize_tuples storage rel =
-    match Alg.materialize storage rel with
-    | Ok tuples -> Ok tuples
-    | Error (Algebra.StorageError s) -> Error (ParseError ("StorageError: " ^ s))
-    | Error (Algebra.GeneratorError s) -> Error (ParseError ("GeneratorError: " ^ s))
+    Result.map_error wrap_alg (Alg.materialize storage rel)
 
   let execute
       (storage : Storage.t)

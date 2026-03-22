@@ -34,8 +34,8 @@ let materialize_relation storage (rel : Relation.t) limit =
 
 let short_hash (h : string) = String.sub h 0 (min 8 (String.length h))
 
-module BranchOps  = Management.Branch.Make(Management.Physical.Memory)
-module Dispatch   = Dbms_language.Memory
+module BranchOps = Management.Branch.Make(Management.Physical.Memory)
+module Dispatch  = Dbms_language.Memory
 
 let get_branch storage =
   match BranchOps.get_head storage with

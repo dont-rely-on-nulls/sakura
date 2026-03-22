@@ -8,10 +8,12 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
     | BranchError of string
     | MergeError  of string
 
-  let sexp_of_error = function
-    | ParseError  s -> Sexplib.Sexp.(List [Atom "parse-error";  Atom s])
-    | BranchError s -> Sexplib.Sexp.(List [Atom "branch-error"; Atom s])
-    | MergeError  s -> Sexplib.Sexp.(List [Atom "merge-error";  Atom s])
+  let sexp_of_error e =
+    let open Sexplib.Sexp in
+    match e with
+    | ParseError  s -> List [Atom "parse-error";  Atom s]
+    | BranchError s -> List [Atom "branch-error"; Atom s]
+    | MergeError  s -> List [Atom "merge-error";  Atom s]
 
   let convert_strategy : Ast.merge_strategy -> Management.Merge.strategy = function
     | Ast.PreferLeft       -> Management.Merge.PreferLeft

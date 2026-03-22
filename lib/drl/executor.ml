@@ -7,11 +7,13 @@ module Make(Storage : Management.Physical.S) = struct
     | RelationNotFound of string
     | AlgebraError     of Algebra.error
 
-  let sexp_of_error = function
-    | ParseError s                          -> Sexplib.Sexp.(List [Atom "parse-error";       Atom s])
-    | RelationNotFound s                    -> Sexplib.Sexp.(List [Atom "relation-not-found"; Atom s])
-    | AlgebraError (Algebra.StorageError s)   -> Sexplib.Sexp.(List [Atom "storage-error";   Atom s])
-    | AlgebraError (Algebra.GeneratorError s) -> Sexplib.Sexp.(List [Atom "generator-error"; Atom s])
+  let sexp_of_error e =
+    let open Sexplib.Sexp in
+    match e with
+    | ParseError s                            -> List [Atom "parse-error";       Atom s]
+    | RelationNotFound s                      -> List [Atom "relation-not-found"; Atom s]
+    | AlgebraError (Algebra.StorageError s)   -> List [Atom "storage-error";     Atom s]
+    | AlgebraError (Algebra.GeneratorError s) -> List [Atom "generator-error";   Atom s]
 
   let wrap = Result.map_error (fun e -> AlgebraError e)
 
