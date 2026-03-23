@@ -563,7 +563,7 @@ module Make (Storage : Management.Physical.S) = struct
                                | Error _ | Ok None -> check_tuples rest
                                | Ok (Some tup) ->
                                  (* If we have a filter, skip tuples that don't match *)
-                                 let dominated =
+                                 let needs_recheck =
                                    filter = [] ||
                                    List.for_all (fun (attr, fval) ->
                                      match Tuple.AttributeMap.find_opt attr
@@ -571,7 +571,7 @@ module Make (Storage : Management.Physical.S) = struct
                                      | Some a -> Stdlib.(=) a.Attribute.value fval
                                      | None -> false) filter
                                  in
-                                 if not dominated then check_tuples rest
+                                 if not needs_recheck then check_tuples rest
                                  else
                                    (* Re-evaluate constraint against post-delete DB *)
                                    match Constraint.evaluate_named ctx tup

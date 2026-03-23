@@ -363,13 +363,7 @@ let rec focused_filter (c : t) (dep_rel : relation_name)
   | Not { body; _ } -> focused_filter body dep_rel deleted
   | And cs | Or cs ->
     List.concat_map (fun c -> focused_filter c dep_rel deleted) cs
-  | Exists { quantifier; body; _ } when quantifier = dep_rel ->
-    focused_filter body dep_rel deleted
-  | Exists { body; _ } ->
-    focused_filter body dep_rel deleted
-  | Forall { quantifier; body; _ } when quantifier = dep_rel ->
-    focused_filter body dep_rel deleted
-  | Forall { body; _ } ->
+  | Exists { body; _ } | Forall { body; _ } ->
     focused_filter body dep_rel deleted
 
 (** Extract Const binding values from a constraint for a given [dep_rel].
