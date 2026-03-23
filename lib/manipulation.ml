@@ -573,9 +573,17 @@ module Make (Storage : Management.Physical.S) = struct
                                  in
                                  if not needs_recheck then check_tuples rest
                                  else
-                                   (* Re-evaluate constraint against post-delete DB *)
+                                   (* Re-evaluate the substituted constraint against tge post delete DB.
+                                    Universally-quantified Var "variable.attr" references that
+                                    join on the deleted tuple's attributes are replaced by
+                                    Const values, narrowing the expression to only the rows
+                                    affected by this specific deletion. *)
+                                   let cbody' =
+                                     Constraint.substitute_transition
+                                       cbody name deleted_attrs
+                                   in
                                    match Constraint.evaluate_named ctx tup
-                                           [(cname, cbody)] with
+                                           [(cname, cbody')] with
                                    | Ok true -> check_tuples rest
                                    | Ok false | Error _ ->
                                      Error (ConstraintViolation

@@ -249,13 +249,13 @@ by this technique:
 
 * Implementation Roadmap
 
-| Step | Work item                                                       | Depends on |
-|------+-----------------------------------------------------------------+------------|
-|    1 | Implement =polarity= walker on =Constraint.t=                   | —          |
-|    2 | Fix =extend_tuple= namespacing                                  | —          |
-|    3 | Store polarity metadata in catalog (=sakura:constraint=)        | 1          |
-|    4 | =retract_tuple= triggers polarity-driven re-checks              | 1, 2       |
-|    5 | Universal variable substitution for focused re-checks           | 2          |
-|    6 | Constant discovery for trigger filtering                        | 1          |
-|    7 | Deferred constraint scheduling via =sakura:timing=              | 4          |
-|    8 | Coq proofs for polarity soundness and substitution completeness | 1–5        |
+| Step | Work item                                                       | Depends on | Status   |
+|------+-----------------------------------------------------------------+------------+----------|
+|    1 | Implement =polarity= walker on =Constraint.t=                   | —          | Done     |
+|    2 | =extend_tuple= namespacing (=variable.attr= convention)         | —          | Done     |
+|    3 | Store polarity metadata in catalog (=sakura:constraint=)        | 1          | —        |
+|    4 | =retract_tuple= triggers polarity-driven re-checks              | 1, 2       | Done     |
+|    5 | Universal variable substitution for focused re-checks           | 2          | —        |
+|    6 | Constant discovery for trigger filtering                        | 1          | Done     |
+|    7 | Deferred constraint scheduling via =sakura:timing=              | 4          | —        |
+|    8 | Coq proofs for polarity soundness and substitution completeness | 1–5        | —        |

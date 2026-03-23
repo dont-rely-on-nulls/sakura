@@ -380,6 +380,66 @@ let rec trigger_constants (c : t) (dep_rel : relation_name)
   | Exists { body; _ } | Forall { body; _ } ->
     trigger_constants body dep_rel
 
+(** Substitute transition tuple values into a constraint for universal variable
+    substitution. When [dep_rel] is being mutated (deleted from or inserted
+    into), any [Exists] or [Forall] that quantifies over [dep_rel] has its body
+    rewritten: occurrences of [Var "variable.attr"] are replaced by
+    [Const value] using the transition tuple's attribute values.
+
+    The convention that quantifier attributes are namespaced as [variable.attr]
+    (established by [extend_tuple]) means base tuple [Var] references like
+    [Var "dept_id"] are never substituted, only [Var "d.dept_id"] would match
+    a quantifier variable [d] over a deleted [Department] row.
+
+    This transforms the recheck from a full relation evaluation into a targeted
+    expression that tests only the rows affected by the transition tuple.
+    See Technique 2 in docs/incremental_constraint_checking.org. *)
+let substitute_transition
+    (c : t)
+    (dep_rel : relation_name)
+    (transition : (attr_name * Conventions.AbstractValue.t) list)
+  : t =
+  let apply_subs subs binding =
+    BindingMap.map (function
+      | Var v -> (match List.assoc_opt v subs with
+                  | Some value -> Const value
+                  | None -> Var v)
+      | Const _ as expr -> expr)
+      binding
+  in
+  let rec sub_body subs = function
+    | MemberOf { target; binding } ->
+      MemberOf { target; binding = apply_subs subs binding }
+    | Not { body; universe } -> Not { body = sub_body subs body; universe }
+    | And cs -> And (List.map (sub_body subs) cs)
+    | Or cs  -> Or  (List.map (sub_body subs) cs)
+    | Exists { variable; quantifier; body } ->
+      Exists { variable; quantifier; body = sub_body subs body }
+    | Forall { variable; quantifier; body } ->
+      Forall { variable; quantifier; body = sub_body subs body }
+  in
+  let rec go = function
+    | MemberOf _ as leaf -> leaf
+    | Not { body; universe } -> Not { body = go body; universe }
+    | And cs -> And (List.map go cs)
+    | Or cs  -> Or  (List.map go cs)
+    | Exists { variable; quantifier; body } ->
+      let body' =
+        if quantifier = dep_rel then
+          sub_body (List.map (fun (a, v) -> (variable ^ "." ^ a, v)) transition) body
+        else go body
+      in
+      Exists { variable; quantifier; body = body' }
+    | Forall { variable; quantifier; body } ->
+      let body' =
+        if quantifier = dep_rel then
+          sub_body (List.map (fun (a, v) -> (variable ^ "." ^ a, v)) transition) body
+        else go body
+      in
+      Forall { variable; quantifier; body = body' }
+  in
+  go c
+
 let make_comparison_binding ~left ~right =
   BindingMap.empty
   |> BindingMap.add "left" left

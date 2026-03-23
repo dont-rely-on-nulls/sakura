@@ -3074,6 +3074,114 @@ let%test_unit "trigger_constants: unrelated dep_rel yields empty" =
   let consts = Constraint.trigger_constants c "S" in
   assert (consts = [])
 
+let%test_unit "substitute_transition: Var \"variable.attr\" is replaced by Const from transition tuple" =
+  (* Constraint: Exists d in Department, MemberOf Target (key = Var "d.dept_id")
+     Transition: Department row { dept_id = 99 }
+     After substitution: Exists d in Department, MemberOf Target (key = Const 99)
+     The namespaced Var "d.dept_id" (quantifier-scoped) is replaced;
+     a base-tuple Var "dept_id" would not be. *)
+  let c =
+    Constraint.Exists {
+      variable = "d"; quantifier = "Department";
+      body = Constraint.MemberOf {
+        target = "Target";
+        binding = Constraint.BindingMap.singleton "key" (Constraint.Var "d.dept_id");
+      };
+    }
+  in
+  let result = Constraint.substitute_transition c "Department" [("dept_id", abs 99)] in
+  (match result with
+   | Constraint.Exists { body = Constraint.MemberOf { binding; _ }; _ } ->
+     (match Constraint.BindingMap.find_opt "key" binding with
+      | Some (Constraint.Const v) -> assert (Stdlib.(=) v (abs 99))
+      | _ -> assert false)
+   | _ -> assert false)
+
+let%test_unit "substitute_transition: base-tuple Var is not substituted" =
+  (* Constraint: Exists d in Department, MemberOf Target (key = Var "dept_id")
+     Var "dept_id" is a base-tuple reference (no "d." prefix), so it must
+     survive substitution unchanged — only "d.dept_id" would be replaced. *)
+  let c =
+    Constraint.Exists {
+      variable = "d"; quantifier = "Department";
+      body = Constraint.MemberOf {
+        target = "Target";
+        binding = Constraint.BindingMap.singleton "key" (Constraint.Var "dept_id");
+      };
+    }
+  in
+  let result = Constraint.substitute_transition c "Department" [("dept_id", abs 99)] in
+  (match result with
+   | Constraint.Exists { body = Constraint.MemberOf { binding; _ }; _ } ->
+     (match Constraint.BindingMap.find_opt "key" binding with
+      | Some (Constraint.Var "dept_id") -> ()
+      | _ -> assert false)
+   | _ -> assert false)
+
+let%test_unit "substitute_transition: non-matching quantifier relation is unchanged" =
+  (* Constraint: Exists d in Department, MemberOf Target (key = Var "d.dept_id")
+     Transition is for relation "Other", not "Department".
+     The body must survive unmodified. *)
+  let c =
+    Constraint.Exists {
+      variable = "d"; quantifier = "Department";
+      body = Constraint.MemberOf {
+        target = "Target";
+        binding = Constraint.BindingMap.singleton "key" (Constraint.Var "d.dept_id");
+      };
+    }
+  in
+  let result = Constraint.substitute_transition c "Other" [("dept_id", abs 99)] in
+  (match result with
+   | Constraint.Exists { body = Constraint.MemberOf { binding; _ }; _ } ->
+     (match Constraint.BindingMap.find_opt "key" binding with
+      | Some (Constraint.Var "d.dept_id") -> ()
+      | _ -> assert false)
+   | _ -> assert false)
+
+let%test_unit "substitute_transition: substitution applies through And and Not" =
+  (* Constraint:
+       Exists d in Department,
+         And [
+           MemberOf A (x = Var "d.x");
+           Not { MemberOf B (y = Var "d.y"); universe = "B" }
+         ]
+     Transition: { x = 1, y = 2 }
+     After substitution: Var "d.x" -> Const 1, Var "d.y" -> Const 2 *)
+  let c =
+    Constraint.Exists {
+      variable = "d"; quantifier = "Department";
+      body = Constraint.And [
+        Constraint.MemberOf {
+          target = "A";
+          binding = Constraint.BindingMap.singleton "x" (Constraint.Var "d.x");
+        };
+        Constraint.Not {
+          universe = "B";
+          body = Constraint.MemberOf {
+            target = "B";
+            binding = Constraint.BindingMap.singleton "y" (Constraint.Var "d.y");
+          };
+        };
+      ];
+    }
+  in
+  let result = Constraint.substitute_transition c "Department" [("x", abs 1); ("y", abs 2)] in
+  (match result with
+   | Constraint.Exists {
+       body = Constraint.And [
+         Constraint.MemberOf { binding = b1; _ };
+         Constraint.Not { body = Constraint.MemberOf { binding = b2; _ }; _ };
+       ]; _
+     } ->
+     (match Constraint.BindingMap.find_opt "x" b1,
+            Constraint.BindingMap.find_opt "y" b2 with
+      | Some (Constraint.Const v1), Some (Constraint.Const v2) ->
+        assert (Stdlib.(=) v1 (abs 1));
+        assert (Stdlib.(=) v2 (abs 2))
+      | _ -> assert false)
+   | _ -> assert false)
+
 (* Build a minimal db with two relations and an FK constraint:
    Department { dept_id }  <--  Employee { emp_id, dept_id }
    Constraint on Employee: Exists d in Department, MemberOf Department (dept_id = Var "dept_id") *)
