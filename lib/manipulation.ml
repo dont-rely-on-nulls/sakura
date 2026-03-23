@@ -261,6 +261,7 @@ module Make (Storage : Management.Physical.S) = struct
           domains = Management.Database.RelationMap.empty;
           history = stored.history;
           timestamp = stored.timestamp;
+          deferred = [];
         })
 
   (*   Relation Operations - forward declarations needed by catalog helpers
@@ -512,15 +513,93 @@ module Make (Storage : Management.Physical.S) = struct
           (* Update database *)
           let new_db = Management.Database.update_relation db ~relation:new_relation in
 
+          (* --- Cascade constraint check --- *)
+          (* Load the deleted tuple so we can extract its attribute values *)
+          let cascade_ok =
+            match load_tuple storage tuple_hash with
+            | Error _ | Ok None -> Ok ()  (* can't load → skip cascade *)
+            | Ok (Some deleted_tuple) ->
+              let deleted_attrs =
+                Tuple.AttributeMap.bindings deleted_tuple.attributes
+                |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
+              in
+              (* Check every other relation's constraints for positive polarity
+                 references to the deleted relation *)
+              Management.Database.RelationMap.fold
+                (fun _constrained_name constrained_rel acc ->
+                  match acc with Error _ -> acc | Ok () ->
+                  (* Skip deferred constraints *)
+                  let is_deferred cname =
+                    List.exists (fun (d : Management.Database.deferred_entry) ->
+                      d.constraint_name = cname
+                      && d.relation_name = _constrained_name)
+                      db.deferred
+                  in
+                  match constrained_rel.Relation.constraints with
+                  | None | Some [] -> Ok ()
+                  | Some named_constraints ->
+                    List.fold_left (fun acc (cname, cbody) ->
+                      match acc with Error _ -> acc | Ok () ->
+                      if is_deferred cname then Ok ()
+                      else
+                        let pols = Constraint.polarity_of cbody in
+                        match List.assoc_opt name pols with
+                        | None -> Ok ()  (* constraint doesn't reference deleted rel *)
+                        | Some Constraint.Negative -> Ok ()  (* delete can't violate *)
+                        | Some (Constraint.Positive | Constraint.Both) ->
+                          (* Use focused_filter to narrow which tuples need re-check *)
+                          let filter =
+                            Constraint.focused_filter cbody name deleted_attrs
+                          in
+                          let ctx = build_eval_context storage new_db in
+                          let hashes = match constrained_rel.tree with
+                            | None -> [] | Some t -> Merkle.keys t
+                          in
+                          (* Check each tuple in the constrained relation *)
+                          let rec check_tuples = function
+                            | [] -> Ok ()
+                            | h :: rest ->
+                              (match load_tuple storage h with
+                               | Error _ | Ok None -> check_tuples rest
+                               | Ok (Some tup) ->
+                                 (* If we have a filter, skip tuples that don't match *)
+                                 let dominated =
+                                   filter = [] ||
+                                   List.for_all (fun (attr, fval) ->
+                                     match Tuple.AttributeMap.find_opt attr
+                                             tup.attributes with
+                                     | Some a -> Stdlib.(=) a.Attribute.value fval
+                                     | None -> false) filter
+                                 in
+                                 if not dominated then check_tuples rest
+                                 else
+                                   (* Re-evaluate constraint against post-delete DB *)
+                                   match Constraint.evaluate_named ctx tup
+                                           [(cname, cbody)] with
+                                   | Ok true -> check_tuples rest
+                                   | Ok false | Error _ ->
+                                     Error (ConstraintViolation
+                                       (Printf.sprintf
+                                          "cascade: deleting from %s violates \
+                                           constraint %s on %s"
+                                          name cname _constrained_name)))
+                          in
+                          check_tuples hashes)
+                      (Ok ()) named_constraints)
+                db.relations (Ok ())
+          in
+          (match cascade_ok with
+           | Error e -> Error e
+           | Ok () ->
           (* Persist relation and database state *)
           match store_relation storage new_relation with
           | Error e -> Error e
           | Ok () ->
             match store_database storage new_db with
             | Error e -> Error e
-            | Ok () -> Ok (new_db, new_relation)
+            | Ok () -> Ok (new_db, new_relation))
 
-  (* 
+  (*
      System Catalog Maintenance
       *)
 
@@ -942,6 +1021,62 @@ module Make (Storage : Management.Physical.S) = struct
     match relation.tree with
     | None -> false
     | Some tree -> Merkle.member tuple_hash tree
+
+  (** Attach a named constraint with timing metadata.
+      Immediate constraints are added to the relation's constraint list.
+      Deferred constraints are recorded in the database's deferred list
+      and also attached to the relation (for schema visibility). *)
+  let attach_constraint
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(constraint_name : string)
+      ~(relation_name : string)
+      ~(body : Constraint.t)
+      ~(timing : Constraint.timing)
+    : (Management.Database.t, error) Result.t =
+    match update_relation_constraints storage db ~relation_name
+            ~constraints:[(constraint_name, body)] with
+    | Error e -> Error e
+    | Ok (db, _) ->
+      match timing with
+      | Constraint.Immediate -> Ok db
+      | Constraint.Deferred ->
+        let entry : Management.Database.deferred_entry = {
+          relation_name; constraint_name; body;
+        } in
+        Ok { db with deferred = entry :: db.deferred }
+
+  (** Check all deferred constraints against the current database state.
+      Returns [Ok ()] if all pass, or an error on the first violation. *)
+  let check_deferred_constraints
+      (storage : storage)
+      (db : Management.Database.t)
+    : (unit, error) Result.t =
+    List.fold_left (fun acc (entry : Management.Database.deferred_entry) ->
+      match acc with Error _ -> acc | Ok () ->
+      match Management.Database.get_relation db entry.relation_name with
+      | None -> Ok ()  (* relation gone — nothing to check *)
+      | Some rel ->
+        let ctx = build_eval_context storage db in
+        let hashes = match rel.tree with
+          | None -> [] | Some t -> Merkle.keys t
+        in
+        let rec check = function
+          | [] -> Ok ()
+          | h :: rest ->
+            match load_tuple storage h with
+            | Error _ | Ok None -> check rest
+            | Ok (Some tup) ->
+              match Constraint.evaluate_named ctx tup
+                      [(entry.constraint_name, entry.body)] with
+              | Ok true -> check rest
+              | Ok false | Error _ ->
+                Error (ConstraintViolation
+                  (Printf.sprintf "deferred constraint %s on %s violated"
+                     entry.constraint_name entry.relation_name))
+        in
+        check hashes)
+      (Ok ()) db.deferred
 end
 
 (** Default instance using in-memory storage for convenience/testing *)

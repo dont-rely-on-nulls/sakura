@@ -287,6 +287,112 @@ let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
   | [] -> Ok true
   | fs -> Error (ConstraintFailures fs)
 
+(** Polarity analysis: determines whether each relation name appears in
+    a positive (must-exist) or negative (must-not-exist) position within
+    a constraint tree.  Used for cascade checking — when a tuple is deleted,
+    only relations with Positive or Both polarity need re-validation. *)
+
+type polarity = Positive | Negative | Both
+
+let merge_polarity a b =
+  match a, b with
+  | Positive, Positive -> Positive
+  | Negative, Negative -> Negative
+  | _                  -> Both
+
+let flip_polarity = function
+  | Positive -> Negative
+  | Negative -> Positive
+  | Both     -> Both
+
+let merge_polarity_maps m1 m2 =
+  List.fold_left (fun acc (name, pol) ->
+    match List.assoc_opt name acc with
+    | None      -> (name, pol) :: acc
+    | Some prev ->
+      (name, merge_polarity prev pol)
+      :: List.filter (fun (n, _) -> n <> name) acc)
+    m1 m2
+
+let rec polarity_of ?(neg = false) (c : t) : (relation_name * polarity) list =
+  let pos p = if neg then flip_polarity p else p in
+  match c with
+  | MemberOf { target; _ } ->
+    [(target, pos Positive)]
+  | Not { body; _ } ->
+    polarity_of ~neg:(not neg) body
+  | And cs | Or cs ->
+    List.fold_left (fun acc c ->
+      merge_polarity_maps acc (polarity_of ~neg c)) [] cs
+  | Exists { quantifier; body; _ } ->
+    merge_polarity_maps
+      [(quantifier, pos Positive)]
+      (polarity_of ~neg body)
+  | Forall { quantifier; body; _ } ->
+    merge_polarity_maps
+      [(quantifier, pos Negative)]
+      (polarity_of ~neg body)
+
+(** Constraint timing: immediate (checked on every mutation) or deferred
+    (checked at transaction commit). *)
+type timing = Immediate | Deferred
+
+(** Given a constraint, a deleted relation name [dep_rel], and the deleted
+    tuple's attributes, return a filter: [(attr_name, value)] pairs that
+    narrow which constrained-relation tuples could be affected.
+
+    For a Var binding like [dept_id = Var "dept_id"] targeting [dep_rel],
+    the deleted tuple's [dept_id] value becomes the filter: only constrained
+    tuples with that exact [dept_id] need re-checking.
+
+    Returns [] if no narrowing is possible (Const bindings, unrelated rel). *)
+let rec focused_filter (c : t) (dep_rel : relation_name)
+    (deleted : (attr_name * Conventions.AbstractValue.t) list)
+  : (attr_name * Conventions.AbstractValue.t) list =
+  match c with
+  | MemberOf { target; binding } when target = dep_rel ->
+    BindingMap.fold (fun _target_attr expr acc ->
+      match expr with
+      | Var src_attr ->
+        (match List.assoc_opt src_attr deleted with
+         | Some v -> (src_attr, v) :: acc
+         | None   -> acc)
+      | Const _ -> acc)
+      binding []
+  | MemberOf _ -> []
+  | Not { body; _ } -> focused_filter body dep_rel deleted
+  | And cs | Or cs ->
+    List.concat_map (fun c -> focused_filter c dep_rel deleted) cs
+  | Exists { quantifier; body; _ } when quantifier = dep_rel ->
+    focused_filter body dep_rel deleted
+  | Exists { body; _ } ->
+    focused_filter body dep_rel deleted
+  | Forall { quantifier; body; _ } when quantifier = dep_rel ->
+    focused_filter body dep_rel deleted
+  | Forall { body; _ } ->
+    focused_filter body dep_rel deleted
+
+(** Extract Const binding values from a constraint for a given [dep_rel].
+
+    These are fixed-value preconditions: if the deleted tuple doesn't have
+    these exact values, the constraint cannot be violated by the deletion.
+    The cascade checker uses this to bail out early. *)
+let rec trigger_constants (c : t) (dep_rel : relation_name)
+  : (attr_name * Conventions.AbstractValue.t) list =
+  match c with
+  | MemberOf { target; binding } when target = dep_rel ->
+    BindingMap.fold (fun target_attr expr acc ->
+      match expr with
+      | Const v -> (target_attr, v) :: acc
+      | Var _   -> acc)
+      binding []
+  | MemberOf _ -> []
+  | Not { body; _ } -> trigger_constants body dep_rel
+  | And cs | Or cs ->
+    List.concat_map (fun c -> trigger_constants c dep_rel) cs
+  | Exists { body; _ } | Forall { body; _ } ->
+    trigger_constants body dep_rel
+
 let make_comparison_binding ~left ~right =
   BindingMap.empty
   |> BindingMap.add "left" left
