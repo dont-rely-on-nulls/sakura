@@ -3109,6 +3109,28 @@ let setup_fk_db storage =
   in
   db
 
+let%test_unit "extend_tuple namespacing: insert Employee with non-existent dept_id is rejected" =
+  (* Regression test for the extend_tuple namespacing bug.
+     Without namespacing, extend_tuple would overwrite the Employee's dept_id=99
+     with the Department row's dept_id=1 during Exists iteration.  Var "dept_id"
+     would then resolve to 1, check_membership would succeed, and the insertion
+     would be accepted despite dept_id=99 not existing in Department.
+     With namespacing, Department attributes are stored as d.dept_id=1 and the
+     base Employee attribute dept_id=99 is preserved, so the check correctly fails. *)
+  with_storage (fun storage ->
+    let db = setup_fk_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 1);
+                                             ("dept_id", Drl.Ast.Int 99)] }) with
+    | Ok _ -> assert false  (* dept_id=99 does not exist in Department *)
+    | Error _ -> ())
+
 let%test_unit "cascade: delete referenced row violates FK and is rejected" =
   with_storage (fun storage ->
     let db = setup_fk_db storage in

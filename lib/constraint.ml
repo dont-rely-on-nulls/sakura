@@ -243,25 +243,18 @@ and extend_tuple (tuple : Tuple.materialized)
     (variable : attr_name)
     (row : (attr_name * Conventions.AbstractValue.t) list)
     : Tuple.materialized =
-  (* TODO: Provenance for tuples at the relation level.
-     Attributes from quantifier rows are namespaced by the variable name
-     (e.g. "d.dept_id") to avoid silent overwriting of same-named attributes
-     from the base tuple or other quantifiers. Without namespacing, the
-     following FK constraint silently passes for an invalid insertion:
-       - Employee { emp_id=1, dept_id=99 } is being inserted.
-       - Constraint: Exists d in Department, MemberOf Department (dept_id = Var "dept_id").
-       - Department contains only { dept_id=1, dept_name="Engineering" }.
-       - extend_tuple overwrites dept_id=99 with dept_id=1 from the Department row.
-       - Var "dept_id" resolves to 1, check_membership succeeds trivially.
-       - The insertion is accepted even though dept_id=99 does not exist.
-     Namespacing is a syntactic encoding of provenance: the variable prefix
-     records which quantifier scope each value came from. A more principled
-     solution would attach provenance metadata directly to each attribute in
-     the relation, making the origin of every value explicit and queryable
-     without relying on name conventions. This would also eliminate the
-     ambiguity that arises when two quantifiers range over relations sharing
-     attribute names — currently resolved by namespacing, but ideally enforced
-     structurally by the type system or relation schema. *)
+  (* Quantifier attributes are namespaced by the variable name (for example "d.dept_id")
+     so they cannot silently overwrite same-named attributes from the base tuple
+     or from other quantifiers. Without such namespacing, a constraint like
+     Exists d in Department, MemberOf Department (dept_id = Var "dept_id")
+     would potentially overwrite the base tuple's dept_id with the Department row's dept_id,
+     causing Var "dept_id" to resolve to the wrong value and accept invalid inserts.
+     Constraints reference quantifier attributes as Var "variable.attr"
+     (for example Var "d.dept_id") and base tuple attributes as Var "attr" (like Var "dept_id").
+     This convention is the prerequisite for universal variable substitution
+     (see docs/incremental_constraint_checking.org, specifically Technique 2).
+     A better long-term solution would attach provenance metadata directly
+     to each attribute rather than relying on name conventions, but we don't have that yet. *)
   let extra_attrs =
     List.fold_left
       (fun acc (k, v) ->
