@@ -2,10 +2,6 @@
 
 open Relational_engine
 
-(* ============================================================================
-   Merkle Tree Tests
-   ============================================================================ *)
-
 let%test_unit "merkle: empty tree" =
   let tree = Merkle.empty in
   assert (Merkle.is_empty tree);
@@ -69,10 +65,6 @@ let%test_unit "merkle: same elements produce same root hash" =
     |> Merkle.insert "b"
     |> Merkle.insert "a" in
   assert (Merkle.root_hash tree1 = Merkle.root_hash tree2)
-
-(* ============================================================================
-   Physical Storage Tests
-   ============================================================================ *)
 
 let%test_unit "storage: create and close" =
   match Management.Physical.Memory.create () with
@@ -144,10 +136,6 @@ let%test_unit "storage: transaction commit" =
         | Error _ -> assert false
         | Ok exists -> assert exists));
     Management.Physical.Memory.close storage
-
-(* ============================================================================
-   Database Tests
-   ============================================================================ *)
 
 let%test_unit "database: create empty" =
   let db = Management.Database.empty ~name:"test_db" in
@@ -249,10 +237,6 @@ let%test_unit "database: get relation names" =
   assert (List.length names = 2);
   assert (List.mem "users" names);
   assert (List.mem "orders" names)
-
-(* ============================================================================
-   Manipulation Tests (using Memory storage)
-   ============================================================================ *)
 
 (* Helper to create storage for tests *)
 let with_storage f =
@@ -556,10 +540,6 @@ let%test_unit "manipulation: get_relation from database" =
         assert (rel.name = "items");
         assert (rel.schema = schema))
 
-(* ============================================================================
-   Schema Persistence Tests
-   ============================================================================ *)
-
 let%test_unit "schema: persisted and loaded correctly" =
   with_storage (fun storage ->
     let db = match Manipulation.Memory.create_database storage ~name:"test_db" with
@@ -584,10 +564,6 @@ let%test_unit "schema: persisted and loaded correctly" =
         assert (List.mem ("id", "integer") loaded_rel.schema);
         assert (List.mem ("name", "string") loaded_rel.schema);
         assert (List.mem ("email", "string") loaded_rel.schema))
-
-(* ============================================================================
-   System Catalog Tests
-   ============================================================================ *)
 
 let%test_unit "catalog: create_database seeds 6 catalog relations" =
   with_storage (fun storage ->
@@ -713,10 +689,6 @@ let%test_unit "catalog: register_constraint inserts into sakura:constraint" =
         | None -> assert false | Some r -> r
       in
       assert (Manipulation.Memory.tuple_count con_rel = 1))
-
-(* ============================================================================
-   Integration Tests
-   ============================================================================ *)
 
 let%test_unit "integration: full workflow with storage" =
   with_storage (fun storage ->
@@ -852,10 +824,6 @@ let%test_unit "integration: hash bubbles up correctly" =
     | None -> assert false
     | Some rel_hash ->
       assert (Merkle.member rel_hash db.tree))
-
-(* ============================================================================
-   Time-Travel / Branching Tests
-   ============================================================================ *)
 
 let%test_unit "branching: load database from historical hash" =
   with_storage (fun storage ->
@@ -1043,10 +1011,6 @@ let%test_unit "branching: full reconstruction from hash" =
           assert (List.mem "Apple" names);
           assert (List.mem "Banana" names);
           assert (List.mem "Cherry" names))
-
-(* ============================================================================
-   Algebra Tests
-   ============================================================================ *)
 
 (* Helper: build a materialized tuple with int attributes *)
 let make_int_tuple relation pairs =
@@ -1266,10 +1230,6 @@ let%test_unit "algebra: take limits output" =
       | Error _ -> assert false
       | Ok rows -> assert (List.length rows = 3))
 
-(* ============================================================================
-   DRL Parser Tests
-   ============================================================================ *)
-
 let%test_unit "drl: parse Base" =
   match Drl.Parser.of_string {|(Base "users")|} with
   | Error _              -> assert false
@@ -1294,10 +1254,6 @@ let%test_unit "drl: parse Select" =
   | Error _ -> assert false
   | Ok (Drl.Ast.Select (Drl.Ast.Const _, Drl.Ast.Base "users")) -> ()
   | Ok _    -> assert false
-
-(* ============================================================================
-   DRL Executor end-to-end Tests
-   ============================================================================ *)
 
 let%test_unit "drl: execute Base" =
   with_storage (fun storage ->
@@ -1351,10 +1307,6 @@ let%test_unit "drl: execute Select+Const" =
             Obj.obj (Tuple.AttributeMap.find "name" (List.hd rows).Tuple.attributes).Attribute.value
           in
           assert (name_v = "Alice"))
-
-(* ============================================================================
-   Constraint System Tests
-   ============================================================================ *)
 
 (* ---------- Constraint construction ---------- *)
 
@@ -2385,10 +2337,6 @@ let%test_unit "constraint propagation: project filters constraints" =
     | Error _ -> assert false
     | Ok result -> assert (result.Relation.constraints = None))
 
-(* ============================================================================
-   DML Sublanguage Tests
-   ============================================================================ *)
-
 (* Parse tests use canonical flat sexp format: (Constructor (field val) ...) *)
 
 let%test_unit "ddl: parse CreateDatabase" =
@@ -2578,10 +2526,6 @@ let%test_unit "dml: insert into nonexistent relation returns error" =
     | Error (Dml.Executor.Memory.RelationNotFound "ghost") -> ()
     | _ -> assert false)
 
-(* ============================================================================
-   DCL Sublanguage Tests
-   ============================================================================ *)
-
 let%test_unit "dcl: round-trip RegisterConstraint MemberOf" =
   let src = Icl.Ast.RegisterConstraint {
     constraint_name = "fk_order";
@@ -2685,10 +2629,6 @@ let%test_unit "dcl: FK constraint enforced on insert" =
     | Error (Dml.Executor.Memory.ManipulationError (Manipulation.ConstraintViolation _)) -> ()
     | _ -> assert false)
 
-(* ============================================================================
-   Branch Tests
-   ============================================================================ *)
-
 module BranchMemory = Management.Branch.Make(Management.Physical.Memory)
 
 let%test_unit "branch: create and get_tip" =
@@ -2759,10 +2699,6 @@ let%test_unit "branch: multiple branches are independent" =
     assert (main_tip = "hash-main");
     assert (feat_tip = "hash-feature");
     assert (main_tip <> feat_tip))
-
-(* ============================================================================
-   Diff Tests
-   ============================================================================ *)
 
 let%test_unit "diff: identical databases produce empty diff" =
   with_storage (fun storage ->
@@ -2835,10 +2771,6 @@ let%test_unit "diff: modified relation detected with added tuple" =
       assert (List.length added_tuples = 1);
       assert (removed_tuples = [])
     | _ -> assert false)
-
-(* ============================================================================
-   Merge Tests
-   ============================================================================ *)
 
 module MergeMemory = Management.Merge.Make
   (Management.Physical.Memory)
@@ -2930,3 +2862,433 @@ let%test_unit "merge: no-op when both sides are identical" =
     | Ok (Management.Merge.Clean merged) ->
       assert (Management.Database.get_relation_names merged =
               Management.Database.get_relation_names base_db))
+
+(* Helper: look up polarity for a relation name in the result list *)
+let find_polarity name pols =
+  List.assoc_opt name pols
+
+let%test_unit "polarity: MemberOf target is Positive" =
+  let c = Constraint.MemberOf {
+    target = "R";
+    binding = Constraint.BindingMap.empty;
+  } in
+  assert (find_polarity "R" (Constraint.polarity_of c) = Some Constraint.Positive)
+
+let%test_unit "polarity: Not MemberOf flips to Negative" =
+  let c = Constraint.Not {
+    body = Constraint.MemberOf { target = "R"; binding = Constraint.BindingMap.empty };
+    universe = "U";
+  } in
+  assert (find_polarity "R" (Constraint.polarity_of c) = Some Constraint.Negative)
+
+let%test_unit "polarity: Exists quantifier is Positive" =
+  let c = Constraint.Exists {
+    variable = "x";
+    quantifier = "Q";
+    body = Constraint.MemberOf { target = "Q"; binding = Constraint.BindingMap.empty };
+  } in
+  assert (find_polarity "Q" (Constraint.polarity_of c) = Some Constraint.Positive)
+
+let%test_unit "polarity: Forall quantifier is Negative" =
+  let c = Constraint.Forall {
+    variable = "x";
+    quantifier = "Q";
+    body = Constraint.MemberOf { target = "T"; binding = Constraint.BindingMap.empty };
+  } in
+  assert (find_polarity "Q" (Constraint.polarity_of c) = Some Constraint.Negative);
+  assert (find_polarity "T" (Constraint.polarity_of c) = Some Constraint.Positive)
+
+let%test_unit "polarity: same relation with both polarities merges to Both" =
+  (* Not(MemberOf R) AND MemberOf R => R appears Negative and Positive => Both *)
+  let c = Constraint.And [
+    Constraint.Not {
+      body = Constraint.MemberOf { target = "R"; binding = Constraint.BindingMap.empty };
+      universe = "U";
+    };
+    Constraint.MemberOf { target = "R"; binding = Constraint.BindingMap.empty };
+  ] in
+  assert (find_polarity "R" (Constraint.polarity_of c) = Some Constraint.Both)
+
+let%test_unit "polarity: Forall body MemberOf keeps Positive" =
+  (* Forall x in Q, MemberOf(T): T still has positive polarity *)
+  let c = Constraint.Forall {
+    variable = "x";
+    quantifier = "Q";
+    body = Constraint.MemberOf { target = "T"; binding = Constraint.BindingMap.empty };
+  } in
+  assert (find_polarity "T" (Constraint.polarity_of c) = Some Constraint.Positive)
+
+let%test_unit "polarity: nested Not double-negation restores Positive" =
+  let c = Constraint.Not {
+    body = Constraint.Not {
+      body = Constraint.MemberOf { target = "R"; binding = Constraint.BindingMap.empty };
+      universe = "U";
+    };
+    universe = "V";
+  } in
+  assert (find_polarity "R" (Constraint.polarity_of c) = Some Constraint.Positive)
+
+let%test_unit "polarity: unrelated relation absent from result" =
+  let c = Constraint.MemberOf {
+    target = "R";
+    binding = Constraint.BindingMap.empty;
+  } in
+  assert (find_polarity "S" (Constraint.polarity_of c) = None)
+
+let abs i = Obj.magic (i : int)  (* lift int to AbstractValue for tests *)
+
+let%test_unit "focused_filter: Var binding maps deleted value to constrained attr" =
+  (* Constraint: MemberOf Dept (dept_id = Var "dept_id")
+     Deleted:    Dept { dept_id = 99 }
+     Expected filter: [("dept_id", 99)]
+
+     This is the core FK pattern. The Var "dept_id" in the binding says:
+     "the constrained tuple's dept_id must equal whatever the Dept tuple's
+     dept_id is." When we delete Dept{dept_id=99}, focused_filter resolves
+     the Var to the deleted value and returns [("dept_id", 99)].
+
+     The cascade checker uses this to scan only Employee tuples where
+     dept_id=99 rather than re-checking every Employee row. *)
+  let binding =
+    Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id")
+  in
+  let c = Constraint.MemberOf { target = "Dept"; binding } in
+  let deleted = [("dept_id", abs 99)] in
+  let filter = Constraint.focused_filter c "Dept" deleted in
+  assert (List.length filter = 1);
+  assert (fst (List.hd filter) = "dept_id");
+  assert (Stdlib.(=) (snd (List.hd filter)) (abs 99))
+
+let%test_unit "focused_filter: Const binding is ignored (no var link)" =
+  (* Constraint: MemberOf Dept (code = Const "eng")
+     Deleted:    Dept { code = "eng" }
+     Expected filter: []
+
+     A Const binding is a fixed literal that restricts which rows the constraint
+     *applies to* — it is not a join condition. There is no Var, so no link
+     exists between the deleted tuple's attributes and the attributes of any
+     constrained relation. focused_filter correctly returns [] here.
+
+     [] does NOT mean "nothing is affected." It means "no tighter filter could
+     be derived": the caller must fall back to re-checking every tuple in the
+     constrained relation. The tempting (but wrong) reading would be to see
+     that the deleted value "eng" matches Const "eng" and emit [("code","eng")]
+     — but that would conflate a constraint literal with a join variable. *)
+  let binding =
+    Constraint.BindingMap.singleton "code"
+      (Constraint.Const (Obj.magic ("eng" : string)))
+  in
+  let c = Constraint.MemberOf { target = "Dept"; binding } in
+  let filter = Constraint.focused_filter c "Dept" [("code", Obj.magic ("eng" : string))] in
+  assert (filter = [])
+
+let%test_unit "focused_filter: Exists body MemberOf same relation is followed" =
+  (* Constraint on Employee: Exists d in Dept, MemberOf Dept (dept_id = Var "dept_id")
+     Deleted: Dept { dept_id = 7 }
+     Expected filter on Employee: [("dept_id", 7)]
+
+     Real FK constraints are wrapped in Exists: "there exists a dept d such
+     that this employee's dept_id matches d's dept_id." The dep_rel ("Dept")
+     appears as the Exists quantifier, not directly in a top-level MemberOf.
+
+     focused_filter must recognise this pattern and recurse into the Exists
+     body to find the Var binding. If it stopped at the Exists node and
+     returned [], the cascade checker would lose the narrowing and fall back
+     to scanning every Employee — defeating the optimisation entirely. *)
+  let binding =
+    Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id")
+  in
+  let c = Constraint.Exists {
+    variable = "d";
+    quantifier = "Dept";
+    body = Constraint.MemberOf { target = "Dept"; binding };
+  } in
+  let filter = Constraint.focused_filter c "Dept" [("dept_id", abs 7)] in
+  assert (List.length filter = 1);
+  assert (fst (List.hd filter) = "dept_id")
+
+let%test_unit "focused_filter: unrelated dep_rel yields empty filter" =
+  (* Constraint references relation R. We are deleting from relation S.
+     Expected filter: []
+
+     If the deleted relation does not appear anywhere in the constraint,
+     the deletion cannot possibly affect any constrained tuple — no join
+     variable links them. The cascade checker uses [] as a signal to skip
+     the re-check for this constraint entirely, not to re-check everything. *)
+  let binding =
+    Constraint.BindingMap.singleton "x" (Constraint.Var "x")
+  in
+  let c = Constraint.MemberOf { target = "R"; binding } in
+  let filter = Constraint.focused_filter c "S" [("x", abs 1)] in
+  assert (filter = [])
+
+let%test_unit "trigger_constants: Const value in binding is extracted" =
+  (* Constraint: MemberOf R (status = Const "active")
+     Expected constants: [("status", "active")]
+
+     trigger_constants answers: "for a DELETE from dep_rel to even risk
+     violating this constraint, what attribute values must the deleted tuple
+     have?" A Const binding says the constraint only applies when the dep_rel
+     tuple has that exact value. If the deleted tuple's status ≠ "active",
+     this constraint can never be violated by that deletion — skip it.
+
+     The cascade checker calls trigger_constants before doing any tuple scan
+     and bails out early if the deleted tuple doesn't match. *)
+  let binding =
+    Constraint.BindingMap.singleton "status"
+      (Constraint.Const (Obj.magic ("active" : string)))
+  in
+  let c = Constraint.MemberOf { target = "R"; binding } in
+  let consts = Constraint.trigger_constants c "R" in
+  assert (List.length consts = 1);
+  assert (fst (List.hd consts) = "status")
+
+let%test_unit "trigger_constants: Var binding produces no constant" =
+  (* Constraint: MemberOf R (id = Var "id")
+     Expected constants: []
+
+     A Var binding imposes no fixed-value precondition on the deleted tuple
+     — it is a join variable, not a filter. Any deleted tuple from R could
+     match a constrained tuple via the Var link, so no early-exit is possible.
+     [] means: always proceed to the cascade scan. *)
+  let binding =
+    Constraint.BindingMap.singleton "id" (Constraint.Var "id")
+  in
+  let c = Constraint.MemberOf { target = "R"; binding } in
+  let consts = Constraint.trigger_constants c "R" in
+  assert (consts = [])
+
+let%test_unit "trigger_constants: unrelated dep_rel yields empty" =
+  (* Constraint references relation R. We are deleting from relation S.
+     Expected constants: []
+
+     When dep_rel does not appear in the constraint at all, trigger_constants
+     returns [] — which again means "no precondition found, proceed." However,
+     focused_filter will also return [] for an unrelated dep_rel, causing the
+     cascade checker to skip the re-check for a different reason (no join
+     link). Both [] cases ultimately mean no affected tuples are found. *)
+  let binding =
+    Constraint.BindingMap.singleton "x" (Constraint.Const (abs 1))
+  in
+  let c = Constraint.MemberOf { target = "R"; binding } in
+  let consts = Constraint.trigger_constants c "S" in
+  assert (consts = [])
+
+(* Build a minimal db with two relations and an FK constraint:
+   Department { dept_id }  <--  Employee { emp_id, dept_id }
+   Constraint on Employee: Exists d in Department, MemberOf Department (dept_id = Var "dept_id") *)
+let setup_fk_db storage =
+  let db = match Manipulation.Memory.create_database storage ~name:"hr" with
+    | Error _ -> assert false | Ok db -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Department"
+      ~schema:(Schema.empty |> Schema.add "dept_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Employee"
+      ~schema:(Schema.empty
+               |> Schema.add "emp_id"  "natural"
+               |> Schema.add "dept_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let fk_body =
+    let binding =
+      Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id")
+    in
+    Constraint.Exists {
+      variable = "d";
+      quantifier = "Department";
+      body = Constraint.MemberOf { target = "Department"; binding };
+    }
+  in
+  let db = match Manipulation.Memory.register_constraint storage db
+      ~constraint_name:"fk_dept"
+      ~relation_name:"Employee"
+      ~body:fk_body with
+    | Error _ -> assert false | Ok db -> db
+  in
+  db
+
+let%test_unit "cascade: delete referenced row violates FK and is rejected" =
+  with_storage (fun storage ->
+    let db = setup_fk_db storage in
+    (* Insert Dept 1 and Employee referencing it *)
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let dept_rel = match Manipulation.Memory.get_relation db ~name:"Department" with
+      | None -> assert false | Some r -> r
+    in
+    let dept_hash = Hashing.hash_tuple
+        { Tuple.relation = "Department";
+          attributes = Tuple.AttributeMap.singleton "dept_id"
+              { Attribute.value = Obj.magic (1 : int) } }
+    in
+    (* Deleting Dept 1 while Employee references it must fail *)
+    match Manipulation.Memory.retract_tuple storage db dept_rel ~tuple_hash:dept_hash with
+    | Ok _ -> assert false  (* should have been rejected *)
+    | Error (Manipulation.ConstraintViolation msg) ->
+      assert (String.length msg > 0)
+    | Error _ -> assert false)
+
+let%test_unit "cascade: delete unreferenced row succeeds" =
+  with_storage (fun storage ->
+    let db = setup_fk_db storage in
+    (* Insert two departments; employee only references dept 1 *)
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 2)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let dept_rel = match Manipulation.Memory.get_relation db ~name:"Department" with
+      | None -> assert false | Some r -> r
+    in
+    let dept2_hash = Hashing.hash_tuple
+        { Tuple.relation = "Department";
+          attributes = Tuple.AttributeMap.singleton "dept_id"
+              { Attribute.value = Obj.magic (2 : int) } }
+    in
+    (* Deleting unreferenced Dept 2 must succeed *)
+    match Manipulation.Memory.retract_tuple storage db dept_rel ~tuple_hash:dept2_hash with
+    | Error _ -> assert false
+    | Ok (new_db, _) ->
+      let dept = match Manipulation.Memory.get_relation new_db ~name:"Department" with
+        | None -> assert false | Some r -> r
+      in
+      assert (Manipulation.Memory.tuple_count dept = 1))
+
+let%test_unit "cascade: Negative-polarity relation deletion is not checked" =
+  (* Constraint on Employee: NOT (MemberOf Blacklist (emp_id = Var "emp_id"))
+     Blacklist has Negative polarity (INSERT into Blacklist could violate).
+     DELETE from Blacklist should never trigger a cascade check. *)
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"hr" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"Blacklist"
+        ~schema:(Schema.empty |> Schema.add "emp_id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"Employee"
+        ~schema:(Schema.empty |> Schema.add "emp_id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let not_body =
+      let binding =
+        Constraint.BindingMap.singleton "emp_id" (Constraint.Var "emp_id")
+      in
+      Constraint.Not {
+        body = Constraint.MemberOf { target = "Blacklist"; binding };
+        universe = "Employee";
+      }
+    in
+    let db = match Manipulation.Memory.register_constraint storage db
+        ~constraint_name:"not_blacklisted"
+        ~relation_name:"Employee"
+        ~body:not_body with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* Insert emp_id=5 into Blacklist, then insert emp_id=99 into Employee (unrelated) *)
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Blacklist";
+                               attributes = [("emp_id", Drl.Ast.Int 5)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 99)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let bl_rel = match Manipulation.Memory.get_relation db ~name:"Blacklist" with
+      | None -> assert false | Some r -> r
+    in
+    let bl_hash = Hashing.hash_tuple
+        { Tuple.relation = "Blacklist";
+          attributes = Tuple.AttributeMap.singleton "emp_id"
+              { Attribute.value = Obj.magic (5 : int) } }
+    in
+    (* Deleting from Blacklist (negative polarity) must not trigger cascade check *)
+    match Manipulation.Memory.retract_tuple storage db bl_rel ~tuple_hash:bl_hash with
+    | Error _ -> assert false
+    | Ok _ -> ())
+
+let%test_unit "cascade: deferred constraint not checked during retract_tuple" =
+  with_storage (fun storage ->
+    let db = match Manipulation.Memory.create_database storage ~name:"hr" with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"Department"
+        ~schema:(Schema.empty |> Schema.add "dept_id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let db = match Manipulation.Memory.create_relation storage db ~name:"Employee"
+        ~schema:(Schema.empty
+                 |> Schema.add "emp_id"  "natural"
+                 |> Schema.add "dept_id" "natural") with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    let fk_body =
+      let binding =
+        Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id")
+      in
+      Constraint.Exists {
+        variable = "d";
+        quantifier = "Department";
+        body = Constraint.MemberOf { target = "Department"; binding };
+      }
+    in
+    (* Register as DEFERRED *)
+    let db = match Manipulation.Memory.attach_constraint storage db
+        ~constraint_name:"fk_dept_deferred"
+        ~relation_name:"Employee"
+        ~body:fk_body
+        ~timing:Constraint.Deferred with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let dept_rel = match Manipulation.Memory.get_relation db ~name:"Department" with
+      | None -> assert false | Some r -> r
+    in
+    let dept_hash = Hashing.hash_tuple
+        { Tuple.relation = "Department";
+          attributes = Tuple.AttributeMap.singleton "dept_id"
+              { Attribute.value = Obj.magic (1 : int) } }
+    in
+    (* Deferred: retract_tuple itself should NOT reject the deletion *)
+    match Manipulation.Memory.retract_tuple storage db dept_rel ~tuple_hash:dept_hash with
+    | Error _ -> assert false  (* deferred — must pass here *)
+    | Ok (new_db, _) ->
+      (* But check_deferred_constraints must catch the violation *)
+      match Manipulation.Memory.check_deferred_constraints storage new_db with
+      | Ok () -> assert false  (* should have caught the violation *)
+      | Error (Manipulation.ConstraintViolation _) -> ()
+      | Error _ -> assert false)
