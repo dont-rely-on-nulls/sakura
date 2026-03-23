@@ -282,7 +282,7 @@ let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
 
 (** Polarity analysis: determines whether each relation name appears in
     a positive (must-exist) or negative (must-not-exist) position within
-    a constraint tree.  Used for cascade checking — when a tuple is deleted,
+    a constraint tree. Used for cascade checking: when a tuple is deleted,
     only relations with Positive or Both polarity need re-validation. *)
 
 type polarity = Positive | Negative | Both

@@ -971,7 +971,7 @@ module Make (Storage : Management.Physical.S) = struct
         | None -> constraints
         | Some existing -> Constraint.merge existing constraints
       in
-      (* Don't bake constraint evaluation into membership_criteria —
+      (* Do not bake constraint evaluation into membership_criteria.
          create_tuple evaluates constraints with the current db snapshot.
          membership_criteria stays for schema/domain validation only. *)
       let new_relation =
@@ -1089,7 +1089,7 @@ module Make (Storage : Management.Physical.S) = struct
     List.fold_left (fun acc (entry : Management.Database.deferred_entry) ->
       match acc with Error _ -> acc | Ok () ->
       match Management.Database.get_relation db entry.relation_name with
-      | None -> Ok ()  (* relation gone — nothing to check *)
+      | None -> Ok ()  (* relation gone, nothing to check *)
       | Some rel ->
         let ctx = build_eval_context storage db in
         let hashes = match rel.tree with
@@ -1111,6 +1111,31 @@ module Make (Storage : Management.Physical.S) = struct
         in
         check hashes)
       (Ok ()) db.deferred
+
+  (** Complete a mutation sequence by evaluating all deferred constraints
+      against the current database state.
+
+      On success, returns the database with the deferred list cleared.
+      Subsequent mutations start a fresh deferral window. On failure,
+      returns the constraint violation error and leaves the database
+      unchanged so the caller can inspect or roll back.
+
+      Typical usage:
+        let db  = create_tuple storage db rel t1 in
+        let db  = retract_tuple storage db rel t2 in
+        let db  = commit storage db in (* deferred checks run here *)
+        ... *)
+  let commit
+      (storage : storage)
+      (db : Management.Database.t)
+    : (Management.Database.t, error) Result.t =
+    match check_deferred_constraints storage db with
+    | Error e -> Error e
+    | Ok () ->
+      let db' = { db with deferred = [] } in
+      match store_database storage db' with
+      | Error e -> Error e
+      | Ok () -> Ok db'
 end
 
 (** Default instance using in-memory storage for convenience/testing *)

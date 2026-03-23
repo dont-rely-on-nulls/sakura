@@ -1835,7 +1835,7 @@ let%test_unit "constraint scenario: mutual exclusion subtypes" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Now try to insert same id into manager — should fail *)
+    (* Now try to insert same id into manager, should fail *)
     let manager =
       match Manipulation.Memory.get_relation db ~name:"manager" with
       | None -> assert false
@@ -1922,7 +1922,7 @@ let%test_unit "constraint scenario: foreign key" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Insert item referencing valid order — should succeed *)
+    (* Insert item referencing valid order, should succeed *)
     let items =
       match Manipulation.Memory.get_relation db ~name:"order_items" with
       | None -> assert false
@@ -1946,7 +1946,7 @@ let%test_unit "constraint scenario: foreign key" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Insert item referencing nonexistent order — should fail *)
+    (* Insert item referencing nonexistent order, should fail *)
     let invalid_item : Tuple.materialized =
       {
         relation = "order_items";
@@ -2026,7 +2026,7 @@ let%test_unit "constraint scenario: self-reference neq" =
       | None -> assert false
       | Some r -> r
     in
-    (* Insert (emp_id=1, mgr_id=2) — should succeed *)
+    (* Insert (emp_id=1, mgr_id=2), should succeed *)
     let valid : Tuple.materialized =
       {
         relation = "reports_to";
@@ -2043,7 +2043,7 @@ let%test_unit "constraint scenario: self-reference neq" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Insert (emp_id=3, mgr_id=3) — same person, should fail *)
+    (* Insert (emp_id=3, mgr_id=3): same person, should fail *)
     let invalid : Tuple.materialized =
       {
         relation = "reports_to";
@@ -2125,7 +2125,7 @@ let%test_unit "constraint scenario: open vs closed ticket" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Try to open same ticket — should fail *)
+    (* Try to open same ticket, should fail *)
     let open_ =
       match Manipulation.Memory.get_relation db ~name:"open_ticket" with
       | None -> assert false
@@ -2208,7 +2208,7 @@ let%test_unit "constraint scenario: weak entity dependency" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Insert dependent with valid parent — succeeds *)
+    (* Insert dependent with valid parent, should succeed *)
     let dep =
       match Manipulation.Memory.get_relation db ~name:"dependent" with
       | None -> assert false
@@ -2232,7 +2232,7 @@ let%test_unit "constraint scenario: weak entity dependency" =
       | Error _ -> assert false
       | Ok x -> x
     in
-    (* Insert dependent with nonexistent parent — fails *)
+    (* Insert dependent with nonexistent parent, should fail *)
     let invalid_dep : Tuple.materialized =
       {
         relation = "dependent";
@@ -2250,7 +2250,7 @@ let%test_unit "constraint scenario: weak entity dependency" =
     | Error (Manipulation.ConstraintViolation _) -> ()
     | _ -> assert false)
 
-(* Scenario 6: Algebra propagation — select preserves constraints *)
+(* Scenario 6: Algebra propagation, select preserves constraints *)
 let%test_unit "constraint propagation: select preserves constraints" =
   with_storage (fun storage ->
     let db =
@@ -2288,7 +2288,7 @@ let%test_unit "constraint propagation: select preserves constraints" =
     | Ok result ->
       assert (result.Relation.constraints <> None))
 
-(* Scenario 7: Algebra propagation — project filters constraints *)
+(* Scenario 7: Algebra propagation, project filters constraints *)
 let%test_unit "constraint propagation: project filters constraints" =
   with_storage (fun storage ->
     let db =
@@ -2328,11 +2328,11 @@ let%test_unit "constraint propagation: project filters constraints" =
       | None -> assert false
       | Some r -> r
     in
-    (* Project to only "x" — constraint should survive *)
+    (* Project to only "x", constraint should survive *)
     (match Algebra.Memory.project storage [ "x" ] rel with
      | Error _ -> assert false
      | Ok result -> assert (result.Relation.constraints <> None));
-    (* Project to only "y" — constraint referencing "x" should be dropped *)
+    (* Project to only "y", constraint referencing "x" should be dropped *)
     match Algebra.Memory.project storage [ "y" ] rel with
     | Error _ -> assert false
     | Ok result -> assert (result.Relation.constraints = None))
@@ -2390,7 +2390,7 @@ let%test_unit "ddl: round-trip RegisterDomain" =
   | Error _ -> assert false
   | Ok parsed -> assert (parsed = src)
 
-(* Executor tests construct AST directly — no dependency on sexp format *)
+(* Executor tests construct AST directly, no dependency on sexp format *)
 
 let%test_unit "ddl: execute CreateDatabase" =
   with_storage (fun storage ->
@@ -2965,15 +2965,15 @@ let%test_unit "focused_filter: Const binding is ignored (no var link)" =
      Expected filter: []
 
      A Const binding is a fixed literal that restricts which rows the constraint
-     *applies to* — it is not a join condition. There is no Var, so no link
+     *applies to*: it is not a join condition. There is no Var, so no link
      exists between the deleted tuple's attributes and the attributes of any
      constrained relation. focused_filter correctly returns [] here.
 
      [] does NOT mean "nothing is affected." It means "no tighter filter could
      be derived": the caller must fall back to re-checking every tuple in the
-     constrained relation. The tempting (but wrong) reading would be to see
-     that the deleted value "eng" matches Const "eng" and emit [("code","eng")]
-     — but that would conflate a constraint literal with a join variable. *)
+     constrained relation. The tempting but wrong reading would be to see
+     that the deleted value "eng" matches Const "eng" and emit [("code","eng")].
+     Doing so would conflate a constraint literal with a join variable. *)
   let binding =
     Constraint.BindingMap.singleton "code"
       (Constraint.Const (Obj.magic ("eng" : string)))
@@ -2994,7 +2994,7 @@ let%test_unit "focused_filter: Exists body MemberOf same relation is followed" =
      focused_filter must recognise this pattern and recurse into the Exists
      body to find the Var binding. If it stopped at the Exists node and
      returned [], the cascade checker would lose the narrowing and fall back
-     to scanning every Employee — defeating the optimisation entirely. *)
+     to scanning every Employee, defeating the optimisation entirely. *)
   let binding =
     Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id")
   in
@@ -3012,7 +3012,7 @@ let%test_unit "focused_filter: unrelated dep_rel yields empty filter" =
      Expected filter: []
 
      If the deleted relation does not appear anywhere in the constraint,
-     the deletion cannot possibly affect any constrained tuple — no join
+     the deletion cannot possibly affect any constrained tuple since no join
      variable links them. The cascade checker uses [] as a signal to skip
      the re-check for this constraint entirely, not to re-check everything. *)
   let binding =
@@ -3030,7 +3030,7 @@ let%test_unit "trigger_constants: Const value in binding is extracted" =
      violating this constraint, what attribute values must the deleted tuple
      have?" A Const binding says the constraint only applies when the dep_rel
      tuple has that exact value. If the deleted tuple's status ≠ "active",
-     this constraint can never be violated by that deletion — skip it.
+     this constraint can never be violated by that deletion, so it is skipped.
 
      The cascade checker calls trigger_constants before doing any tuple scan
      and bails out early if the deleted tuple doesn't match. *)
@@ -3047,8 +3047,8 @@ let%test_unit "trigger_constants: Var binding produces no constant" =
   (* Constraint: MemberOf R (id = Var "id")
      Expected constants: []
 
-     A Var binding imposes no fixed-value precondition on the deleted tuple
-     — it is a join variable, not a filter. Any deleted tuple from R could
+     A Var binding imposes no fixed-value precondition on the deleted tuple.
+     It is a join variable, not a filter. Any deleted tuple from R could
      match a constrained tuple via the Var link, so no early-exit is possible.
      [] means: always proceed to the cascade scan. *)
   let binding =
@@ -3063,7 +3063,7 @@ let%test_unit "trigger_constants: unrelated dep_rel yields empty" =
      Expected constants: []
 
      When dep_rel does not appear in the constraint at all, trigger_constants
-     returns [] — which again means "no precondition found, proceed." However,
+     returns [], meaning no precondition was found so the cascade scan proceeds. However,
      focused_filter will also return [] for an unrelated dep_rel, causing the
      cascade checker to skip the re-check for a different reason (no join
      link). Both [] cases ultimately mean no affected tuples are found. *)
@@ -3100,7 +3100,7 @@ let%test_unit "substitute_transition: Var \"variable.attr\" is replaced by Const
 let%test_unit "substitute_transition: base-tuple Var is not substituted" =
   (* Constraint: Exists d in Department, MemberOf Target (key = Var "dept_id")
      Var "dept_id" is a base-tuple reference (no "d." prefix), so it must
-     survive substitution unchanged — only "d.dept_id" would be replaced. *)
+     survive substitution unchanged. Only "d.dept_id" would be replaced. *)
   let c =
     Constraint.Exists {
       variable = "d"; quantifier = "Department";
@@ -3415,7 +3415,7 @@ let%test_unit "cascade: deferred constraint not checked during retract_tuple" =
     in
     (* Deferred: retract_tuple itself should NOT reject the deletion *)
     match Manipulation.Memory.retract_tuple storage db dept_rel ~tuple_hash:dept_hash with
-    | Error _ -> assert false  (* deferred — must pass here *)
+    | Error _ -> assert false  (* deferred: must pass here *)
     | Ok (new_db, _) ->
       (* But check_deferred_constraints must catch the violation *)
       match Manipulation.Memory.check_deferred_constraints storage new_db with
@@ -3475,7 +3475,7 @@ let%test_unit "cascade INSERT: inserting into Blacklist violates constraint on e
     match Dml.Executor.Memory.execute storage db
         (Dml.Ast.InsertTuple { relation = "Blacklist";
                                attributes = [("emp_id", Drl.Ast.Int 5)] }) with
-    | Ok _ -> assert false  (* emp_id=5 exists in Employee — must be rejected *)
+    | Ok _ -> assert false  (* emp_id=5 exists in Employee, must be rejected *)
     | Error _ -> ())
 
 let%test_unit "cascade INSERT: inserting into Blacklist with no matching Employee succeeds" =
@@ -3491,5 +3491,117 @@ let%test_unit "cascade INSERT: inserting into Blacklist with no matching Employe
     match Dml.Executor.Memory.execute storage db
         (Dml.Ast.InsertTuple { relation = "Blacklist";
                                attributes = [("emp_id", Drl.Ast.Int 5)] }) with
-    | Error _ -> assert false  (* emp_id=5 not in Employee — must succeed *)
+    | Error _ -> assert false  (* emp_id=5 not in Employee, must succeed *)
+    | Ok _ -> ())
+
+(* commit tests.
+
+   Uses the same Department/Employee FK schema with a DEFERRED constraint.
+   Individual mutations succeed even when they temporarily violate the constraint;
+   commit is the boundary where deferred violations are caught. *)
+let setup_deferred_fk_db storage =
+  let db = match Manipulation.Memory.create_database storage ~name:"hr" with
+    | Error _ -> assert false | Ok db -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Department"
+      ~schema:(Schema.empty |> Schema.add "dept_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Employee"
+      ~schema:(Schema.empty
+               |> Schema.add "emp_id"  "natural"
+               |> Schema.add "dept_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let fk_body =
+    Constraint.Exists {
+      variable = "d"; quantifier = "Department";
+      body = Constraint.MemberOf {
+        target = "Department";
+        binding = Constraint.BindingMap.singleton "dept_id" (Constraint.Var "dept_id");
+      };
+    }
+  in
+  match Manipulation.Memory.attach_constraint storage db
+      ~constraint_name:"fk_dept"
+      ~relation_name:"Employee"
+      ~body:fk_body
+      ~timing:Constraint.Deferred with
+  | Error _ -> assert false | Ok db -> db
+
+let%test_unit "commit: no deferred constraints, returns Ok with db unchanged" =
+  with_storage (fun storage ->
+    let db = setup_deferred_fk_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* All constraints satisfied, commit must pass *)
+    match Manipulation.Memory.commit storage db with
+    | Error _ -> assert false
+    | Ok _ -> ())
+
+let%test_unit "commit: deferred violation is caught at commit boundary" =
+  with_storage (fun storage ->
+    let db = setup_deferred_fk_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let dept_rel = match Manipulation.Memory.get_relation db ~name:"Department" with
+      | None -> assert false | Some r -> r
+    in
+    let dept_hash = Hashing.hash_tuple
+        { Tuple.relation = "Department";
+          attributes = Tuple.AttributeMap.singleton "dept_id"
+              { Attribute.value = Obj.magic (1 : int) } }
+    in
+    (* Delete the referenced department. Deferred, so retract succeeds *)
+    let db = match Manipulation.Memory.retract_tuple storage db dept_rel
+        ~tuple_hash:dept_hash with
+      | Error _ -> assert false | Ok (db, _) -> db
+    in
+    (* commit must now catch the orphaned Employee *)
+    match Manipulation.Memory.commit storage db with
+    | Ok _ -> assert false
+    | Error (Manipulation.ConstraintViolation _) -> ()
+    | Error _ -> assert false)
+
+let%test_unit "commit: clears deferred list, second commit passes" =
+  (* After a successful commit the deferred list is empty.
+     A follow-up mutation + commit on the returned db must also work correctly
+     rather than re-running stale entries from the previous window. *)
+  with_storage (fun storage ->
+    let db = setup_deferred_fk_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Department";
+                               attributes = [("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 10);
+                                             ("dept_id", Drl.Ast.Int 1)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    let db = match Manipulation.Memory.commit storage db with
+      | Error _ -> assert false | Ok db -> db
+    in
+    (* Second commit with no new mutations must also pass *)
+    match Manipulation.Memory.commit storage db with
+    | Error _ -> assert false
     | Ok _ -> ())
