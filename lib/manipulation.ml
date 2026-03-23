@@ -315,6 +315,123 @@ module Make (Storage : Management.Physical.S) = struct
     in
     store_all [] attrs
 
+  (** Load a tuple from storage by its hash *)
+  let load_tuple
+      (storage : storage)
+      (tuple_hash : Conventions.Hash.t)
+    : (Tuple.materialized option, error) Result.t =
+    match Storage.load_raw storage tuple_hash with
+    | Error _ -> Error (StorageError "Failed to load tuple")
+    | Ok None -> Ok None
+    | Ok (Some tuple_bytes) ->
+      let stored = Storable.Tuple.of_bytes tuple_bytes in
+      let rec load_attrs acc = function
+        | [] -> Ok (List.rev acc)
+        | (name, attr_hash) :: rest ->
+          match Storage.load_raw storage attr_hash with
+          | Error _ -> Error (StorageError ("Failed to load attribute: " ^ name))
+          | Ok None -> Error (StorageError ("Attribute not found: " ^ name))
+          | Ok (Some value_bytes) ->
+            let value : Conventions.AbstractValue.t = Marshal.from_bytes value_bytes 0 in
+            let attr : Attribute.materialized = { value } in
+            load_attrs ((name, attr) :: acc) rest
+      in
+      match load_attrs [] stored.attributes with
+      | Error e -> Error e
+      | Ok attrs ->
+        let attributes = List.fold_left
+            (fun m (k, v) -> Tuple.AttributeMap.add k v m)
+            Tuple.AttributeMap.empty attrs
+        in
+        Ok (Some { Tuple.relation = stored.relation; attributes })
+
+  (** Load multiple tuples from storage *)
+  let load_tuples
+      (storage : storage)
+      (hashes : Conventions.Hash.t list)
+    : (Tuple.materialized list, error) Result.t =
+    let rec load_all acc = function
+      | [] -> Ok (List.rev acc)
+      | hash :: rest ->
+        match load_tuple storage hash with
+        | Error e -> Error e
+        | Ok None -> Error (TupleNotFound hash)
+        | Ok (Some tuple) -> load_all (tuple :: acc) rest
+    in
+    load_all [] hashes
+
+  (** Scan every relation in [db] for constraints that reference [dep_rel] with
+      a polarity matched by [polarity_triggers], then re-evaluate those
+      constraints against the affected tuples in each constrained relation.
+
+      [transition] is the inserted or deleted tuple's attributes.
+      [polarity_triggers] returns true for the polarities that the current
+      mutation type can violate:
+        - DELETE: Positive | Both
+        - INSERT: Negative | Both
+
+      Returns [Ok ()] when all cascade checks pass. *)
+  let check_cascade_constraints
+      (storage : storage)
+      (db : Management.Database.t)
+      ~(dep_rel : string)
+      ~(transition : (string * Conventions.AbstractValue.t) list)
+      ~(polarity_triggers : Constraint.polarity -> bool)
+      ~(violation_msg : string -> string -> string)
+    : unit result =
+    let ctx = build_eval_context storage db in
+    Management.Database.RelationMap.fold
+      (fun constrained_name constrained_rel acc ->
+        match acc with Error _ -> acc | Ok () ->
+        let is_deferred cname =
+          List.exists (fun (d : Management.Database.deferred_entry) ->
+            d.constraint_name = cname && d.relation_name = constrained_name)
+            db.deferred
+        in
+        match constrained_rel.Relation.constraints with
+        | None | Some [] -> Ok ()
+        | Some named_constraints ->
+          List.fold_left (fun acc (cname, cbody) ->
+            match acc with Error _ -> acc | Ok () ->
+            if is_deferred cname then Ok ()
+            else
+              let pols = Constraint.polarity_of cbody in
+              match List.assoc_opt dep_rel pols with
+              | None -> Ok ()
+              | Some pol when not (polarity_triggers pol) -> Ok ()
+              | Some _ ->
+                let filter = Constraint.focused_filter cbody dep_rel transition in
+                let hashes = match constrained_rel.tree with
+                  | None -> [] | Some t -> Merkle.keys t
+                in
+                let rec check_tuples = function
+                  | [] -> Ok ()
+                  | h :: rest ->
+                    (match load_tuple storage h with
+                     | Error _ | Ok None -> check_tuples rest
+                     | Ok (Some tup) ->
+                       let needs_recheck =
+                         filter = [] ||
+                         List.for_all (fun (attr, fval) ->
+                           match Tuple.AttributeMap.find_opt attr tup.attributes with
+                           | Some a -> Stdlib.(=) a.Attribute.value fval
+                           | None -> false) filter
+                       in
+                       if not needs_recheck then check_tuples rest
+                       else
+                         let cbody' =
+                           Constraint.substitute_transition cbody dep_rel transition
+                         in
+                         match Constraint.evaluate_named ctx tup [(cname, cbody')] with
+                         | Ok true -> check_tuples rest
+                         | Ok false | Error _ ->
+                           Error (ConstraintViolation
+                             (violation_msg cname constrained_name)))
+                in
+                check_tuples hashes)
+            (Ok ()) named_constraints)
+      db.relations (Ok ())
+
   (** Insert a tuple into a relation, storing it in the backend *)
   let create_tuple
       (storage : storage)
@@ -399,6 +516,26 @@ module Make (Storage : Management.Physical.S) = struct
                (* Update database with the new relation *)
                let new_db = Management.Database.update_relation db ~relation:new_relation in
 
+               (* Cascade constraint check (INSERT) *)
+               let inserted_attrs =
+                 Tuple.AttributeMap.bindings tuple.attributes
+                 |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
+               in
+               let cascade_ok =
+                 check_cascade_constraints storage new_db
+                   ~dep_rel:name
+                   ~transition:inserted_attrs
+                   ~polarity_triggers:(function
+                     | Constraint.Negative | Constraint.Both -> true
+                     | Constraint.Positive -> false)
+                   ~violation_msg:(fun cname crel ->
+                     Printf.sprintf
+                       "cascade: inserting into %s violates constraint %s on %s"
+                       name cname crel)
+               in
+               match cascade_ok with
+               | Error e -> Error e
+               | Ok () ->
                (* Persist relation and database state *)
                match store_relation storage new_relation with
                | Error e -> Error e
@@ -423,53 +560,6 @@ module Make (Storage : Management.Physical.S) = struct
           insert_all new_db new_rel (hash :: hashes) rest
     in
     insert_all db relation [] tuples
-
-  (** Load a tuple from storage by its hash *)
-  let load_tuple
-      (storage : storage)
-      (tuple_hash : Conventions.Hash.t)
-    : (Tuple.materialized option, error) Result.t =
-    match Storage.load_raw storage tuple_hash with
-    | Error _ -> Error (StorageError "Failed to load tuple")
-    | Ok None -> Ok None
-    | Ok (Some tuple_bytes) ->
-      let stored = Storable.Tuple.of_bytes tuple_bytes in
-      (* Load each attribute value *)
-      let rec load_attrs acc = function
-        | [] -> Ok (List.rev acc)
-        | (name, attr_hash) :: rest ->
-          match Storage.load_raw storage attr_hash with
-          | Error _ -> Error (StorageError ("Failed to load attribute: " ^ name))
-          | Ok None -> Error (StorageError ("Attribute not found: " ^ name))
-          | Ok (Some value_bytes) ->
-            let value : Conventions.AbstractValue.t = Marshal.from_bytes value_bytes 0 in
-            let attr : Attribute.materialized = { value } in
-            load_attrs ((name, attr) :: acc) rest
-      in
-      match load_attrs [] stored.attributes with
-      | Error e -> Error e
-      | Ok attrs ->
-        let attributes = List.fold_left
-            (fun m (k, v) -> Tuple.AttributeMap.add k v m)
-            Tuple.AttributeMap.empty
-            attrs
-        in
-        Ok (Some { Tuple.relation = stored.relation; attributes })
-
-  (** Load multiple tuples from storage *)
-  let load_tuples
-      (storage : storage)
-      (hashes : Conventions.Hash.t list)
-    : (Tuple.materialized list, error) Result.t =
-    let rec load_all acc = function
-      | [] -> Ok (List.rev acc)
-      | hash :: rest ->
-        match load_tuple storage hash with
-        | Error e -> Error e
-        | Ok None -> Error (TupleNotFound hash)
-        | Ok (Some tuple) -> load_all (tuple :: acc) rest
-    in
-    load_all [] hashes
 
   (** Remove a tuple from a relation by its hash *)
   let retract_tuple
@@ -513,88 +603,24 @@ module Make (Storage : Management.Physical.S) = struct
           (* Update database *)
           let new_db = Management.Database.update_relation db ~relation:new_relation in
 
-          (* --- Cascade constraint check --- *)
-          (* Load the deleted tuple so we can extract its attribute values *)
+          (* Cascade constraint check (DELETE) *)
           let cascade_ok =
             match load_tuple storage tuple_hash with
-            | Error _ | Ok None -> Ok ()  (* can't load → skip cascade *)
+            | Error _ | Ok None -> Ok ()  (* can't load the deleted tuple, so just skip *)
             | Ok (Some deleted_tuple) ->
               let deleted_attrs =
                 Tuple.AttributeMap.bindings deleted_tuple.attributes
                 |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
               in
-              (* Check every other relation's constraints for positive polarity
-                 references to the deleted relation *)
-              Management.Database.RelationMap.fold
-                (fun _constrained_name constrained_rel acc ->
-                  match acc with Error _ -> acc | Ok () ->
-                  (* Skip deferred constraints *)
-                  let is_deferred cname =
-                    List.exists (fun (d : Management.Database.deferred_entry) ->
-                      d.constraint_name = cname
-                      && d.relation_name = _constrained_name)
-                      db.deferred
-                  in
-                  match constrained_rel.Relation.constraints with
-                  | None | Some [] -> Ok ()
-                  | Some named_constraints ->
-                    List.fold_left (fun acc (cname, cbody) ->
-                      match acc with Error _ -> acc | Ok () ->
-                      if is_deferred cname then Ok ()
-                      else
-                        let pols = Constraint.polarity_of cbody in
-                        match List.assoc_opt name pols with
-                        | None -> Ok ()  (* constraint doesn't reference deleted rel *)
-                        | Some Constraint.Negative -> Ok ()  (* delete can't violate *)
-                        | Some (Constraint.Positive | Constraint.Both) ->
-                          (* Use focused_filter to narrow which tuples need re-check *)
-                          let filter =
-                            Constraint.focused_filter cbody name deleted_attrs
-                          in
-                          let ctx = build_eval_context storage new_db in
-                          let hashes = match constrained_rel.tree with
-                            | None -> [] | Some t -> Merkle.keys t
-                          in
-                          (* Check each tuple in the constrained relation *)
-                          let rec check_tuples = function
-                            | [] -> Ok ()
-                            | h :: rest ->
-                              (match load_tuple storage h with
-                               | Error _ | Ok None -> check_tuples rest
-                               | Ok (Some tup) ->
-                                 (* If we have a filter, skip tuples that don't match *)
-                                 let needs_recheck =
-                                   filter = [] ||
-                                   List.for_all (fun (attr, fval) ->
-                                     match Tuple.AttributeMap.find_opt attr
-                                             tup.attributes with
-                                     | Some a -> Stdlib.(=) a.Attribute.value fval
-                                     | None -> false) filter
-                                 in
-                                 if not needs_recheck then check_tuples rest
-                                 else
-                                   (* Re-evaluate the substituted constraint against tge post delete DB.
-                                    Universally-quantified Var "variable.attr" references that
-                                    join on the deleted tuple's attributes are replaced by
-                                    Const values, narrowing the expression to only the rows
-                                    affected by this specific deletion. *)
-                                   let cbody' =
-                                     Constraint.substitute_transition
-                                       cbody name deleted_attrs
-                                   in
-                                   match Constraint.evaluate_named ctx tup
-                                           [(cname, cbody')] with
-                                   | Ok true -> check_tuples rest
-                                   | Ok false | Error _ ->
-                                     Error (ConstraintViolation
-                                       (Printf.sprintf
-                                          "cascade: deleting from %s violates \
-                                           constraint %s on %s"
-                                          name cname _constrained_name)))
-                          in
-                          check_tuples hashes)
-                      (Ok ()) named_constraints)
-                db.relations (Ok ())
+              check_cascade_constraints storage new_db
+                ~dep_rel:name
+                ~transition:deleted_attrs
+                ~polarity_triggers:(function
+                  | Constraint.Positive | Constraint.Both -> true
+                  | Constraint.Negative -> false)
+                ~violation_msg:(fun cname crel ->
+                  Printf.sprintf "cascade: deleting from %s violates constraint %s on %s"
+                    name cname crel)
           in
           (match cascade_ok with
            | Error e -> Error e

@@ -3422,3 +3422,74 @@ let%test_unit "cascade: deferred constraint not checked during retract_tuple" =
       | Ok () -> assert false  (* should have caught the violation *)
       | Error (Manipulation.ConstraintViolation _) -> ()
       | Error _ -> assert false)
+
+(* INSERT cascade tests.
+
+   Schema:
+     Blacklist { emp_id }
+     Employee  { emp_id }
+
+   Constraint on Employee (negative polarity on Blacklist):
+     Not { body = MemberOf Blacklist (emp_id = Var "emp_id"); universe = "Employee" }
+
+   Blacklist has Negative polarity in this constraint, so inserting into Blacklist
+   must trigger a re-check of Employee tuples. *)
+let setup_blacklist_db storage =
+  let db = match Manipulation.Memory.create_database storage ~name:"hr" with
+    | Error _ -> assert false | Ok db -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Blacklist"
+      ~schema:(Schema.empty |> Schema.add "emp_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let db = match Manipulation.Memory.create_relation storage db ~name:"Employee"
+      ~schema:(Schema.empty |> Schema.add "emp_id" "natural") with
+    | Error _ -> assert false | Ok (db, _) -> db
+  in
+  let not_body =
+    Constraint.Not {
+      body = Constraint.MemberOf {
+        target = "Blacklist";
+        binding = Constraint.BindingMap.singleton "emp_id" (Constraint.Var "emp_id");
+      };
+      universe = "Employee";
+    }
+  in
+  match Manipulation.Memory.register_constraint storage db
+      ~constraint_name:"not_blacklisted"
+      ~relation_name:"Employee"
+      ~body:not_body with
+  | Error _ -> assert false | Ok db -> db
+
+let%test_unit "cascade INSERT: inserting into Blacklist violates constraint on existing Employee" =
+  (* Employee emp_id=5 already exists. Inserting Blacklist{emp_id=5} must be
+     rejected because the Employee constraint (NOT member of Blacklist) would
+     be violated for the existing emp_id=5 row. *)
+  with_storage (fun storage ->
+    let db = setup_blacklist_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 5)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Blacklist";
+                               attributes = [("emp_id", Drl.Ast.Int 5)] }) with
+    | Ok _ -> assert false  (* emp_id=5 exists in Employee — must be rejected *)
+    | Error _ -> ())
+
+let%test_unit "cascade INSERT: inserting into Blacklist with no matching Employee succeeds" =
+  (* Employee emp_id=99 does not exist. Inserting Blacklist{emp_id=5} must
+     succeed because no Employee tuple is affected. *)
+  with_storage (fun storage ->
+    let db = setup_blacklist_db storage in
+    let db = match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Employee";
+                               attributes = [("emp_id", Drl.Ast.Int 99)] }) with
+      | Error _ -> assert false | Ok db -> db
+    in
+    match Dml.Executor.Memory.execute storage db
+        (Dml.Ast.InsertTuple { relation = "Blacklist";
+                               attributes = [("emp_id", Drl.Ast.Int 5)] }) with
+    | Error _ -> assert false  (* emp_id=5 not in Employee — must succeed *)
+    | Ok _ -> ())
