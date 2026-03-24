@@ -8,6 +8,12 @@
 
 module RelationMap = Map.Make(String)
 
+type deferred_entry = {
+  relation_name : string;
+  constraint_name : string;
+  body : Constraint.t;
+}
+
 type t = {
   hash : Conventions.Hash.t;
   name : Conventions.Name.t;
@@ -16,6 +22,7 @@ type t = {
   domains : Domain.t RelationMap.t;
   history : Conventions.Hash.t list;
   timestamp : float;
+  deferred : deferred_entry list;
 }
 
 let empty ~name = {
@@ -26,6 +33,7 @@ let empty ~name = {
   domains = RelationMap.empty;
   history = [];
   timestamp = Unix.gettimeofday ();
+  deferred = [];
 }
 
 let compute_hash db =
@@ -33,15 +41,26 @@ let compute_hash db =
   | Some root -> root
   | None -> Conventions.Hash.hash_text db.name
 
+let max_history = 128
+
+let rec take_at_most n = function
+  | []      -> []
+  | _  when n = 0 -> []
+  | x :: xs -> x :: take_at_most (n - 1) xs
+
 let update_state db ~relations ~tree =
   let new_hash =
     match Merkle.root_hash tree with
     | Some root -> root
     | None -> Conventions.Hash.hash_text db.name
   in
-  let history = if db.hash = "" then db.history else db.hash :: db.history in
+  let history =
+    if db.hash = "" then db.history
+    else take_at_most max_history (db.hash :: db.history)
+  in
   { hash = new_hash; name = db.name; tree; relations;
-    domains = db.domains; history; timestamp = Unix.gettimeofday () }
+    domains = db.domains; history; timestamp = Unix.gettimeofday ();
+    deferred = db.deferred }
 
 let get_relation db name = RelationMap.find_opt name db.relations
 

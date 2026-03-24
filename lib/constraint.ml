@@ -243,25 +243,18 @@ and extend_tuple (tuple : Tuple.materialized)
     (variable : attr_name)
     (row : (attr_name * Conventions.AbstractValue.t) list)
     : Tuple.materialized =
-  (* TODO: Provenance for tuples at the relation level.
-     Attributes from quantifier rows are namespaced by the variable name
-     (e.g. "d.dept_id") to avoid silent overwriting of same-named attributes
-     from the base tuple or other quantifiers. Without namespacing, the
-     following FK constraint silently passes for an invalid insertion:
-       - Employee { emp_id=1, dept_id=99 } is being inserted.
-       - Constraint: Exists d in Department, MemberOf Department (dept_id = Var "dept_id").
-       - Department contains only { dept_id=1, dept_name="Engineering" }.
-       - extend_tuple overwrites dept_id=99 with dept_id=1 from the Department row.
-       - Var "dept_id" resolves to 1, check_membership succeeds trivially.
-       - The insertion is accepted even though dept_id=99 does not exist.
-     Namespacing is a syntactic encoding of provenance: the variable prefix
-     records which quantifier scope each value came from. A more principled
-     solution would attach provenance metadata directly to each attribute in
-     the relation, making the origin of every value explicit and queryable
-     without relying on name conventions. This would also eliminate the
-     ambiguity that arises when two quantifiers range over relations sharing
-     attribute names — currently resolved by namespacing, but ideally enforced
-     structurally by the type system or relation schema. *)
+  (* Quantifier attributes are namespaced by the variable name (for example "d.dept_id")
+     so they cannot silently overwrite same-named attributes from the base tuple
+     or from other quantifiers. Without such namespacing, a constraint like
+     Exists d in Department, MemberOf Department (dept_id = Var "dept_id")
+     would potentially overwrite the base tuple's dept_id with the Department row's dept_id,
+     causing Var "dept_id" to resolve to the wrong value and accept invalid inserts.
+     Constraints reference quantifier attributes as Var "variable.attr"
+     (for example Var "d.dept_id") and base tuple attributes as Var "attr" (like Var "dept_id").
+     This convention is the prerequisite for universal variable substitution
+     (see docs/incremental_constraint_checking.org, specifically Technique 2).
+     A better long-term solution would attach provenance metadata directly
+     to each attribute rather than relying on name conventions, but we don't have that yet. *)
   let extra_attrs =
     List.fold_left
       (fun acc (k, v) ->
@@ -286,6 +279,166 @@ let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
   match failures with
   | [] -> Ok true
   | fs -> Error (ConstraintFailures fs)
+
+(** Polarity analysis: determines whether each relation name appears in
+    a positive (must-exist) or negative (must-not-exist) position within
+    a constraint tree. Used for cascade checking: when a tuple is deleted,
+    only relations with Positive or Both polarity need re-validation. *)
+
+type polarity = Positive | Negative | Both
+
+let merge_polarity a b =
+  match a, b with
+  | Positive, Positive -> Positive
+  | Negative, Negative -> Negative
+  | _                  -> Both
+
+let flip_polarity = function
+  | Positive -> Negative
+  | Negative -> Positive
+  | Both     -> Both
+
+let merge_polarity_maps m1 m2 =
+  List.fold_left (fun acc (name, pol) ->
+    match List.assoc_opt name acc with
+    | None      -> (name, pol) :: acc
+    | Some prev ->
+      (name, merge_polarity prev pol)
+      :: List.filter (fun (n, _) -> n <> name) acc)
+    m1 m2
+
+let rec polarity_of ?(neg = false) (c : t) : (relation_name * polarity) list =
+  let pos p = if neg then flip_polarity p else p in
+  match c with
+  | MemberOf { target; _ } ->
+    [(target, pos Positive)]
+  | Not { body; _ } ->
+    polarity_of ~neg:(not neg) body
+  | And cs | Or cs ->
+    List.fold_left (fun acc c ->
+      merge_polarity_maps acc (polarity_of ~neg c)) [] cs
+  | Exists { quantifier; body; _ } ->
+    merge_polarity_maps
+      [(quantifier, pos Positive)]
+      (polarity_of ~neg body)
+  | Forall { quantifier; body; _ } ->
+    merge_polarity_maps
+      [(quantifier, pos Negative)]
+      (polarity_of ~neg body)
+
+(** Constraint timing: immediate (checked on every mutation) or deferred
+    (checked at transaction commit). *)
+type timing = Immediate | Deferred
+
+(** Given a constraint, a deleted relation name [dep_rel], and the deleted
+    tuple's attributes, return a filter: [(attr_name, value)] pairs that
+    narrow which constrained-relation tuples could be affected.
+
+    For a Var binding like [dept_id = Var "dept_id"] targeting [dep_rel],
+    the deleted tuple's [dept_id] value becomes the filter: only constrained
+    tuples with that exact [dept_id] need re-checking.
+
+    Returns [] if no narrowing is possible (Const bindings, unrelated rel). *)
+let rec focused_filter (c : t) (dep_rel : relation_name)
+    (deleted : (attr_name * Conventions.AbstractValue.t) list)
+  : (attr_name * Conventions.AbstractValue.t) list =
+  match c with
+  | MemberOf { target; binding } when target = dep_rel ->
+    BindingMap.fold (fun _target_attr expr acc ->
+      match expr with
+      | Var src_attr ->
+        (match List.assoc_opt src_attr deleted with
+         | Some v -> (src_attr, v) :: acc
+         | None   -> acc)
+      | Const _ -> acc)
+      binding []
+  | MemberOf _ -> []
+  | Not { body; _ } -> focused_filter body dep_rel deleted
+  | And cs | Or cs ->
+    List.concat_map (fun c -> focused_filter c dep_rel deleted) cs
+  | Exists { body; _ } | Forall { body; _ } ->
+    focused_filter body dep_rel deleted
+
+(** Extract Const binding values from a constraint for a given [dep_rel].
+
+    These are fixed-value preconditions: if the deleted tuple doesn't have
+    these exact values, the constraint cannot be violated by the deletion.
+    The cascade checker uses this to bail out early. *)
+let rec trigger_constants (c : t) (dep_rel : relation_name)
+  : (attr_name * Conventions.AbstractValue.t) list =
+  match c with
+  | MemberOf { target; binding } when target = dep_rel ->
+    BindingMap.fold (fun target_attr expr acc ->
+      match expr with
+      | Const v -> (target_attr, v) :: acc
+      | Var _   -> acc)
+      binding []
+  | MemberOf _ -> []
+  | Not { body; _ } -> trigger_constants body dep_rel
+  | And cs | Or cs ->
+    List.concat_map (fun c -> trigger_constants c dep_rel) cs
+  | Exists { body; _ } | Forall { body; _ } ->
+    trigger_constants body dep_rel
+
+(** Substitute transition tuple values into a constraint for universal variable
+    substitution. When [dep_rel] is being mutated (deleted from or inserted
+    into), any [Exists] or [Forall] that quantifies over [dep_rel] has its body
+    rewritten: occurrences of [Var "variable.attr"] are replaced by
+    [Const value] using the transition tuple's attribute values.
+
+    The convention that quantifier attributes are namespaced as [variable.attr]
+    (established by [extend_tuple]) means base tuple [Var] references like
+    [Var "dept_id"] are never substituted, only [Var "d.dept_id"] would match
+    a quantifier variable [d] over a deleted [Department] row.
+
+    This transforms the recheck from a full relation evaluation into a targeted
+    expression that tests only the rows affected by the transition tuple.
+    See Technique 2 in docs/incremental_constraint_checking.org. *)
+let substitute_transition
+    (c : t)
+    (dep_rel : relation_name)
+    (transition : (attr_name * Conventions.AbstractValue.t) list)
+  : t =
+  let apply_subs subs binding =
+    BindingMap.map (function
+      | Var v -> (match List.assoc_opt v subs with
+                  | Some value -> Const value
+                  | None -> Var v)
+      | Const _ as expr -> expr)
+      binding
+  in
+  let rec sub_body subs = function
+    | MemberOf { target; binding } ->
+      MemberOf { target; binding = apply_subs subs binding }
+    | Not { body; universe } -> Not { body = sub_body subs body; universe }
+    | And cs -> And (List.map (sub_body subs) cs)
+    | Or cs  -> Or  (List.map (sub_body subs) cs)
+    | Exists { variable; quantifier; body } ->
+      Exists { variable; quantifier; body = sub_body subs body }
+    | Forall { variable; quantifier; body } ->
+      Forall { variable; quantifier; body = sub_body subs body }
+  in
+  let rec go = function
+    | MemberOf _ as leaf -> leaf
+    | Not { body; universe } -> Not { body = go body; universe }
+    | And cs -> And (List.map go cs)
+    | Or cs  -> Or  (List.map go cs)
+    | Exists { variable; quantifier; body } ->
+      let body' =
+        if quantifier = dep_rel then
+          sub_body (List.map (fun (a, v) -> (variable ^ "." ^ a, v)) transition) body
+        else go body
+      in
+      Exists { variable; quantifier; body = body' }
+    | Forall { variable; quantifier; body } ->
+      let body' =
+        if quantifier = dep_rel then
+          sub_body (List.map (fun (a, v) -> (variable ^ "." ^ a, v)) transition) body
+        else go body
+      in
+      Forall { variable; quantifier; body = body' }
+  in
+  go c
 
 let make_comparison_binding ~left ~right =
   BindingMap.empty

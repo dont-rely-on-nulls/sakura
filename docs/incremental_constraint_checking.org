@@ -1,0 +1,261 @@
+#+title: Incremental Constraint Re-checking
+#+date: 2026-03-22
+
+* Background
+
+The naive implementation of assertion-style constraints evaluates the full
+constraint expression on every mutation of every relation it references. This
+is correct but expensive. The state of the art (Oracle's implementation, and
+the PostgreSQL community discussion that informed it) reduces this cost along
+two orthogonal axes:
+
+1. *When* to re-check — polarity analysis eliminates re-checks that cannot
+   possibly produce a violation.
+2. *What* to execute — universal variable substitution replaces the full
+   constraint with a focused incremental expression.
+
+Primary references:
+- Hendrik Decker, /Translating Advanced Integrity Checking Technology to SQL Database/
+- J. M. Nicolas, /Logic for Improving Integrity Checking/
+- Ceri & Widom, /Deriving Production Rules for Constraint Maintenance/
+- Lex de Hann & Toon Koppelaars, /Applied Mathematics for Database Professionals/,
+  ch. 11 (Oracle implementation)
+- PostgreSQL hackers thread (2023):
+  =https://www.postgresql.org/message-id/flat/FD62F1DE-4227-4D67-A1A5-C17350B8CAA1%40elusive.cx=
+
+* Current Sakura State
+
+Constraints are only evaluated inside =create_tuple= against the tuple
+being inserted. =retract_tuple= performs no constraint re-check. This
+means:
+
+- A DELETE from a relation referenced positively in a constraint (e.g. a
+  =Department= relation referenced by an Employee FK constraint) leaves
+  existing tuples in the constrained relation unchecked.
+- Constraints degrade silently into insert-time assertions rather than
+  invariants maintained across all mutations.
+
+Relevant code: =lib/manipulation.ml= (=create_tuple=, =retract_tuple=),
+=lib/constraint.ml= (=evaluate=, =evaluate_named=).
+
+The catalog already seeds =sakura:on= (insert/update/delete) and
+=sakura:timing= (immediate/deferred) relations, indicating that support for
+deferred and per-operation constraint scheduling was anticipated but not
+implemented.
+
+* Technique 1 — Polarity Analysis
+
+** Concept
+
+Every relation reference inside a constraint expression has a *polarity*: the
+set of mutation types that could create a new violation.
+
+| Polarity     | Meaning                                                   |
+|--------------+-----------------------------------------------------------|
+| ⊕ (positive) | A DELETE from this relation could violate the constraint  |
+| ⊖ (negative) | An INSERT into this relation could violate the constraint |
+| ⊕⊖ (both)    | Either mutation type could violate the constraint         |
+
+Polarity is determined by a tree walk toggling sign at each negating node
+(=NOT=, =EXCEPT=, =NOT EXISTS=). References under =OUTER JOIN= carry both
+polarities.
+
+** Mapping to Sakura's =Constraint.t= AST
+
+#+begin_src ocaml
+type t =
+  | MemberOf of { target : relation_name; binding : binding }
+  | Not of { body : t; universe : relation_name }
+  | And of t list | Or of t list
+  | Exists of { variable : attr_name; quantifier : relation_name; body : t }
+  | Forall of { variable : attr_name; quantifier : relation_name; body : t }
+#+end_src
+
+| Constructor             | Relation reference | Polarity | Re-check trigger                            |
+|-------------------------+--------------------+----------+---------------------------------------------|
+| =MemberOf { target }=   | =target=           | ⊕        | DELETE from =target=                        |
+| =Not { body }=          | refs in =body=     | flipped  | opposite of body                            |
+| =Not { universe }=      | =universe=         | ⊕        | (closed-world annotation; no runtime check) |
+| =Exists { quantifier }= | =quantifier=       | ⊕        | DELETE from =quantifier=                    |
+| =Exists { body }=       | refs in =body=     | as-is    | as normal                                   |
+| =Forall { quantifier }= | =quantifier=       | ⊖        | INSERT into =quantifier=                    |
+| =Forall { body }=       | refs in =body=     | flipped  | opposite of body                            |
+| =And= / =Or=            | refs in children   | as-is    | propagated                                  |
+
+Note: =Forall x in Q, P(x)= ≡ =NOT (EXISTS x in Q, NOT P(x))=, so =Q=
+acquires negative polarity (the outer =NOT= flips the positive polarity of
+=Exists=).
+
+** Worked Example (Sakura FK constraint)
+
+#+begin_src
+-- Constraint on Employee: dept_id must exist in Department
+Exists d in Department,
+  MemberOf Department (dept_id = Var "dept_id")
+#+end_src
+
+Polarity walk:
+- =Exists { quantifier = "Department" }= -> =Department= is ⊕ (positive)
+- =MemberOf { target = "Department" }= (inside body) -> also ⊕
+
+Re-check schedule derived:
+- INSERT into =Employee=: check immediately (current behavior).
+- DELETE from =Department=: re-check all =Employee= tuples whose =dept_id=
+  equals the deleted department's =dept_id= (currently NOT done!!!!).
+- INSERT into =Department=: no re-check needed.
+
+** Implementation Sketch
+
+A function =polarity : Constraint.t -> (relation_name * polarity_set) list=
+walks the AST accumulating per-relation polarity sets. The result is stored
+alongside each named constraint in the catalog (or derived on demand maybe?).
+
+When =retract_tuple= removes a tuple from relation =R=:
+- Look up all constraints (across all relations) that reference =R= with ⊕ polarity.
+- For each such constraint =C= on relation =S=: schedule a re-check of =C=
+  against existing tuples in =S= that could be affected (see Technique 2).
+
+When =create_tuple= inserts a tuple into =R=:
+- Current behavior: check constraints on =R= itself.
+- Additionally: look up all constraints referencing =R= with ⊖ polarity and
+  schedule re-checks of those (this covers =Forall= quantifiers).
+
+* Technique 2 — Universal Variable Substitution
+
+** Concept
+
+Universally quantified variables in a constraint (those bound by =Forall= or
+appearing under a =NOT EXISTS=) can be substituted with the concrete values of
+the triggering tuple. This transforms the re-check from a full table scan into
+a targeted query over the minimal set of affected rows.
+
+The "transition tuple" (the inserted or deleted tuple) supplies the concrete
+values (the NEW and OLD on PostgreSQL).
+
+** Mapping to Sakura
+
+In Sakura's =Forall { variable; quantifier; body }=:
+
+- =variable= is universally quantified over =quantifier=.
+- When a new row is inserted into =quantifier=, that specific row supplies the
+  binding for =variable=.
+- Instead of re-checking all tuples in the constrained relation =S=, substitute
+  =variable= with the transition tuple's values and check only tuples in =S=
+  that share the constrained attributes.
+
+For the Employee/Department FK example above, on DELETE of Department row
+={dept_id = 99}=:
+
+#+begin_src
+-- Full re-check (naive):
+For every employee E: Exists d in Department, dept_id = E.dept_id
+
+-- Incremental re-check (substituted):
+Exists E in Employee where E.dept_id = 99:
+  NOT (Exists d in Department where d.dept_id = E.dept_id)
+-- i.e., find employees orphaned by this specific deletion
+#+end_src
+
+This is analogous to the PostgreSQL example in the background section, where
+universally quantified =r.n= is substituted with the transition table value.
+
+** Relation to the =extend_tuple= Namespacing Fix
+
+The namespacing fix for =extend_tuple= (prefixing quantifier attributes as
+=variable.attr=) is a prerequisite for universal variable substitution to be
+correct: the substituted binding must be distinguishable from base tuple
+attributes.  Both fixes must land together.
+
+* Technique 3 — Constant Discovery
+
+Within a constraint expression, constants (=Const v= in =binding_expr=) can be
+used to filter the re-check trigger:
+
+- If =MemberOf { target; binding }= contains =Const v= bound to attribute =a=,
+  then a DELETE from =target= only needs to trigger a re-check if the deleted
+  row has =a = v=.
+
+Sakura's =binding_expr= already distinguishes =Var= from =Const=, so constant
+discovery is a straightforward fold over the binding map.
+
+* Deferred Constraints
+
+The =sakura:timing= catalog relation (seeded with =immediate= /
+=deferred=) anticipates support for deferred constraint checking
+(analogous to SQL's =DEFERRABLE INITIALLY DEFERRED=). Under deferred
+mode:
+
+- Violations discovered during a sequence of mutations are accumulated
+  rather than immediately raised.
+- The full constraint is re-evaluated at commit time (end of the
+  mutation sequence) using the final database state.
+
+In Sakura's functional/immutable model, a mutation sequence is a fold
+over =Database.t= values. Deferred checking would mean accumulating
+pending re-check obligations alongside the database value and
+evaluating them at the end of the fold, rather than at each
+=create_tuple= / =retract_tuple= call.
+
+* Concurrency Considerations
+
+Under =SERIALIZABLE= isolation, incremental re-checking (Technique 2)
+is sound because the focused predicates cover exactly the rows that
+could be newly violated. Under =READ COMMITTED= (weaker isolation),
+additional care is needed; the Oracle paper (Toon Koppelaars)
+describes how to handle this using the universal variable insight.
+Sakura is currently single-threaded (=bin/server.ml= has a TODO on
+this), so concurrency is deferred.
+
+* Coq Proof Opportunities
+
+See =doc/coq_roadmap.org= (Tier 2 — Certified Constraint Evaluator)
+for related proof targets. The following specific lemmas are unlocked
+by this technique:
+
+1. *Polarity soundness*:
+   #+begin_src coq
+   Theorem polarity_sound_positive :
+     forall c r, polarity c r = Positive ->
+     forall db tuple_deleted,
+       eval c db = true ->
+       eval c (db_without r tuple_deleted) = true \/
+       (exists t, affected_by c r tuple_deleted t).
+   #+end_src
+   Meaning: if a relation has positive polarity in a constraint, only
+   deletions from it can create violations, and only for specifically
+   affected tuples.
+
+2. *Universal substitution completeness*:
+   #+begin_src coq
+   Theorem substitution_complete :
+     forall c var q transition_tuple db,
+     universally_quantified c var q ->
+     eval (substitute c var transition_tuple) db = true ->
+     eval c (db_without q transition_tuple) = true.
+   #+end_src
+   Meaning: if the substituted re-check passes for the transition
+   tuple, the full constraint holds in the updated database.
+
+3. *Constant filter soundness*:
+   #+begin_src coq
+   Theorem constant_filter_sound :
+     forall c r a v deleted_tuple,
+     binding_constant c r a v ->
+     deleted_tuple.(a) <> v ->
+     eval c db = eval c (db_without r deleted_tuple).
+   #+end_src
+   Meaning: if the deleted tuple doesn't match the constant, no
+   re-check is needed.
+
+* Implementation Roadmap
+
+| Step | Work item                                                       | Depends on | Status   |
+|------+-----------------------------------------------------------------+------------+----------|
+|    1 | Implement =polarity= walker on =Constraint.t=                   | —          | Done     |
+|    2 | =extend_tuple= namespacing (=variable.attr= convention)         | —          | Done     |
+|    3 | Store polarity metadata in catalog (=sakura:constraint=)        | 1          | —        |
+|    4 | =retract_tuple= triggers polarity-driven re-checks              | 1, 2       | Done     |
+|    5 | Universal variable substitution for focused re-checks           | 2          | —        |
+|    6 | Constant discovery for trigger filtering                        | 1          | Done     |
+|    7 | Deferred constraint scheduling via =sakura:timing=              | 4          | —        |
+|    8 | Coq proofs for polarity soundness and substitution completeness | 1–5        | —        |
