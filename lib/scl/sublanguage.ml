@@ -13,12 +13,12 @@ module Make (Storage : Management.Physical.S) = struct
     | Error (Parser.ParseError s) -> Error (Exec.ParseError s)
 
   let execute storage db ast =
-    match Exec.execute storage db ast with
-    | Ok (Executor.Batch { cursor_id; rows; has_more }) ->
-      Ok (Sublanguage.Cursor { cursor_id; rows; has_more })
-    | Ok (Executor.Closed db) ->
-      Ok (Sublanguage.Transition (db, "cursor closed"))
-    | Error e -> Error e
+    Exec.execute storage db ast
+    |> Result.map (function
+      | Executor.Batch { cursor_id; rows; has_more } ->
+        Sublanguage.Cursor { cursor_id; rows; has_more }
+      | Executor.Closed db ->
+        Sublanguage.Transition (db, "cursor closed"))
 
   let sexp_of_error = Exec.sexp_of_error
 end
