@@ -104,12 +104,13 @@ let dbms_dispatch = Dispatch.create [
 
 let cursor_to_sexp storage db_name db_hash cursor_id rows has_more =
   let open Sexplib.Sexp in
-  let rows_sexp = List (List.map tuple_to_sexp rows) in
+  let row_sexps = List.map tuple_to_sexp rows in
+  let rows_sexp = List row_sexps in
   to_string @@ List [
     Atom "cursor";
     List [Atom "id";        Atom cursor_id];
     List [Atom "rows";      rows_sexp];
-    List [Atom "row_count"; Atom (string_of_int (List.length rows))];
+    List [Atom "row_count"; Atom (string_of_int (List.length row_sexps))];
     List [Atom "has_more";  Atom (string_of_bool has_more)];
     List [Atom "db_hash";   Atom (short_hash db_hash)];
     List [Atom "db_name";   Atom db_name];
