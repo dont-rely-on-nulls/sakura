@@ -44,15 +44,15 @@ module Make (Storage : Management.Physical.S) = struct
     : (exec_result, error) result =
     match stmt with
     | Ast.Begin { query; limit } ->
+      let* reg = get_sessions () in
       let* rel =
         DrlExec.execute storage db query
         |> Result.map_error (fun e -> QueryError e)
       in
       let gen = Alg.to_generator storage rel in
-      let* reg = get_sessions () in
       let query_str = Drl.Parser.to_string query in
       let cur = Session.register reg ~db ~query:query_str ~generator:gen in
-      let batch = match limit with Some n -> n | None -> default_batch in
+      let batch = Option.value ~default:default_batch limit in
       let* (rows, has_more) =
         Session.fetch reg ~id:cur.Session.id ~limit:batch
         |> Result.map_error (fun s -> CursorError s)
@@ -61,7 +61,7 @@ module Make (Storage : Management.Physical.S) = struct
 
     | Ast.Fetch { cursor; limit } ->
       let* reg = get_sessions () in
-      let batch = match limit with Some n -> n | None -> default_batch in
+      let batch = Option.value ~default:default_batch limit in
       let* (rows, has_more) =
         Session.fetch reg ~id:cursor ~limit:batch
         |> Result.map_error (fun s -> CursorError s)
