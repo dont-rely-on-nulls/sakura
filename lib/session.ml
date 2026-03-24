@@ -47,6 +47,11 @@ let fetch (reg : t) ~(id : string) ~(limit : int)
       else
         match gen (Some pos) with
         | Generator.Done    -> (List.rev acc, gen, pos, false)
+        (* Generator errors are treated as exhaustion: the partial batch is
+           returned with has_more = false and the cursor is auto-removed.
+           The caller receives no indication that the stream terminated
+           abnormally. When fetch gains a richer return type this arm
+           should surface the error message instead. *)
         | Generator.Error _ -> (List.rev acc, gen, pos, false)
         | Generator.Value (t, next) ->
           match t with
