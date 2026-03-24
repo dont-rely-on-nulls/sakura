@@ -30,8 +30,6 @@ module Make (Storage : Management.Physical.S) = struct
     | QueryError e  -> DrlExec.sexp_of_error e
     | CursorError s -> List [Atom "cursor-error"; Atom s]
 
-  let set_sessions s = sessions := Some s
-
   let get_sessions () =
     match !sessions with
     | Some s -> Ok s
