@@ -14,9 +14,16 @@
       (Turing-complete; breaks the termination guarantee of DRL)
     - ACL -> a functor restriction: narrows the admissible natural
       transformations based on authorization context *)
+type cursor_result = {
+  cursor_id : string;
+  rows : Tuple.materialized list;
+  has_more : bool;
+}
+
 type result =
   | Query of Relation.t
   | Transition of Management.Database.t * string
+  | Cursor of cursor_result
 
 module type S = sig
   type storage

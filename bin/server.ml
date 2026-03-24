@@ -99,7 +99,23 @@ let dbms_dispatch = Dispatch.create [
   (module Dml.Sublanguage.Memory : Dispatch.SubS);
   (module Icl.Sublanguage.Memory : Dispatch.SubS);
   (module Dcl.Sublanguage.Memory : Dispatch.SubS);
+  (module Scl.Sublanguage.Memory : Dispatch.SubS);
 ]
+
+let cursor_to_sexp storage db_name db_hash cursor_id rows has_more =
+  let open Sexplib.Sexp in
+  let row_sexps = List.map tuple_to_sexp rows in
+  let rows_sexp = List row_sexps in
+  to_string @@ List [
+    Atom "cursor";
+    List [Atom "id";        Atom cursor_id];
+    List [Atom "rows";      rows_sexp];
+    List [Atom "row_count"; Atom (string_of_int (List.length row_sexps))];
+    List [Atom "has_more";  Atom (string_of_bool has_more)];
+    List [Atom "db_hash";   Atom (short_hash db_hash)];
+    List [Atom "db_name";   Atom db_name];
+    List [Atom "branch";    Atom (get_branch storage)];
+  ]
 
 let execute_command storage db_ref cmd =
   let db   = !db_ref in
@@ -114,6 +130,8 @@ let execute_command storage db_ref cmd =
     db_ref := new_db;
     advance_head_branch storage new_db.Management.Database.hash;
     ok new_db.Management.Database.hash msg
+  | Ok (Sublanguage.Cursor { cursor_id; rows; has_more }) ->
+    cursor_to_sexp storage name h cursor_id rows has_more
   | Error e ->
     err h (Dispatch.sexp_of_dispatch_error e)
 
@@ -223,6 +241,9 @@ let warn_on_error fmt = function
   | Ok ()   -> ()
   | Error e -> Printf.eprintf fmt e
 
+let cursor_gc_max_age  = 300.0  (* 5 minutes *)
+let cursor_gc_interval = 60.0   (* run GC at most once per minute *)
+
 let () =
   match setup () with
   | Error msg -> failwith msg
@@ -231,12 +252,16 @@ let () =
       |> register_prelude_relations storage
       |> register_branch_relations storage
     in
+    (* Initialise cursor session registry for SCL *)
+    let session_reg = Session.create () in
+    Scl.Executor.set_sessions session_reg;
     (* Create default master branch in raw registry and set HEAD *)
     BranchOps.create storage ~name:"master" ~tip:db.Management.Database.hash
     |> warn_on_error "Warning: failed to create master branch: %s\n%!";
     BranchOps.checkout storage "master"
     |> warn_on_error "Warning: failed to checkout master: %s\n%!";
     let db_ref = ref db in
+    let last_gc = ref 0.0 in
     let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
     Unix.setsockopt sock Unix.SO_REUSEADDR true;
     Unix.setsockopt sock Unix.SO_REUSEPORT true;
@@ -247,5 +272,10 @@ let () =
     while true do
       let (client_fd, _addr) = Unix.accept sock in
       handle_client storage db_ref client_fd;
-      (try Unix.close client_fd with _ -> ())
+      (try Unix.close client_fd with _ -> ());
+      let now = Unix.gettimeofday () in
+      if now -. !last_gc >= cursor_gc_interval then begin
+        Session.gc session_reg ~max_age:cursor_gc_max_age;
+        last_gc := now
+      end
     done
