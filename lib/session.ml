@@ -40,7 +40,7 @@ let register (reg : t) ~(db : Management.Database.t) ~(query : string)
 let fetch (reg : t) ~(id : string) ~(limit : int)
     : (Tuple.materialized list * bool, string) result =
   match Hashtbl.find_opt reg.tbl id with
-  | None -> Error ("cursor not found: " ^ id)
+  | None -> Error ("The cursor with identifier `" ^ id ^ "` was not found in the session registry.")
   | Some cur ->
     let rec go gen pos acc count =
       if count >= limit then (List.rev acc, gen, pos, true)

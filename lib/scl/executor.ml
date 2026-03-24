@@ -33,7 +33,7 @@ module Make (Storage : Management.Physical.S) = struct
   let get_sessions () =
     match !sessions with
     | Some s -> Ok s
-    | None   -> Error (CursorError "session registry not initialised")
+    | None   -> Error (CursorError "The session registry has not been initialised; ensure `set_sessions` is called at startup.")
 
   let ( let* ) = Result.bind
 
