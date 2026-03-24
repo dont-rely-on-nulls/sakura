@@ -240,7 +240,8 @@ let warn_on_error fmt = function
   | Ok ()   -> ()
   | Error e -> Printf.eprintf fmt e
 
-let cursor_gc_max_age = 300.0  (* 5 minutes *)
+let cursor_gc_max_age  = 300.0  (* 5 minutes *)
+let cursor_gc_interval = 60.0   (* run GC at most once per minute *)
 
 let () =
   match setup () with
@@ -259,6 +260,7 @@ let () =
     BranchOps.checkout storage "master"
     |> warn_on_error "Warning: failed to checkout master: %s\n%!";
     let db_ref = ref db in
+    let last_gc = ref 0.0 in
     let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
     Unix.setsockopt sock Unix.SO_REUSEADDR true;
     Unix.setsockopt sock Unix.SO_REUSEPORT true;
@@ -270,5 +272,9 @@ let () =
       let (client_fd, _addr) = Unix.accept sock in
       handle_client storage db_ref client_fd;
       (try Unix.close client_fd with _ -> ());
-      Session.gc session_reg ~max_age:cursor_gc_max_age
+      let now = Unix.gettimeofday () in
+      if now -. !last_gc >= cursor_gc_interval then begin
+        Session.gc session_reg ~max_age:cursor_gc_max_age;
+        last_gc := now
+      end
     done
