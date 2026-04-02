@@ -8,6 +8,7 @@
   lwt
   lwt.unix
   lwt-exit
+  batteries
   ppx_protocol_conv_xml_light
   sexplib)
  (preprocess

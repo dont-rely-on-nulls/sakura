@@ -59,11 +59,29 @@ let build_membership_criteria _schema : (Tuple.t -> bool) =
   (* For now, accept all tuples. Full implementation would check domain membership. *)
   fun _ -> true
 
+(** Mutation direction for cascade constraint checking *)
+type mutation_kind = Insert | Delete
+
+(** Context for a single tuple mutation, used by cascade checking *)
+type mutation_context = {
+  dep_rel    : string;
+  transition : (string * Conventions.AbstractValue.t) list;
+  kind       : mutation_kind;
+}
+
 (** Functor to create manipulation operations with a storage backend *)
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
   type nonrec error = error
   let of_string_error s = StorageError s
+
+  let ( let* ) = Result.bind
+
+  let fold_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a) (xs : 'b list)
+      : ('a, error) Result.t =
+    BatList.fold_left (fun acc x ->
+      let* a = acc in f a x)
+      (Ok init) xs
 
   (* Constraint evaluation context *)
 
@@ -236,33 +254,30 @@ module Make (Storage : Management.Physical.S) = struct
     | Ok (Some bytes) ->
       let stored = Storable.Database.of_bytes bytes in
       let tree = List.fold_left (fun t h -> Merkle.insert h t) Merkle.empty stored.tree_keys in
-      (* Load each relation from storage *)
       let rec load_relations acc = function
         | [] -> Ok (List.rev acc)
         | (name, rel_hash) :: rest ->
-          match load_relation storage rel_hash with
-          | Error e -> Error e
-          | Ok None -> Error (StorageError ("Relation not found: " ^ name))
-          | Ok (Some rel) -> load_relations ((name, rel) :: acc) rest
+          let* rel_opt = load_relation storage rel_hash in
+          match rel_opt with
+          | None -> Error (StorageError ("Relation not found: " ^ name))
+          | Some rel -> load_relations ((name, rel) :: acc) rest
       in
-      match load_relations [] stored.relations with
-      | Error e -> Error e
-      | Ok relation_list ->
-        let relations = List.fold_left
-          (fun m (name, rel) -> Management.Database.RelationMap.add name rel m)
-          Management.Database.RelationMap.empty
-          relation_list
-        in
-        Ok (Some {
-          Management.Database.hash = db_hash;
-          name = stored.name;
-          tree;
-          relations;
-          domains = Management.Database.RelationMap.empty;
-          history = stored.history;
-          timestamp = stored.timestamp;
-          deferred = [];
-        })
+      let* relation_list = load_relations [] stored.relations in
+      let relations = List.fold_left
+        (fun m (name, rel) -> Management.Database.RelationMap.add name rel m)
+        Management.Database.RelationMap.empty
+        relation_list
+      in
+      Ok (Some {
+        Management.Database.hash = db_hash;
+        name = stored.name;
+        tree;
+        relations;
+        domains = Management.Database.RelationMap.empty;
+        history = stored.history;
+        timestamp = stored.timestamp;
+        deferred = [];
+      })
 
   (*   Relation Operations - forward declarations needed by catalog helpers
       *)
@@ -292,9 +307,8 @@ module Make (Storage : Management.Physical.S) = struct
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
-      match store_relation storage relation with
-      | Error e -> Error e
-      | Ok () -> Ok (new_db, relation)
+      let* () = store_relation storage relation in
+      Ok (new_db, relation)
 
   (* Tuple Operations - Storage Integrated *)
 
@@ -336,14 +350,12 @@ module Make (Storage : Management.Physical.S) = struct
             let attr : Attribute.materialized = { value } in
             load_attrs ((name, attr) :: acc) rest
       in
-      match load_attrs [] stored.attributes with
-      | Error e -> Error e
-      | Ok attrs ->
-        let attributes = List.fold_left
-            (fun m (k, v) -> Tuple.AttributeMap.add k v m)
-            Tuple.AttributeMap.empty attrs
-        in
-        Ok (Some { Tuple.relation = stored.relation; attributes })
+      let* attrs = load_attrs [] stored.attributes in
+      let attributes = List.fold_left
+          (fun m (k, v) -> Tuple.AttributeMap.add k v m)
+          Tuple.AttributeMap.empty attrs
+      in
+      Ok (Some { Tuple.relation = stored.relation; attributes })
 
   (** Load multiple tuples from storage *)
   let load_tuples
@@ -353,83 +365,94 @@ module Make (Storage : Management.Physical.S) = struct
     let rec load_all acc = function
       | [] -> Ok (List.rev acc)
       | hash :: rest ->
-        match load_tuple storage hash with
-        | Error e -> Error e
-        | Ok None -> Error (TupleNotFound hash)
-        | Ok (Some tuple) -> load_all (tuple :: acc) rest
+        let* tup_opt = load_tuple storage hash in
+        match tup_opt with
+        | None -> Error (TupleNotFound hash)
+        | Some tuple -> load_all (tuple :: acc) rest
     in
     load_all [] hashes
 
-  (** Scan every relation in [db] for constraints that reference [dep_rel] with
-      a polarity matched by [polarity_triggers], then re-evaluate those
-      constraints against the affected tuples in each constrained relation.
+  (* Cascade constraint helpers *)
 
-      [transition] is the inserted or deleted tuple's attributes.
-      [polarity_triggers] returns true for the polarities that the current
-      mutation type can violate:
-        - DELETE: Positive | Both
-        - INSERT: Negative | Both
+  let polarity_triggered_by kind pol =
+    match kind, pol with
+    | Insert, (Constraint.Negative | Constraint.Both) -> true
+    | Delete, (Constraint.Positive | Constraint.Both) -> true
+    | _ -> false
+
+  let cascade_violation_msg kind dep_rel cname constrained_name =
+    let verb = match kind with Insert -> "inserting into" | Delete -> "deleting from" in
+    Printf.sprintf "cascade: %s %s violates constraint %s on %s"
+      verb dep_rel cname constrained_name
+
+  let is_deferred (db : Management.Database.t) rel_name cname =
+    BatList.exists
+      (fun (d : Management.Database.deferred_entry) ->
+        d.constraint_name = cname && d.relation_name = rel_name)
+      db.deferred
+
+  let needs_recheck filter (tup : Tuple.materialized) =
+    filter = [] ||
+    List.for_all (fun (attr, fval) ->
+      match Tuple.AttributeMap.find_opt attr tup.attributes with
+      | Some a -> Stdlib.( = ) a.Attribute.value fval
+      | None   -> false)
+      filter
+
+  let recheck_one storage ctx mctx cname cbody constrained_name filter
+      (h : Conventions.Hash.t) : unit result =
+    match load_tuple storage h with
+    | Error _ | Ok None -> Ok ()
+    | Ok (Some tup) ->
+      if not (needs_recheck filter tup) then Ok ()
+      else
+        let cbody' =
+          Constraint.substitute_transition cbody mctx.dep_rel mctx.transition
+        in
+        match Constraint.evaluate_first_failure ctx tup [(cname, cbody')] with
+        | Ok true -> Ok ()
+        | Ok false | Error _ ->
+          Error (ConstraintViolation
+            (cascade_violation_msg mctx.kind mctx.dep_rel cname constrained_name))
+
+  let check_one_constraint storage ctx db mctx constrained_name constrained_rel
+      (cname, cbody) : unit result =
+    if is_deferred db constrained_name cname then Ok ()
+    else
+      let pols = Constraint.polarity_of cbody in
+      match Constraint.PolarityMap.find_opt mctx.dep_rel pols with
+      | None -> Ok ()
+      | Some pol when not (polarity_triggered_by mctx.kind pol) -> Ok ()
+      | Some _ ->
+        let filter = Constraint.focused_filter cbody mctx.dep_rel mctx.transition in
+        let hashes = match constrained_rel.Relation.tree with
+          | None -> [] | Some t -> Merkle.keys t
+        in
+        fold_result
+          (fun () h -> recheck_one storage ctx mctx cname cbody constrained_name filter h)
+          () hashes
+
+  (** Scan every relation in [db] for constraints that reference [mctx.dep_rel]
+      with a polarity matched by the mutation kind, then re-evaluate those
+      constraints against the affected tuples in each constrained relation.
 
       Returns [Ok ()] when all cascade checks pass. *)
   let check_cascade_constraints
       (storage : storage)
       (db : Management.Database.t)
-      ~(dep_rel : string)
-      ~(transition : (string * Conventions.AbstractValue.t) list)
-      ~(polarity_triggers : Constraint.polarity -> bool)
-      ~(violation_msg : string -> string -> string)
+      (mctx : mutation_context)
     : unit result =
     let ctx = build_eval_context storage db in
     Management.Database.RelationMap.fold
       (fun constrained_name constrained_rel acc ->
-        match acc with Error _ -> acc | Ok () ->
-        let is_deferred cname =
-          List.exists (fun (d : Management.Database.deferred_entry) ->
-            d.constraint_name = cname && d.relation_name = constrained_name)
-            db.deferred
-        in
+        let* () = acc in
         match constrained_rel.Relation.constraints with
         | None | Some [] -> Ok ()
-        | Some named_constraints ->
-          List.fold_left (fun acc (cname, cbody) ->
-            match acc with Error _ -> acc | Ok () ->
-            if is_deferred cname then Ok ()
-            else
-              let pols = Constraint.polarity_of cbody in
-              match List.assoc_opt dep_rel pols with
-              | None -> Ok ()
-              | Some pol when not (polarity_triggers pol) -> Ok ()
-              | Some _ ->
-                let filter = Constraint.focused_filter cbody dep_rel transition in
-                let hashes = match constrained_rel.tree with
-                  | None -> [] | Some t -> Merkle.keys t
-                in
-                let rec check_tuples = function
-                  | [] -> Ok ()
-                  | h :: rest ->
-                    (match load_tuple storage h with
-                     | Error _ | Ok None -> check_tuples rest
-                     | Ok (Some tup) ->
-                       let needs_recheck =
-                         filter = [] ||
-                         List.for_all (fun (attr, fval) ->
-                           match Tuple.AttributeMap.find_opt attr tup.attributes with
-                           | Some a -> Stdlib.(=) a.Attribute.value fval
-                           | None -> false) filter
-                       in
-                       if not needs_recheck then check_tuples rest
-                       else
-                         let cbody' =
-                           Constraint.substitute_transition cbody dep_rel transition
-                         in
-                         match Constraint.evaluate_named ctx tup [(cname, cbody')] with
-                         | Ok true -> check_tuples rest
-                         | Ok false | Error _ ->
-                           Error (ConstraintViolation
-                             (violation_msg cname constrained_name)))
-                in
-                check_tuples hashes)
-            (Ok ()) named_constraints)
+        | Some named ->
+          fold_result
+            (fun () nc ->
+              check_one_constraint storage ctx db mctx constrained_name constrained_rel nc)
+            () named)
       db.relations (Ok ())
 
   (** Insert a tuple into a relation, storing it in the backend *)
@@ -448,101 +471,69 @@ module Make (Storage : Management.Physical.S) = struct
         Error (ConstraintViolation "Tuple does not satisfy membership criteria")
       else
         (* Check constraints *)
-        let constraint_ok =
+        let constraint_result =
           match relation.constraints with
           | None | Some [] -> Ok true
           | Some named_constraints ->
             let ctx = build_eval_context storage db in
             Constraint.evaluate_named ctx tuple named_constraints
         in
-        (match constraint_ok with
-         | Error (Constraint.ConstraintFailures failures) ->
-           let msg =
-             String.concat "; "
-               (List.map (fun (name, _) -> "constraint " ^ name ^ " violated")
-                  failures)
-           in
-           Error (ConstraintViolation msg)
-         | Error _ -> Error (ConstraintViolation "Constraint evaluation failed")
-         | Ok false -> Error (ConstraintViolation "Constraint not satisfied")
-         | Ok true ->
-        (* Compute tuple hash *)
+        let* _ =
+          match constraint_result with
+          | Error (Constraint.ConstraintFailures failures) ->
+            let msg =
+              String.concat "; "
+                (List.map (fun (n, _) -> "constraint " ^ n ^ " violated") failures)
+            in
+            Error (ConstraintViolation msg)
+          | Error _ -> Error (ConstraintViolation "Constraint evaluation failed")
+          | Ok false -> Error (ConstraintViolation "Constraint not satisfied")
+          | Ok true -> Ok true
+        in
         let tuple_hash = Hashing.hash_tuple tuple in
-
-        (* Get current tree or create empty one *)
         let current_tree = match relation.tree with
           | Some t -> t
           | None -> Merkle.empty
         in
-
-        (* Check for duplicate *)
         if Merkle.member tuple_hash current_tree then
           Error (DuplicateTuple tuple_hash)
         else
-          (* Store attribute values in storage *)
-          match store_attributes storage tuple with
-          | Error e -> Error e
-          | Ok attr_hashes ->
-            (* Create stored tuple representation *)
-            let stored_tuple : Storable.Tuple.t = {
-              relation = tuple.relation;
-              attributes = attr_hashes;
-            } in
-
-            (* Store the tuple itself *)
-            let tuple_bytes = Storable.Tuple.to_bytes stored_tuple in
-            (match Storage.store_raw storage tuple_hash tuple_bytes with
-             | Error _ -> Error (StorageError "Failed to store tuple")
-             | Ok () ->
-               (* Insert tuple hash into relation's merkle tree *)
-               let new_tree = Merkle.insert tuple_hash current_tree in
-
-               (* Compute new relation hash *)
-               let new_relation_hash = Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree in
-
-               (* Update cardinality *)
-               let new_cardinality = match relation.cardinality with
-                 | Conventions.Cardinality.Finite n -> Conventions.Cardinality.Finite (n + 1)
-                 | other -> other
-               in
-
-               (* Create updated relation *)
-               let new_relation = { relation with
-                 hash = Some new_relation_hash;
-                 tree = Some new_tree;
-                 cardinality = new_cardinality;
-               } in
-
-               (* Update database with the new relation *)
-               let new_db = Management.Database.update_relation db ~relation:new_relation in
-
-               (* Cascade constraint check (INSERT) *)
-               let inserted_attrs =
-                 Tuple.AttributeMap.bindings tuple.attributes
-                 |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
-               in
-               let cascade_ok =
-                 check_cascade_constraints storage new_db
-                   ~dep_rel:name
-                   ~transition:inserted_attrs
-                   ~polarity_triggers:(function
-                     | Constraint.Negative | Constraint.Both -> true
-                     | Constraint.Positive -> false)
-                   ~violation_msg:(fun cname crel ->
-                     Printf.sprintf
-                       "cascade: inserting into %s violates constraint %s on %s"
-                       name cname crel)
-               in
-               match cascade_ok with
-               | Error e -> Error e
-               | Ok () ->
-               (* Persist relation and database state *)
-               match store_relation storage new_relation with
-               | Error e -> Error e
-               | Ok () ->
-                 match store_database storage new_db with
-                 | Error e -> Error e
-                 | Ok () -> Ok (new_db, new_relation, tuple_hash)))
+          let* attr_hashes = store_attributes storage tuple in
+          let stored_tuple : Storable.Tuple.t = {
+            relation = tuple.relation;
+            attributes = attr_hashes;
+          } in
+          let tuple_bytes = Storable.Tuple.to_bytes stored_tuple in
+          let* () =
+            match Storage.store_raw storage tuple_hash tuple_bytes with
+            | Error _ -> Error (StorageError "Failed to store tuple")
+            | Ok () -> Ok ()
+          in
+          let new_tree = Merkle.insert tuple_hash current_tree in
+          let new_relation_hash =
+            Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree
+          in
+          let new_cardinality = match relation.cardinality with
+            | Conventions.Cardinality.Finite n -> Conventions.Cardinality.Finite (n + 1)
+            | other -> other
+          in
+          let new_relation = { relation with
+            hash = Some new_relation_hash;
+            tree = Some new_tree;
+            cardinality = new_cardinality;
+          } in
+          let new_db = Management.Database.update_relation db ~relation:new_relation in
+          let inserted_attrs =
+            Tuple.AttributeMap.bindings tuple.attributes
+            |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
+          in
+          let* () =
+            check_cascade_constraints storage new_db
+              { dep_rel = name; transition = inserted_attrs; kind = Insert }
+          in
+          let* () = store_relation storage new_relation in
+          let* () = store_database storage new_db in
+          Ok (new_db, new_relation, tuple_hash)
 
   (** Insert multiple tuples into a relation *)
   let create_tuples
@@ -554,10 +545,8 @@ module Make (Storage : Management.Physical.S) = struct
     let rec insert_all db rel hashes = function
       | [] -> Ok (db, rel, List.rev hashes)
       | tuple :: rest ->
-        match create_tuple storage db rel tuple with
-        | Error e -> Error e
-        | Ok (new_db, new_rel, hash) ->
-          insert_all new_db new_rel (hash :: hashes) rest
+        let* (new_db, new_rel, hash) = create_tuple storage db rel tuple in
+        insert_all new_db new_rel (hash :: hashes) rest
     in
     insert_all db relation [] tuples
 
@@ -582,56 +571,34 @@ module Make (Storage : Management.Physical.S) = struct
           (* Note: We don't delete from storage - content-addressed storage is append-only.
              The tuple data remains for historical queries / garbage collection later. *)
           let new_tree = Merkle.delete tuple_hash current_tree in
-
-          (* Compute new relation hash *)
-          let new_relation_hash = Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree in
-
-          (* Update cardinality *)
+          let new_relation_hash =
+            Hashing.hash_relation ~name ~schema:relation.schema ~tree:new_tree
+          in
           let new_cardinality = match relation.cardinality with
             | Conventions.Cardinality.Finite n when n > 0 ->
               Conventions.Cardinality.Finite (n - 1)
             | other -> other
           in
-
-          (* Create updated relation *)
           let new_relation = { relation with
             hash = Some new_relation_hash;
             tree = Some new_tree;
             cardinality = new_cardinality;
           } in
-
-          (* Update database *)
           let new_db = Management.Database.update_relation db ~relation:new_relation in
-
-          (* Cascade constraint check (DELETE) *)
-          let cascade_ok =
+          let* () =
             match load_tuple storage tuple_hash with
-            | Error _ | Ok None -> Ok ()  (* can't load the deleted tuple, so just skip *)
+            | Error _ | Ok None -> Ok ()
             | Ok (Some deleted_tuple) ->
               let deleted_attrs =
                 Tuple.AttributeMap.bindings deleted_tuple.attributes
                 |> List.map (fun (k, attr) -> (k, attr.Attribute.value))
               in
               check_cascade_constraints storage new_db
-                ~dep_rel:name
-                ~transition:deleted_attrs
-                ~polarity_triggers:(function
-                  | Constraint.Positive | Constraint.Both -> true
-                  | Constraint.Negative -> false)
-                ~violation_msg:(fun cname crel ->
-                  Printf.sprintf "cascade: deleting from %s violates constraint %s on %s"
-                    name cname crel)
+                { dep_rel = name; transition = deleted_attrs; kind = Delete }
           in
-          (match cascade_ok with
-           | Error e -> Error e
-           | Ok () ->
-          (* Persist relation and database state *)
-          match store_relation storage new_relation with
-          | Error e -> Error e
-          | Ok () ->
-            match store_database storage new_db with
-            | Error e -> Error e
-            | Ok () -> Ok (new_db, new_relation))
+          let* () = store_relation storage new_relation in
+          let* () = store_database storage new_db in
+          Ok (new_db, new_relation)
 
   (*
      System Catalog Maintenance
@@ -652,20 +619,17 @@ module Make (Storage : Management.Physical.S) = struct
       | None -> Ok db  (* catalog not yet initialized *)
       | Some rel_cat ->
         let rel_tuple = Prelude.Catalog.build_relation_tuple relation.name in
-        match create_tuple storage db rel_cat rel_tuple with
-        | Error e -> Error e
-        | Ok (db, _, _) ->
-          (* Insert into sakura:attribute for each schema entry *)
-          match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
-          | None -> Ok db
-          | Some attr_cat ->
-            let attr_tuples =
-              Prelude.Catalog.build_attribute_tuples
-                ~relation_name:relation.name relation.schema
-            in
-            match create_tuples storage db attr_cat attr_tuples with
-            | Error e -> Error e
-            | Ok (db, _, _) -> Ok db
+        let* (db, _, _) = create_tuple storage db rel_cat rel_tuple in
+        (* Insert into sakura:attribute for each schema entry *)
+        match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
+        | None -> Ok db
+        | Some attr_cat ->
+          let attr_tuples =
+            Prelude.Catalog.build_attribute_tuples
+              ~relation_name:relation.name relation.schema
+          in
+          let* (db, _, _) = create_tuples storage db attr_cat attr_tuples in
+          Ok db
 
   (** Update catalog when a user relation is retracted.
       Skipped if the relation being retracted is itself a catalog relation. *)
@@ -677,8 +641,7 @@ module Make (Storage : Management.Physical.S) = struct
     if Prelude.Catalog.is_catalog_relation relation.name then
       Ok db
     else
-      (* Remove the tuple from sakura:relation *)
-      let step1 db =
+      let* db =
         match Management.Database.get_relation db Prelude.Catalog.relation_rel_name with
         | None -> Ok db
         | Some rel_cat ->
@@ -687,36 +650,28 @@ module Make (Storage : Management.Physical.S) = struct
           in
           let tree = match rel_cat.tree with Some t -> t | None -> Merkle.empty in
           if Merkle.member rel_tuple_hash tree then
-            match retract_tuple storage db rel_cat ~tuple_hash:rel_tuple_hash with
-            | Error e -> Error e
-            | Ok (new_db, _) -> Ok new_db
+            let* (new_db, _) = retract_tuple storage db rel_cat ~tuple_hash:rel_tuple_hash in
+            Ok new_db
           else
             Ok db
       in
-      match step1 db with
-      | Error e -> Error e
-      | Ok db ->
-        (* Remove attribute tuples for this relation from sakura:attribute *)
-        let attr_tuples =
-          Prelude.Catalog.build_attribute_tuples
-            ~relation_name:relation.name relation.schema
-        in
-        let rec remove_attrs db = function
-          | [] -> Ok db
-          | tup :: rest ->
-            let tup_hash = Hashing.hash_tuple tup in
-            match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
-            | None -> Ok db
-            | Some attr_cat ->
-              let tree = match attr_cat.tree with Some t -> t | None -> Merkle.empty in
-              if Merkle.member tup_hash tree then
-                match retract_tuple storage db attr_cat ~tuple_hash:tup_hash with
-                | Error e -> Error e
-                | Ok (new_db, _) -> remove_attrs new_db rest
-              else
-                remove_attrs db rest
-        in
-        remove_attrs db attr_tuples
+      (* Remove attribute tuples for this relation from sakura:attribute *)
+      let attr_tuples =
+        Prelude.Catalog.build_attribute_tuples
+          ~relation_name:relation.name relation.schema
+      in
+      fold_result (fun db tup ->
+        let tup_hash = Hashing.hash_tuple tup in
+        match Management.Database.get_relation db Prelude.Catalog.attribute_rel_name with
+        | None -> Ok db
+        | Some attr_cat ->
+          let tree = match attr_cat.tree with Some t -> t | None -> Merkle.empty in
+          if Merkle.member tup_hash tree then
+            let* (new_db, _) = retract_tuple storage db attr_cat ~tuple_hash:tup_hash in
+            Ok new_db
+          else
+            Ok db)
+        db attr_tuples
 
   (** Bootstrap the 6 system catalog relations into a fresh database.
       Called only from [create_database]; suppresses recursive catalog updates. *)
@@ -724,72 +679,46 @@ module Make (Storage : Management.Physical.S) = struct
       (storage : storage)
       (db : Management.Database.t)
     : (Management.Database.t, error) Result.t =
-    (* Step 1: Create all 6 catalog relations bypassing catalog maintenance *)
-    let rec create_all db = function
-      | [] -> Ok db
-      | (name, schema) :: rest ->
-        match create_relation_raw storage db ~name ~schema with
-        | Error e -> Error e
-        | Ok (new_db, _) -> create_all new_db rest
+    let* db =
+      fold_result (fun db (name, schema) ->
+        let* (new_db, _) = create_relation_raw storage db ~name ~schema in
+        Ok new_db)
+        db Prelude.Catalog.catalog_definitions
     in
-    match create_all db Prelude.Catalog.catalog_definitions with
-    | Error e -> Error e
-    | Ok db ->
-      (* Step 5: Seed sakura:relation with one tuple per catalog relation name *)
-      let rel_cat =
-        Option.get (Management.Database.get_relation db Prelude.Catalog.relation_rel_name)
-      in
-      let rel_tuples =
-        List.map Prelude.Catalog.build_relation_tuple Prelude.Catalog.catalog_relation_names
-      in
-      match create_tuples storage db rel_cat rel_tuples with
-      | Error e -> Error e
-      | Ok (db, _, _) ->
-        (* Step 6: Seed sakura:attribute with attribute tuples for each catalog relation *)
-        let all_attr_tuples =
-          List.concat_map (fun (name, schema) ->
-            Prelude.Catalog.build_attribute_tuples ~relation_name:name schema
-          ) Prelude.Catalog.catalog_definitions
-        in
-        let attr_cat =
-          Option.get (Management.Database.get_relation db Prelude.Catalog.attribute_rel_name)
-        in
-        match create_tuples storage db attr_cat all_attr_tuples with
-        | Error e -> Error e
-        | Ok (db, _, _) ->
-          (* Step 7: Seed sakura:on with insert, update, delete *)
-          let on_cat =
-            Option.get (Management.Database.get_relation db Prelude.Catalog.on_rel_name)
-          in
-          let on_tuples =
-            List.map Prelude.Catalog.build_on_tuple ["insert"; "update"; "delete"]
-          in
-          match create_tuples storage db on_cat on_tuples with
-          | Error e -> Error e
-          | Ok (db, _, _) ->
-            (* Step 8: Seed sakura:timing with immediate, deferred *)
-            let timing_cat =
-              Option.get (Management.Database.get_relation db Prelude.Catalog.timing_rel_name)
-            in
-            let timing_tuples =
-              List.map Prelude.Catalog.build_timing_tuple ["immediate"; "deferred"]
-            in
-            match create_tuples storage db timing_cat timing_tuples with
-            | Error e -> Error e
-            | Ok (db, _, _) ->
-              (* Step 9: Seed sakura:domain with the 4 prelude domain names *)
-              let dom_cat =
-                Option.get (Management.Database.get_relation db Prelude.Catalog.domain_rel_name)
-              in
-              let dom_tuples =
-                List.map Prelude.Catalog.build_domain_tuple
-                  ["integer"; "natural"; "rational"; "string"]
-              in
-              match create_tuples storage db dom_cat dom_tuples with
-              | Error e -> Error e
-              | Ok (db, _, _) -> Ok db
+    let get rel_name =
+      Option.get (Management.Database.get_relation db rel_name)
+    in
+    let* (db, _, _) =
+      create_tuples storage db (get Prelude.Catalog.relation_rel_name)
+        (List.map Prelude.Catalog.build_relation_tuple
+           Prelude.Catalog.catalog_relation_names)
+    in
+    let* (db, _, _) =
+      create_tuples storage db
+        (Option.get (Management.Database.get_relation db Prelude.Catalog.attribute_rel_name))
+        (List.concat_map (fun (name, schema) ->
+           Prelude.Catalog.build_attribute_tuples ~relation_name:name schema)
+           Prelude.Catalog.catalog_definitions)
+    in
+    let* (db, _, _) =
+      create_tuples storage db
+        (Option.get (Management.Database.get_relation db Prelude.Catalog.on_rel_name))
+        (List.map Prelude.Catalog.build_on_tuple ["insert"; "update"; "delete"])
+    in
+    let* (db, _, _) =
+      create_tuples storage db
+        (Option.get (Management.Database.get_relation db Prelude.Catalog.timing_rel_name))
+        (List.map Prelude.Catalog.build_timing_tuple ["immediate"; "deferred"])
+    in
+    let* (db, _, _) =
+      create_tuples storage db
+        (Option.get (Management.Database.get_relation db Prelude.Catalog.domain_rel_name))
+        (List.map Prelude.Catalog.build_domain_tuple
+           ["integer"; "natural"; "rational"; "string"])
+    in
+    Ok db
 
-  (* 
+  (*
      Database Operations
       *)
 
@@ -806,9 +735,8 @@ module Make (Storage : Management.Physical.S) = struct
     | None -> Ok db  (* catalog not yet initialized *)
     | Some dom_cat ->
       let dom_tuple = Prelude.Catalog.build_domain_tuple domain.name in
-      match create_tuple storage db dom_cat dom_tuple with
-      | Error e -> Error e
-      | Ok (new_db, _, _) -> Ok new_db
+      let* (new_db, _, _) = create_tuple storage db dom_cat dom_tuple in
+      Ok new_db
 
   (** Create a new database pre-seeded with the standard prelude domains and
       the system catalog relations. *)
@@ -828,7 +756,7 @@ module Make (Storage : Management.Physical.S) = struct
   let database_history (db : Management.Database.t) : Conventions.Hash.t list =
     db.history
 
-  (* 
+  (*
      Relation Operations
       *)
 
@@ -858,17 +786,10 @@ module Make (Storage : Management.Physical.S) = struct
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
-      match store_relation storage relation with
-      | Error e -> Error e
-      | Ok () ->
-        (* Update catalog (handles its own store_database calls internally) *)
-        match update_catalog_on_create storage new_db relation with
-        | Error e -> Error e
-        | Ok final_db ->
-          (* Persist final database state *)
-          match store_database storage final_db with
-          | Error e -> Error e
-          | Ok () -> Ok (final_db, relation)
+      let* () = store_relation storage relation in
+      let* final_db = update_catalog_on_create storage new_db relation in
+      let* () = store_database storage final_db in
+      Ok (final_db, relation)
 
   (** Create an immutable/generator-based relation *)
   let create_immutable_relation
@@ -897,16 +818,10 @@ module Make (Storage : Management.Physical.S) = struct
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
-      (* Persist relation and database state *)
-      match store_relation storage relation with
-      | Error e -> Error e
-      | Ok () ->
-        match update_catalog_on_create storage new_db relation with
-        | Error e -> Error e
-        | Ok final_db ->
-          match store_database storage final_db with
-          | Error e -> Error e
-          | Ok () -> Ok (final_db, relation)
+      let* () = store_relation storage relation in
+      let* final_db = update_catalog_on_create storage new_db relation in
+      let* () = store_database storage final_db in
+      Ok (final_db, relation)
 
   (** Remove a relation from the database.
       Also removes its entries from [sakura:relation] and [sakura:attribute]. *)
@@ -921,12 +836,9 @@ module Make (Storage : Management.Physical.S) = struct
       let relation = Option.get (Management.Database.get_relation db name) in
       let new_db = Management.Database.remove_relation db ~name in
       (* Update catalog on the db state that no longer contains the retracted relation *)
-      match update_catalog_on_retract storage new_db relation with
-      | Error e -> Error e
-      | Ok final_db ->
-        match store_database storage final_db with
-        | Error e -> Error e
-        | Ok () -> Ok final_db
+      let* final_db = update_catalog_on_retract storage new_db relation in
+      let* () = store_database storage final_db in
+      Ok final_db
 
   (** Clear all tuples from a relation (truncate) *)
   let clear_relation
@@ -946,13 +858,9 @@ module Make (Storage : Management.Physical.S) = struct
         cardinality = Conventions.Cardinality.Finite 0;
       } in
       let new_db = Management.Database.update_relation db ~relation:new_relation in
-      (* Persist relation and database state *)
-      match store_relation storage new_relation with
-      | Error e -> Error e
-      | Ok () ->
-        match store_database storage new_db with
-        | Error e -> Error e
-        | Ok () -> Ok (new_db, new_relation)
+      let* () = store_relation storage new_relation in
+      let* () = store_database storage new_db in
+      Ok (new_db, new_relation)
 
   (** Attach constraints to an existing relation.
       Rebuilds membership_criteria to include constraint checking,
@@ -993,12 +901,9 @@ module Make (Storage : Management.Physical.S) = struct
       let new_db =
         Management.Database.update_relation db ~relation:new_relation
       in
-      (match store_relation storage new_relation with
-       | Error e -> Error e
-       | Ok () ->
-         (match store_database storage new_db with
-          | Error e -> Error e
-          | Ok () -> Ok (new_db, new_relation)))
+      let* () = store_relation storage new_relation in
+      let* () = store_database storage new_db in
+      Ok (new_db, new_relation)
 
   (** Register a named constraint on a relation.
       Attaches the constraint body to the relation AND records it in
@@ -1010,27 +915,18 @@ module Make (Storage : Management.Physical.S) = struct
       ~(relation_name : string)
       ~(body : Constraint.t)
     : (Management.Database.t, error) Result.t =
-    (* Attach constraint to the relation *)
-    (match
-       update_relation_constraints storage db ~relation_name
-         ~constraints:[ (constraint_name, body) ]
-     with
-     | Error e -> Error e
-     | Ok (db, _) ->
-       (* Record in system catalog *)
-       (match
-          Management.Database.get_relation db
-            Prelude.Catalog.constraint_rel_name
-        with
-        | None -> Ok db
-        | Some con_cat ->
-          let con_tuple =
-            Prelude.Catalog.build_constraint_tuple constraint_name
-              relation_name
-          in
-          (match create_tuple storage db con_cat con_tuple with
-           | Error e -> Error e
-           | Ok (new_db, _, _) -> Ok new_db)))
+    let* (db, _) =
+      update_relation_constraints storage db ~relation_name
+        ~constraints:[ (constraint_name, body) ]
+    in
+    match Management.Database.get_relation db Prelude.Catalog.constraint_rel_name with
+    | None -> Ok db
+    | Some con_cat ->
+      let con_tuple =
+        Prelude.Catalog.build_constraint_tuple constraint_name relation_name
+      in
+      let* (new_db, _, _) = create_tuple storage db con_cat con_tuple in
+      Ok new_db
 
   (*Query Operations *)
 
@@ -1068,17 +964,17 @@ module Make (Storage : Management.Physical.S) = struct
       ~(body : Constraint.t)
       ~(timing : Constraint.timing)
     : (Management.Database.t, error) Result.t =
-    match update_relation_constraints storage db ~relation_name
-            ~constraints:[(constraint_name, body)] with
-    | Error e -> Error e
-    | Ok (db, _) ->
-      match timing with
-      | Constraint.Immediate -> Ok db
-      | Constraint.Deferred ->
-        let entry : Management.Database.deferred_entry = {
-          relation_name; constraint_name; body;
-        } in
-        Ok { db with deferred = entry :: db.deferred }
+    let* (db, _) =
+      update_relation_constraints storage db ~relation_name
+        ~constraints:[(constraint_name, body)]
+    in
+    match timing with
+    | Constraint.Immediate -> Ok db
+    | Constraint.Deferred ->
+      let entry : Management.Database.deferred_entry = {
+        relation_name; constraint_name; body;
+      } in
+      Ok { db with deferred = entry :: db.deferred }
 
   (** Check all deferred constraints against the current database state.
       Returns [Ok ()] if all pass, or an error on the first violation. *)
@@ -1086,31 +982,27 @@ module Make (Storage : Management.Physical.S) = struct
       (storage : storage)
       (db : Management.Database.t)
     : (unit, error) Result.t =
-    List.fold_left (fun acc (entry : Management.Database.deferred_entry) ->
-      match acc with Error _ -> acc | Ok () ->
+    let ctx = build_eval_context storage db in
+    fold_result (fun () (entry : Management.Database.deferred_entry) ->
       match Management.Database.get_relation db entry.relation_name with
-      | None -> Ok ()  (* relation gone, nothing to check *)
+      | None -> Ok ()
       | Some rel ->
-        let ctx = build_eval_context storage db in
         let hashes = match rel.tree with
           | None -> [] | Some t -> Merkle.keys t
         in
-        let rec check = function
-          | [] -> Ok ()
-          | h :: rest ->
-            match load_tuple storage h with
-            | Error _ | Ok None -> check rest
-            | Ok (Some tup) ->
-              match Constraint.evaluate_named ctx tup
-                      [(entry.constraint_name, entry.body)] with
-              | Ok true -> check rest
-              | Ok false | Error _ ->
-                Error (ConstraintViolation
-                  (Printf.sprintf "deferred constraint %s on %s violated"
-                     entry.constraint_name entry.relation_name))
-        in
-        check hashes)
-      (Ok ()) db.deferred
+        fold_result (fun () h ->
+          match load_tuple storage h with
+          | Error _ | Ok None -> Ok ()
+          | Ok (Some tup) ->
+            match Constraint.evaluate_first_failure ctx tup
+                    [(entry.constraint_name, entry.body)] with
+            | Ok true -> Ok ()
+            | Ok false | Error _ ->
+              Error (ConstraintViolation
+                (Printf.sprintf "deferred constraint %s on %s violated"
+                   entry.constraint_name entry.relation_name)))
+          () hashes)
+      () db.deferred
 
   (** Complete a mutation sequence by evaluating all deferred constraints
       against the current database state.
@@ -1129,13 +1021,10 @@ module Make (Storage : Management.Physical.S) = struct
       (storage : storage)
       (db : Management.Database.t)
     : (Management.Database.t, error) Result.t =
-    match check_deferred_constraints storage db with
-    | Error e -> Error e
-    | Ok () ->
-      let db' = { db with deferred = [] } in
-      match store_database storage db' with
-      | Error e -> Error e
-      | Ok () -> Ok db'
+    let* () = check_deferred_constraints storage db in
+    let db' = { db with deferred = [] } in
+    let* () = store_database storage db' in
+    Ok db'
 end
 
 (** Default instance using in-memory storage for convenience/testing *)

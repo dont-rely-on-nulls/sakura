@@ -20,6 +20,7 @@ type binding_expr =
   | Const of Conventions.AbstractValue.t
 
 module BindingMap = Map.Make (String)
+module PolarityMap = BatMap.Make (String)
 
 type binding = binding_expr BindingMap.t
 
@@ -280,6 +281,20 @@ let evaluate_named (ctx : eval_context) (tuple : Tuple.materialized)
   | [] -> Ok true
   | fs -> Error (ConstraintFailures fs)
 
+(** Fast-path evaluator: halts at the first non-passing constraint.
+    Use in cascade and deferred checking where a single violation suffices. *)
+let evaluate_first_failure (ctx : eval_context) (tuple : Tuple.materialized)
+    (named : (string * t) list) : (bool, diagnostic) result =
+  let exception Stop of (bool, diagnostic) result in
+  (try
+    List.iter (fun (_name, c) ->
+      match evaluate ctx tuple c with
+      | Ok true -> ()
+      | r -> raise (Stop r))
+      named;
+    Ok true
+  with Stop r -> r)
+
 (** Polarity analysis: determines whether each relation name appears in
     a positive (must-exist) or negative (must-not-exist) position within
     a constraint tree. Used for cascade checking: when a tuple is deleted,
@@ -299,31 +314,32 @@ let flip_polarity = function
   | Both     -> Both
 
 let merge_polarity_maps m1 m2 =
-  List.fold_left (fun acc (name, pol) ->
-    match List.assoc_opt name acc with
-    | None      -> (name, pol) :: acc
-    | Some prev ->
-      (name, merge_polarity prev pol)
-      :: List.filter (fun (n, _) -> n <> name) acc)
+  PolarityMap.merge
+    (fun _ a b ->
+      match a, b with
+      | Some x, Some y -> Some (merge_polarity x y)
+      | Some x, None   -> Some x
+      | None,   Some y -> Some y
+      | None,   None   -> None)
     m1 m2
 
-let rec polarity_of ?(neg = false) (c : t) : (relation_name * polarity) list =
+let rec polarity_of ?(neg = false) (c : t) : polarity PolarityMap.t =
   let pos p = if neg then flip_polarity p else p in
   match c with
   | MemberOf { target; _ } ->
-    [(target, pos Positive)]
+    PolarityMap.singleton target (pos Positive)
   | Not { body; _ } ->
     polarity_of ~neg:(not neg) body
   | And cs | Or cs ->
     List.fold_left (fun acc c ->
-      merge_polarity_maps acc (polarity_of ~neg c)) [] cs
+      merge_polarity_maps acc (polarity_of ~neg c)) PolarityMap.empty cs
   | Exists { quantifier; body; _ } ->
     merge_polarity_maps
-      [(quantifier, pos Positive)]
+      (PolarityMap.singleton quantifier (pos Positive))
       (polarity_of ~neg body)
   | Forall { quantifier; body; _ } ->
     merge_polarity_maps
-      [(quantifier, pos Negative)]
+      (PolarityMap.singleton quantifier (pos Negative))
       (polarity_of ~neg body)
 
 (** Constraint timing: immediate (checked on every mutation) or deferred

@@ -109,6 +109,8 @@
               ppx_sexp_conv
               lwt
               lwt-exit
+              batteries
+              num
             ]);
 
             strictDeps = true;
@@ -272,6 +274,8 @@
               # legacyPackages.nixfmt-classic
               ocamlPackages.lwt
               ocamlPackages.lwt-exit
+              ocamlPackages.batteries
+              ocamlPackages.num
               ppx_protocol_conv
               ppx_protocol_conv_xml_light
               ocamlPackages.earlybird
