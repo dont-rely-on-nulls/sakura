@@ -5,9 +5,6 @@
   ctypes
   ctypes-foreign
   data-encoding
-  lwt
-  lwt.unix
-  lwt-exit
   ppx_protocol_conv_xml_light
   sexplib)
  (preprocess
@@ -21,7 +18,7 @@
  ;;   (-L %{env:LIBRESSL_LIB_PATH=})
  ;;   (-I %{env:LIBRESSL_INCLUDE_PATH=})
  ;;   (-I %{env:MERKLECPP_INCLUDE_PATH=})))
- (ctypes
+(ctypes
   (external_library_name relational_engine)
   (headers
    (include %{env:LIBRELATIONAL_ENGINE_INCLUDE_PATH=}/library.h))

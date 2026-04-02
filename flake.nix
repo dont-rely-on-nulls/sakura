@@ -96,7 +96,11 @@
               LIBRELATIONAL_ENGINE_INCLUDE_PATH = "${librelational_engine}/include";
             };
 
-            nativeInputs = [ ];
+            nativeBuildInputs = [
+              ocamlPackages."js_of_ocaml-compiler"
+              ocamlPackages."wasm_of_ocaml-compiler"
+              legacyPackages.binaryen
+            ];
 
             buildInputs = [ ppx_protocol_conv_xml_light
                             ppx_protocol_conv ]
@@ -104,6 +108,8 @@
               ctypes
               ctypes-foreign
               data-encoding
+              js_of_ocaml
+              ocamlPackages."js_of_ocaml-ppx"
               ppx_inline_test
               ppx_deriving
               ppx_sexp_conv
@@ -114,6 +120,69 @@
             strictDeps = true;
 
           };
+
+          serve-browser = legacyPackages.writeShellApplication {
+            name = "serve-browser";
+            runtimeInputs = [
+              ocamlPackages.dune_3
+              ocamlPackages.ocaml
+              ocamlPackages.js_of_ocaml
+              ocamlPackages."js_of_ocaml-ppx"
+              ocamlPackages."js_of_ocaml-compiler"
+              ocamlPackages."wasm_of_ocaml-compiler"
+              legacyPackages.binaryen
+              legacyPackages.miniserve
+            ];
+            text = ''
+              set -euo pipefail
+
+              if [ ! -f "dune-project" ]; then
+                echo "Run this from the Sakura repository root." >&2
+                exit 1
+              fi
+
+              export LIBRESSL_INCLUDE_PATH="${libressl}/include"
+              export LIBRESSL_LIB_PATH="${libressl}/lib"
+              export OS_LIB_EXTENSION="${if legacyPackages.stdenv.isDarwin then "dylib" else "so"}"
+              export LIBRELATIONAL_ENGINE_LIB_PATH="${librelational_engine}/lib"
+              export LIBRELATIONAL_ENGINE_INCLUDE_PATH="${librelational_engine}/include"
+
+              port="''${1:-8080}"
+
+              echo "Building browser artifacts..."
+              dune build bin/browser.bc.js bin/browser.bc.wasm.js
+
+              echo "Serving at http://127.0.0.1:''${port}/web/index.html"
+              exec miniserve --interfaces 127.0.0.1 --port "''${port}" --index index.html .
+            '';
+          };
+        };
+
+        apps = {
+          browser = let
+            script = legacyPackages.writeShellScript "sakura-browser" ''
+              set -euo pipefail
+
+              if [ ! -f "dune-project" ] || [ ! -d "web" ]; then
+                echo "Run this from the Sakura repository root." >&2
+                exit 1
+              fi
+
+              port="''${1:-8080}"
+              export PORT="''${port}"
+
+              exec nix develop --command bash -lc '
+                dune build bin/browser.bc.js bin/browser.bc.wasm.js
+                echo "Serving at http://127.0.0.1:$PORT/web/index.html"
+                exec miniserve --interfaces 127.0.0.1 --port "$PORT" --index index.html .
+              '
+            '';
+          in {
+            type = "app";
+            program = "${script}";
+          };
+
+          default = self.apps.${system}.browser;
         };
         # Flake checks
         #
@@ -249,6 +318,7 @@
               # Source file formatting
               legacyPackages.nixpkgs-fmt
               legacyPackages.ocamlformat
+              legacyPackages.miniserve
               # For `dune build --watch ...`
               # legacyPackages.fswatch
               # For `dune build @doc`
@@ -264,6 +334,11 @@
               ocamlPackages.ctypes
               ocamlPackages.ctypes-foreign
               ocamlPackages.data-encoding
+              ocamlPackages.js_of_ocaml
+              ocamlPackages."js_of_ocaml-ppx"
+              ocamlPackages."js_of_ocaml-compiler"
+              ocamlPackages."wasm_of_ocaml-compiler"
+              legacyPackages.binaryen
               ocamlPackages.ppx_inline_test
               ocamlPackages.ppx_deriving
               ocamlPackages.ppx_sexp_conv
