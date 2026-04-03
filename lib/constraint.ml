@@ -63,7 +63,11 @@ let vars_in (c : t) : attr_name list =
   loop StringSet.empty (FingerTree.singleton c) |> StringSet.elements
 
 let rename_vars (renames : (attr_name * attr_name) list) : t -> t =
-  let rename_map = BindingMap.of_seq (List.to_seq renames) in
+  let rename_map =
+    List.fold_left
+      (fun acc (k, v) -> BindingMap.add k v acc)
+      BindingMap.empty renames
+  in
   let rename_name name =
     match BindingMap.find_opt name rename_map with Some n -> n | None -> name
   in

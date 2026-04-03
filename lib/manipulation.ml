@@ -86,16 +86,13 @@ module Make (Storage : Management.Physical.S) = struct
         f a x)
       (Ok init) xs
 
-  let fold_seq_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a)
-      (xs : 'b Seq.t) : ('a, error) Result.t =
-    let rec go acc seq =
-      match seq () with
-      | Seq.Nil -> acc
-      | Seq.Cons (x, tl) ->
-          let* a = acc in
-          go (f a x) tl
+  let fold_enum_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a)
+      (xs : 'b BatEnum.t) : ('a, error) Result.t =
+    let rec go acc =
+      let* a = acc in
+      match BatEnum.get xs with None -> Ok a | Some x -> go (f a x)
     in
-    go (Ok init) xs
+    go (Ok init)
 
   (* Constraint evaluation context *)
 
@@ -124,7 +121,7 @@ module Make (Storage : Management.Physical.S) = struct
                 (* No tree = ephemeral/generator relation, membership_criteria suffices *)
                 true
             | Some tree ->
-                Seq.exists
+                BatEnum.exists
                   (fun h ->
                     match Storage.load_raw storage h with
                     | Error _ | Ok None -> false
@@ -146,7 +143,7 @@ module Make (Storage : Management.Physical.S) = struct
                                     Stdlib.( = ) sv bv)
                               stored.Storable.Tuple.attributes)
                           bound_pairs)
-                  (Merkle.to_seq tree))
+                  (Merkle.to_enum tree))
     in
     let iterate_finite rel_name =
       match Management.Database.get_relation db rel_name with
@@ -158,10 +155,11 @@ module Make (Storage : Management.Physical.S) = struct
               match rel.tree with
               | None -> Some []
               | Some tree ->
-                  let rec load_all acc seq =
-                    match seq () with
-                    | Seq.Nil -> Some (List.rev acc)
-                    | Seq.Cons (h, rest) -> (
+                  let hashes = Merkle.to_enum tree in
+                  let rec load_all acc =
+                    match BatEnum.get hashes with
+                    | None -> Some (List.rev acc)
+                    | Some h -> (
                         match Storage.load_raw storage h with
                         | Error _ -> None
                         | Ok None -> None
@@ -184,9 +182,9 @@ module Make (Storage : Management.Physical.S) = struct
                               load_attrs [] stored.Storable.Tuple.attributes
                             with
                             | None -> None
-                            | Some pairs -> load_all (pairs :: acc) rest))
+                            | Some pairs -> load_all (pairs :: acc)))
                   in
-                  load_all [] (Merkle.to_seq tree))
+                  load_all [])
           | _ -> None)
     in
     { Constraint.check_membership; iterate_finite }
@@ -519,10 +517,10 @@ module Make (Storage : Management.Physical.S) = struct
           in
           let hashes =
             match constrained_rel.Relation.tree with
-            | None -> Seq.empty
-            | Some t -> Merkle.to_seq t
+            | None -> BatEnum.empty ()
+            | Some t -> Merkle.to_enum t
           in
-          fold_seq_result
+          fold_enum_result
             (fun () h ->
               recheck_one storage ctx mctx cname cbody constrained_name filter h)
             () hashes
@@ -963,14 +961,14 @@ module Make (Storage : Management.Physical.S) = struct
   let tuple_hashes (relation : Relation.t) : Conventions.Hash.t list =
     match relation.tree with None -> [] | Some tree -> Merkle.keys tree
 
-  let tuple_hash_seq (relation : Relation.t) : Conventions.Hash.t Seq.t =
+  let tuple_hash_enum (relation : Relation.t) : Conventions.Hash.t BatEnum.t =
     match relation.tree with
-    | None -> Seq.empty
-    | Some tree -> Merkle.to_seq tree
+    | None -> BatEnum.empty ()
+    | Some tree -> Merkle.to_enum tree
 
   let tuple_hash_cursor (scope : Management.Stream.scope)
       (relation : Relation.t) : Conventions.Hash.t Management.Stream.cursor =
-    Management.Stream.of_seq scope (tuple_hash_seq relation)
+    Management.Stream.of_enum scope (tuple_hash_enum relation)
 
   (** Get relation by name from database *)
   let get_relation (db : Management.Database.t) ~(name : string) :
@@ -1020,10 +1018,10 @@ module Make (Storage : Management.Physical.S) = struct
         | Some rel ->
             let hashes =
               match rel.tree with
-              | None -> Seq.empty
-              | Some t -> Merkle.to_seq t
+              | None -> BatEnum.empty ()
+              | Some t -> Merkle.to_enum t
             in
-            fold_seq_result
+            fold_enum_result
               (fun () h ->
                 with_loaded_tuple storage h ~on_some:(fun tup ->
                     match

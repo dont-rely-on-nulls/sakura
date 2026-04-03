@@ -112,7 +112,7 @@ module Make (Storage : Management.Physical.S) : sig
     (Management.Database.t, error) Result.t
 
   val tuple_hashes : Relation.t -> Conventions.Hash.t list
-  val tuple_hash_seq : Relation.t -> Conventions.Hash.t Seq.t
+  val tuple_hash_enum : Relation.t -> Conventions.Hash.t BatEnum.t
 
   val tuple_hash_cursor :
     Management.Stream.scope ->

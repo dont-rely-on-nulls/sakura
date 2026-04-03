@@ -18,15 +18,7 @@ let next_scope_id =
 let create_scope () = { id = next_scope_id (); active = true }
 let close_scope scope = scope.active <- false
 let of_step (scope : scope) step = { scope_id = scope.id; closed = false; step }
-
-let of_seq scope seq =
-  let state = ref seq in
-  of_step scope (fun () ->
-      match !state () with
-      | Seq.Nil -> Ok None
-      | Seq.Cons (x, tl) ->
-          state := tl;
-          Ok (Some x))
+let of_enum scope enum = of_step scope (fun () -> Ok (BatEnum.get enum))
 
 let next (scope : scope) (cursor : 'a cursor) =
   if not scope.active then Ok (Error ScopeClosed)

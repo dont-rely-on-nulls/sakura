@@ -29,7 +29,7 @@ module type S = sig
   val keys : t -> Conventions.Hash.t list
   (** Get all hashes in the tree *)
 
-  val to_seq : t -> Conventions.Hash.t Seq.t
+  val to_enum : t -> Conventions.Hash.t BatEnum.t
   (** Lazy traversal of hashes in the tree (unordered). *)
 
   val root_hash : t -> Conventions.Hash.t option
@@ -42,7 +42,7 @@ end
 (** Simple hash set implementation. This is a placeholder until a proper
     radix-merkle library with OCaml 5 support becomes available. *)
 module HashSet : S = struct
-  module StringSet = Set.Make (String)
+  module StringSet = BatSet.String
 
   type t = StringSet.t
 
@@ -52,7 +52,7 @@ module HashSet : S = struct
   let delete hash tree = StringSet.remove hash tree
   let member hash tree = StringSet.mem hash tree
   let keys tree = StringSet.elements tree
-  let to_seq tree = StringSet.to_seq tree
+  let to_enum tree = StringSet.enum tree
   (* TODO: Streaming/pagination for large tuple sets. Currently materializes
      entire keyset into memory, which fails for relations with billions of tuples.
      Replace with paginated access (keys_paginated offset limit) or lazy generator

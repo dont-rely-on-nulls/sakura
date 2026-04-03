@@ -134,7 +134,7 @@ let%test_unit "storage: transaction commit" =
 let%test_unit "stream: scope isolation" =
   let scope1 = Management.Stream.create_scope () in
   let scope2 = Management.Stream.create_scope () in
-  let cursor = Management.Stream.of_seq scope1 (List.to_seq [ 1; 2 ]) in
+  let cursor = Management.Stream.of_enum scope1 (BatList.enum [ 1; 2 ]) in
   match Management.Stream.next scope2 cursor with
   | Error _ -> assert false
   | Ok (Error Management.Stream.ScopeViolation) -> ()
@@ -142,7 +142,7 @@ let%test_unit "stream: scope isolation" =
 
 let%test_unit "stream: closed scope rejects cursor" =
   let scope = Management.Stream.create_scope () in
-  let cursor = Management.Stream.of_seq scope (List.to_seq [ 1 ]) in
+  let cursor = Management.Stream.of_enum scope (BatList.enum [ 1 ]) in
   Management.Stream.close_scope scope;
   match Management.Stream.next scope cursor with
   | Error _ -> assert false
