@@ -287,6 +287,7 @@
 
 
             shellHook = ''
+              export CAML_LD_LIBRARY_PATH="''${CAML_LD_LIBRARY_PATH:+$CAML_LD_LIBRARY_PATH:}$(ocamlfind query num)"
               # echo MERKLECPP_INCLUDE_PATH=$MERKLECPP_INCLUDE_PATH
               echo LIBRESSL_INCLUDE_PATH=$LIBRESSL_INCLUDE_PATH
               echo LIBRESSL_LIB_PATH=$LIBRESSL_LIB_PATH

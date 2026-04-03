@@ -11,9 +11,3 @@
  (modules server)
  (libraries relational_engine unix)
  (modes byte exe))
-
-(executable
- (name bench)
- (modules bench)
- (libraries relational_engine unix)
- (modes exe))
