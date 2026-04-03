@@ -2,6 +2,7 @@ type error = StorageError of string | GeneratorError of string
 
 module Make (Storage : Management.Physical.S) = struct
   module Ops = Manipulation.Make (Storage)
+  module Stream = Management.Stream
 
   type storage = Storage.t
 
@@ -24,23 +25,42 @@ module Make (Storage : Management.Physical.S) = struct
     match rel.Relation.generator with
     | Some gen -> gen
     | None ->
-        let rec from_hashes hashes _pos =
-          match hashes () with
-          | Seq.Nil -> Generator.Done
-          | Seq.Cons (hash, next_hashes) -> (
+        let stream_error_to_string = function
+          | Stream.ScopeViolation ->
+              "stream scope violation for relation " ^ rel.Relation.name
+          | Stream.ScopeClosed ->
+              "stream scope closed for relation " ^ rel.Relation.name
+          | Stream.CursorClosed ->
+              "stream cursor closed for relation " ^ rel.Relation.name
+        in
+        let scope = Stream.create_scope () in
+        let cursor = Stream.of_seq scope (Ops.tuple_hash_seq rel) in
+        let rec from_stream _pos =
+          match Stream.next scope cursor with
+          | Error e ->
+              Stream.close_scope scope;
+              Generator.Error ("Tuple hash stream failed: " ^ e)
+          | Ok (Error e) ->
+              Stream.close_scope scope;
+              Generator.Error (stream_error_to_string e)
+          | Ok (Ok None) ->
+              Stream.close_scope scope;
+              Generator.Done
+          | Ok (Ok (Some hash)) -> (
               match Ops.load_tuple storage hash with
               | Error e ->
+                  Stream.close_scope scope;
                   Generator.Error
                     ("Failed to load tuple from relation " ^ rel.Relation.name
                    ^ ": "
                     ^ Manipulation.string_of_error e)
               | Ok None ->
+                  Stream.close_scope scope;
                   Generator.Error ("Tuple hash not found in storage: " ^ hash)
               | Ok (Some tup) ->
-                  Generator.Value
-                    (Tuple.Materialized tup, from_hashes next_hashes))
+                  Generator.Value (Tuple.Materialized tup, from_stream))
         in
-        from_hashes (Ops.tuple_hash_seq rel)
+        from_stream
 
   let of_generator ~name ~schema ?constraints ?cardinality gen =
     let cardinality =
