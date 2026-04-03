@@ -86,6 +86,17 @@ module Make (Storage : Management.Physical.S) = struct
         f a x)
       (Ok init) xs
 
+  let fold_seq_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a)
+      (xs : 'b Seq.t) : ('a, error) Result.t =
+    let rec go acc seq =
+      match seq () with
+      | Seq.Nil -> acc
+      | Seq.Cons (x, tl) ->
+          let* a = acc in
+          go (f a x) tl
+    in
+    go (Ok init) xs
+
   (* Constraint evaluation context *)
 
   (** Build an eval_context closed over a specific (storage, db) snapshot. All
@@ -509,10 +520,10 @@ module Make (Storage : Management.Physical.S) = struct
           in
           let hashes =
             match constrained_rel.Relation.tree with
-            | None -> []
-            | Some t -> Merkle.keys t
+            | None -> Seq.empty
+            | Some t -> Merkle.to_seq t
           in
-          fold_result
+          fold_seq_result
             (fun () h ->
               recheck_one storage ctx mctx cname cbody constrained_name filter h)
             () hashes
@@ -958,6 +969,10 @@ module Make (Storage : Management.Physical.S) = struct
     | None -> Seq.empty
     | Some tree -> Merkle.to_seq tree
 
+  let tuple_hash_cursor (scope : Management.Stream.scope)
+      (relation : Relation.t) : Conventions.Hash.t Management.Stream.cursor =
+    Management.Stream.of_seq scope (tuple_hash_seq relation)
+
   (** Get relation by name from database *)
   let get_relation (db : Management.Database.t) ~(name : string) :
       Relation.t option =
@@ -1005,9 +1020,11 @@ module Make (Storage : Management.Physical.S) = struct
         | None -> Ok ()
         | Some rel ->
             let hashes =
-              match rel.tree with None -> [] | Some t -> Merkle.keys t
+              match rel.tree with
+              | None -> Seq.empty
+              | Some t -> Merkle.to_seq t
             in
-            fold_result
+            fold_seq_result
               (fun () h ->
                 with_loaded_tuple storage h ~on_some:(fun tup ->
                     match

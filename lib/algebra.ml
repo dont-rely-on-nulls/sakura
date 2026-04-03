@@ -34,7 +34,7 @@ module Make (Storage : Management.Physical.S) = struct
               "stream cursor closed for relation " ^ rel.Relation.name
         in
         let scope = Stream.create_scope () in
-        let cursor = Stream.of_seq scope (Ops.tuple_hash_seq rel) in
+        let cursor = Ops.tuple_hash_cursor scope rel in
         let rec from_stream _pos =
           match Stream.next scope cursor with
           | Error e ->
