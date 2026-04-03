@@ -124,8 +124,7 @@ module Make (Storage : Management.Physical.S) = struct
                 (* No tree = ephemeral/generator relation, membership_criteria suffices *)
                 true
             | Some tree ->
-                let hashes = Merkle.keys tree in
-                List.exists
+                Seq.exists
                   (fun h ->
                     match Storage.load_raw storage h with
                     | Error _ | Ok None -> false
@@ -147,7 +146,7 @@ module Make (Storage : Management.Physical.S) = struct
                                     Stdlib.( = ) sv bv)
                               stored.Storable.Tuple.attributes)
                           bound_pairs)
-                  hashes)
+                  (Merkle.to_seq tree))
     in
     let iterate_finite rel_name =
       match Management.Database.get_relation db rel_name with
@@ -159,10 +158,10 @@ module Make (Storage : Management.Physical.S) = struct
               match rel.tree with
               | None -> Some []
               | Some tree ->
-                  let hashes = Merkle.keys tree in
-                  let rec load_all acc = function
-                    | [] -> Some (List.rev acc)
-                    | h :: rest -> (
+                  let rec load_all acc seq =
+                    match seq () with
+                    | Seq.Nil -> Some (List.rev acc)
+                    | Seq.Cons (h, rest) -> (
                         match Storage.load_raw storage h with
                         | Error _ -> None
                         | Ok None -> None
@@ -187,7 +186,7 @@ module Make (Storage : Management.Physical.S) = struct
                             | None -> None
                             | Some pairs -> load_all (pairs :: acc) rest))
                   in
-                  load_all [] hashes)
+                  load_all [] (Merkle.to_seq tree))
           | _ -> None)
     in
     { Constraint.check_membership; iterate_finite }
