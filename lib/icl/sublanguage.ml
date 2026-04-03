@@ -1,9 +1,9 @@
 module Make (Storage : Management.Physical.S) = struct
-  module Exec = Executor.Make(Storage)
+  module Exec = Executor.Make (Storage)
 
   type storage = Storage.t
-  type ast     = Ast.statement
-  type error   = Exec.error
+  type ast = Ast.statement
+  type error = Exec.error
 
   let name = "icl"
 
@@ -20,4 +20,4 @@ module Make (Storage : Management.Physical.S) = struct
   let sexp_of_error = Exec.sexp_of_error
 end
 
-module Memory = Make(Management.Physical.Memory)
+module Memory = Make (Management.Physical.Memory)

@@ -1,9 +1,9 @@
 module Make (Storage : Management.Physical.S) = struct
-  module Exec = Executor.Make(Storage)
+  module Exec = Executor.Make (Storage)
 
   type storage = Storage.t
-  type ast     = Ast.statement
-  type error   = Exec.error
+  type ast = Ast.statement
+  type error = Exec.error
 
   let name = "scl"
 
@@ -16,11 +16,10 @@ module Make (Storage : Management.Physical.S) = struct
     Exec.execute storage db ast
     |> Result.map (function
       | Executor.Batch { cursor_id; rows; has_more } ->
-        Sublanguage.Cursor { cursor_id; rows; has_more }
-      | Executor.Closed db ->
-        Sublanguage.Transition (db, "cursor closed"))
+          Sublanguage.Cursor { cursor_id; rows; has_more }
+      | Executor.Closed db -> Sublanguage.Transition (db, "cursor closed"))
 
   let sexp_of_error = Exec.sexp_of_error
 end
 
-module Memory = Make(Management.Physical.Memory)
+module Memory = Make (Management.Physical.Memory)

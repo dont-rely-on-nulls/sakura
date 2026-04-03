@@ -1,5 +1,5 @@
-(** Use the Merkle module for tuple hash storage *)
 module Tree = Merkle
+(** Use the Merkle module for tuple hash storage *)
 
 module RelationConstraint = struct
   type name = string

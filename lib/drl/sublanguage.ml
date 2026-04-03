@@ -1,9 +1,9 @@
 module Make (Storage : Management.Physical.S) = struct
-  module Exec = Executor.Make(Storage)
+  module Exec = Executor.Make (Storage)
 
   type storage = Storage.t
-  type ast     = Ast.query
-  type error   = Exec.error
+  type ast = Ast.query
+  type error = Exec.error
 
   let name = "drl"
 
@@ -15,12 +15,12 @@ module Make (Storage : Management.Physical.S) = struct
   let execute storage db ast =
     match Gate.admit db ast with
     | Error msg -> Error (Exec.ParseError msg)
-    | Ok () ->
-      match Exec.execute storage db ast with
-      | Ok rel -> Ok (Sublanguage.Query rel)
-      | Error e -> Error e
+    | Ok () -> (
+        match Exec.execute storage db ast with
+        | Ok rel -> Ok (Sublanguage.Query rel)
+        | Error e -> Error e)
 
   let sexp_of_error = Exec.sexp_of_error
 end
 
-module Memory = Make(Management.Physical.Memory)
+module Memory = Make (Management.Physical.Memory)

@@ -20,5 +20,4 @@ module Functions (F : Ctypes.FOREIGN) = struct
   let compute_hash =
     Foreign.foreign ~from:libmerklecpp "compute_hash"
       (ptr char @-> Ctypes.string @-> returning void)
-
 end

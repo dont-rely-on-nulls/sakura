@@ -9,8 +9,8 @@ type cardinality_spec =
 
 type statement =
   | CreateDatabase of string
-  | CreateRelation of { name: string; schema: (string * string) list }
+  | CreateRelation of { name : string; schema : (string * string) list }
   | RetractRelation of string
   | ClearRelation of string
-  | RegisterDomain of { name: string; cardinality: cardinality_spec }
+  | RegisterDomain of { name : string; cardinality : cardinality_spec }
 [@@deriving sexp]
