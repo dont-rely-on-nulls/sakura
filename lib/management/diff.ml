@@ -23,7 +23,10 @@ module StringSet = Set.Make (String)
 let relation_keys rel =
   match rel.Relation.tree with
   | None -> StringSet.empty
-  | Some tree -> StringSet.of_list (Merkle.keys tree)
+  | Some tree ->
+      BatEnum.fold
+        (fun acc h -> StringSet.add h acc)
+        StringSet.empty (Merkle.to_enum tree)
 
 (** Compute relation-level diffs from ancestor → target. *)
 let diff ~ancestor ~(target : Database.t) =
