@@ -3480,7 +3480,7 @@ let%test_unit "merge: no-op when both sides are identical" =
             = Management.Database.get_relation_names base_db))
 
 (* Helper: look up polarity for a relation name in the result map *)
-let find_polarity name pols = Constraint.PolarityMap.find_opt name pols
+let find_polarity name pols = Constraint.polarity_find name pols
 
 let%test_unit "polarity: MemberOf target is Positive" =
   let c =

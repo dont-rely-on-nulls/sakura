@@ -23,18 +23,24 @@ module Make (Storage : Management.Physical.S) = struct
   let to_generator (storage : storage) (rel : Relation.t) : Generator.t =
     match rel.Relation.generator with
     | Some gen -> gen
-    | None -> (
-        (* TODO: Avoid materializing all tuple hashes/tuples at once.
-         Current implementation calls tuple_hashes rel which loads all hashes
-         into memory, then load_tuples which loads all tuples. This defeats
-         lazy evaluation and scales badly (fails for billions of tuples).
-         Replace with paginated tuple_hashes or Merkle streaming to load
-         hashes/tuples on demand in chunks. *)
-        let hashes = Ops.tuple_hashes rel in
-        match Ops.load_tuples storage hashes with
-        | Error _ ->
-            fun _pos -> Generator.Error ("Failed to load: " ^ rel.Relation.name)
-        | Ok ts -> list_generator (List.map (fun t -> Tuple.Materialized t) ts))
+    | None ->
+        let rec from_hashes hashes _pos =
+          match hashes () with
+          | Seq.Nil -> Generator.Done
+          | Seq.Cons (hash, next_hashes) -> (
+              match Ops.load_tuple storage hash with
+              | Error e ->
+                  Generator.Error
+                    ("Failed to load tuple from relation " ^ rel.Relation.name
+                   ^ ": "
+                    ^ Manipulation.string_of_error e)
+              | Ok None ->
+                  Generator.Error ("Tuple hash not found in storage: " ^ hash)
+              | Ok (Some tup) ->
+                  Generator.Value
+                    (Tuple.Materialized tup, from_hashes next_hashes))
+        in
+        from_hashes (Ops.tuple_hash_seq rel)
 
   let of_generator ~name ~schema ?constraints ?cardinality gen =
     let cardinality =

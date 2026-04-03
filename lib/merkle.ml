@@ -29,6 +29,9 @@ module type S = sig
   val keys : t -> Conventions.Hash.t list
   (** Get all hashes in the tree *)
 
+  val to_seq : t -> Conventions.Hash.t Seq.t
+  (** Lazy traversal of hashes in the tree (unordered). *)
+
   val root_hash : t -> Conventions.Hash.t option
   (** Compute the root hash of the tree. None if empty. *)
 
@@ -49,6 +52,7 @@ module HashSet : S = struct
   let delete hash tree = StringSet.remove hash tree
   let member hash tree = StringSet.mem hash tree
   let keys tree = StringSet.elements tree
+  let to_seq tree = StringSet.to_seq tree
   (* TODO: Streaming/pagination for large tuple sets. Currently materializes
      entire keyset into memory, which fails for relations with billions of tuples.
      Replace with paginated access (keys_paginated offset limit) or lazy generator

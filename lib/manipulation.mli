@@ -112,6 +112,7 @@ module Make (Storage : Management.Physical.S) : sig
     (Management.Database.t, error) Result.t
 
   val tuple_hashes : Relation.t -> Conventions.Hash.t list
+  val tuple_hash_seq : Relation.t -> Conventions.Hash.t Seq.t
   val get_relation : Management.Database.t -> name:string -> Relation.t option
   val tuple_count : Relation.t -> int
   val tuple_exists : Relation.t -> Conventions.Hash.t -> bool

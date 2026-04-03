@@ -953,6 +953,11 @@ module Make (Storage : Management.Physical.S) = struct
   let tuple_hashes (relation : Relation.t) : Conventions.Hash.t list =
     match relation.tree with None -> [] | Some tree -> Merkle.keys tree
 
+  let tuple_hash_seq (relation : Relation.t) : Conventions.Hash.t Seq.t =
+    match relation.tree with
+    | None -> Seq.empty
+    | Some tree -> Merkle.to_seq tree
+
   (** Get relation by name from database *)
   let get_relation (db : Management.Database.t) ~(name : string) :
       Relation.t option =
