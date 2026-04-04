@@ -1,7 +1,7 @@
 module Hash = struct
-  type t = Interop.Sha256.t
+  type t = string
 
-  let hash_text text = Interop.Sha256.compute_hash (Bytes.of_string text)
+  let hash_text text = Sha256.to_hex (Sha256.string text)
   let compare = String.compare
   let sexp_of_t = Sexplib.Std.sexp_of_string
 end
@@ -25,7 +25,7 @@ end
 module AbstractValue = struct
   type t = Obj.t
 
-  let hash (elem : t) = Interop.Sha256.compute_hash @@ Marshal.to_bytes elem []
+  let hash (elem : t) = Sha256.to_hex (Sha256.string (Bytes.to_string (Marshal.to_bytes elem [])))
 
   let sexp_of_t (v : t) =
     let open Sexplib.Sexp in

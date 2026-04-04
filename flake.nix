@@ -29,8 +29,6 @@
         # Library functions from nixpkgs
         lib = legacyPackages.lib;
         ocamlPackages = legacyPackages.ocamlPackages;
-        # merklecpp = legacyPackages.callPackage ./deps/merklecpp.nix { };
-        libressl = legacyPackages.callPackage ./deps/libressl.nix { };
         ppx_protocol_conv =
           legacyPackages.callPackage ./deps/ppx_protocol_conv.nix {
             lib = legacyPackages.lib;
@@ -42,11 +40,6 @@
             ppx_protocol_conv = ppx_protocol_conv;
             fetchFromGitHub = legacyPackages.fetchFromGitHub;
             ocamlPackages = ocamlPackages; };
-        librelational_engine =
-          legacyPackages.callPackage ./deps/relational_engine_lib.nix {
-            libressl = libressl;
-            # merklecpp = merklecpp;
-          };
         # Filtered sources (prevents unecessary rebuilds)
         sources = {
           ocaml = nix-filter.lib {
@@ -86,23 +79,10 @@
             duneVersion = "3";
             src = sources.ocaml;
 
-            env = {
-              # MERKLECPP_INCLUDE_PATH = "${merklecpp}/include";
-              LIBRESSL_INCLUDE_PATH = "${libressl}/include";
-              LIBRESSL_LIB_PATH = "${libressl}/lib";
-              OS_LIB_EXTENSION =
-                if legacyPackages.stdenv.isDarwin then "dylib" else "so";
-              LIBRELATIONAL_ENGINE_LIB_PATH = "${librelational_engine}/lib";
-              LIBRELATIONAL_ENGINE_INCLUDE_PATH = "${librelational_engine}/include";
-            };
-
-            nativeInputs = [ ];
-
             buildInputs = [ ppx_protocol_conv_xml_light
                             ppx_protocol_conv ]
             ++ (with ocamlPackages; [
-              ctypes
-              ctypes-foreign
+              sha
               data-encoding
               ppx_inline_test
               ppx_deriving
@@ -236,16 +216,6 @@
         devShells = {
           default = legacyPackages.mkShell {
 
-            env = {
-              # MERKLECPP_INCLUDE_PATH = "${merklecpp}/include";
-              LIBRESSL_INCLUDE_PATH = "${libressl}/include";
-              LIBRESSL_LIB_PATH = "${libressl}/lib";
-              OS_LIB_EXTENSION =
-                if legacyPackages.stdenv.isDarwin then "dylib" else "so";
-              LIBRELATIONAL_ENGINE_LIB_PATH = "${librelational_engine}/lib";
-              LIBRELATIONAL_ENGINE_INCLUDE_PATH = "${librelational_engine}/include";
-            };
-
             # Development tools
             packages = [
               # Source file formatting
@@ -263,14 +233,11 @@
               ocamlPackages.utop
               # Libraries
               # ocamlPackages.menhir
-              ocamlPackages.ctypes
-              ocamlPackages.ctypes-foreign
+              ocamlPackages.sha
               ocamlPackages.data-encoding
               ocamlPackages.ppx_inline_test
               ocamlPackages.ppx_deriving
               ocamlPackages.ppx_sexp_conv
-              legacyPackages.cmake
-              legacyPackages.gcc
               # legacyPackages.nixfmt-classic
               ocamlPackages.lwt
               ocamlPackages.lwt-exit
@@ -288,12 +255,6 @@
 
             shellHook = ''
               export CAML_LD_LIBRARY_PATH="''${CAML_LD_LIBRARY_PATH:+$CAML_LD_LIBRARY_PATH:}$(ocamlfind query num)"
-              # echo MERKLECPP_INCLUDE_PATH=$MERKLECPP_INCLUDE_PATH
-              echo LIBRESSL_INCLUDE_PATH=$LIBRESSL_INCLUDE_PATH
-              echo LIBRESSL_LIB_PATH=$LIBRESSL_LIB_PATH
-              # echo OS_LIB_EXTENSION=$OS_LIB_EXTENSION 
-              echo LIBRELATIONAL_ENGINE_LIB_PATH=$LIBRELATIONAL_ENGINE_LIB_PATH
-              echo LIBRELATIONAL_ENGINE_INCLUDE_PATH=$LIBRELATIONAL_ENGINE_INCLUDE_PATH
             '';
 
             # Tools from packages
