@@ -18,7 +18,7 @@ type t = {
   relation_diffs : relation_diff list;
 }
 
-module StringSet = Set.Make (String)
+module StringSet = BatSet.String
 
 let relation_keys rel =
   match rel.Relation.tree with
