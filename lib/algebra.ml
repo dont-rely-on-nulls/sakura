@@ -32,6 +32,8 @@ module Make (Storage : Management.Physical.S) = struct
               "stream scope closed for relation " ^ rel.Relation.name
           | Stream.CursorClosed ->
               "stream cursor closed for relation " ^ rel.Relation.name
+          | Stream.SourceError e ->
+              "stream source error for relation " ^ rel.Relation.name ^ ": " ^ e
         in
         let scope = Stream.create_scope () in
         let cursor = Ops.tuple_hash_cursor scope rel in
@@ -39,14 +41,11 @@ module Make (Storage : Management.Physical.S) = struct
           match Stream.next scope cursor with
           | Error e ->
               Stream.close_scope scope;
-              Generator.Error ("Tuple hash stream failed: " ^ e)
-          | Ok (Error e) ->
-              Stream.close_scope scope;
               Generator.Error (stream_error_to_string e)
-          | Ok (Ok None) ->
+          | Ok Stream.Done ->
               Stream.close_scope scope;
               Generator.Done
-          | Ok (Ok (Some hash)) -> (
+          | Ok (Stream.Continue hash) -> (
               match Ops.load_tuple storage hash with
               | Error e ->
                   Stream.close_scope scope;

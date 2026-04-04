@@ -136,8 +136,7 @@ let%test_unit "stream: scope isolation" =
   let scope2 = Management.Stream.create_scope () in
   let cursor = Management.Stream.of_enum scope1 (BatList.enum [ 1; 2 ]) in
   match Management.Stream.next scope2 cursor with
-  | Error _ -> assert false
-  | Ok (Error Management.Stream.ScopeViolation) -> ()
+  | Error Management.Stream.ScopeViolation -> ()
   | _ -> assert false
 
 let%test_unit "stream: closed scope rejects cursor" =
@@ -145,8 +144,7 @@ let%test_unit "stream: closed scope rejects cursor" =
   let cursor = Management.Stream.of_enum scope (BatList.enum [ 1 ]) in
   Management.Stream.close_scope scope;
   match Management.Stream.next scope cursor with
-  | Error _ -> assert false
-  | Ok (Error Management.Stream.ScopeClosed) -> ()
+  | Error Management.Stream.ScopeClosed -> ()
   | _ -> assert false
 
 let%test_unit "database: create empty" =

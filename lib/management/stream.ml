@@ -6,7 +6,15 @@ type 'a cursor = {
   step : unit -> ('a option, string) Result.t;
 }
 
-type error = ScopeViolation | ScopeClosed | CursorClosed
+type error =
+  | ScopeViolation
+  | ScopeClosed
+  | CursorClosed
+  | SourceError of string
+
+type 'a continuation = Continue of 'a | Done
+
+module FingerTree = BatFingerTree
 
 let next_scope_id =
   let counter = ref 0 in
@@ -21,23 +29,22 @@ let of_step (scope : scope) step = { scope_id = scope.id; closed = false; step }
 let of_enum scope enum = of_step scope (fun () -> Ok (BatEnum.get enum))
 
 let next (scope : scope) (cursor : 'a cursor) =
-  if not scope.active then Ok (Error ScopeClosed)
-  else if cursor.closed then Ok (Error CursorClosed)
-  else if cursor.scope_id <> scope.id then Ok (Error ScopeViolation)
+  if not scope.active then Error ScopeClosed
+  else if cursor.closed then Error CursorClosed
+  else if cursor.scope_id <> scope.id then Error ScopeViolation
   else
     match cursor.step () with
-    | Error e -> Error e
+    | Error e -> Error (SourceError e)
     | Ok None ->
         cursor.closed <- true;
-        Ok (Ok None)
-    | Ok (Some x) -> Ok (Ok (Some x))
+        Ok Done
+    | Ok (Some x) -> Ok (Continue x)
 
 let drain (scope : scope) (cursor : 'a cursor) =
   let rec go acc =
     match next scope cursor with
-    | Error e -> Error e
-    | Ok (Error err) -> Ok (Error err)
-    | Ok (Ok None) -> Ok (Ok (List.rev acc))
-    | Ok (Ok (Some x)) -> go (x :: acc)
+    | Error err -> Error err
+    | Ok Done -> Ok (BatList.of_enum (FingerTree.enum acc))
+    | Ok (Continue x) -> go (FingerTree.snoc acc x)
   in
-  go []
+  go FingerTree.empty
