@@ -41,7 +41,7 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
             | Ok () -> (
                 match Ops.load_database storage tip with
                 | Error e ->
-                    Error (BranchError (Manipulation.string_of_error e))
+                    Error (BranchError (Manipulation.Error.string_of_error e))
                 | Ok None -> Error (BranchError ("No database at hash: " ^ tip))
                 | Ok (Some loaded_db) -> Ok (loaded_db, "HEAD:" ^ branch_name)))
         )
@@ -69,7 +69,8 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
             match
               MergeOps.merge ~storage ~strategy:strat ~left_tip ~right_tip
             with
-            | Error e -> Error (MergeError (Manipulation.string_of_error e))
+            | Error e ->
+                Error (MergeError (Manipulation.Error.string_of_error e))
             | Ok (Management.Merge.Failed conflicts) ->
                 let msgs =
                   List.map

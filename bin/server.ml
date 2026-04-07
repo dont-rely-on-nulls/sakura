@@ -163,7 +163,7 @@ let register_prelude_relations storage db =
       | Error e ->
           Printf.eprintf
             "Warning: failed to register prelude relation %s: %s\n%!" rel.name
-            (Manipulation.string_of_error e);
+            (Manipulation.Error.string_of_error e);
           db)
     db
     [
@@ -244,7 +244,7 @@ let register_branch_relations storage db =
     | Error e ->
         Printf.eprintf "Warning: failed to register %s: %s\n%!"
           rel.Relation.name
-          (Manipulation.string_of_error e);
+          (Manipulation.Error.string_of_error e);
         db
   in
   db

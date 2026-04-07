@@ -3,14 +3,14 @@ module Make (Storage : Management.Physical.S) = struct
 
   type error =
     | ParseError of string
-    | ManipulationError of Manipulation.error
+    | ManipulationError of Manipulation.Error.t
     | RelationNotFound of string
 
   let sexp_of_error e =
     let open Sexplib.Sexp in
     match e with
     | ParseError s -> List [ Atom "parse-error"; Atom s ]
-    | ManipulationError e -> Manipulation.sexp_of_error e
+    | ManipulationError e -> Manipulation.Error.sexp_of_error e
     | RelationNotFound s -> List [ Atom "relation-not-found"; Atom s ]
 
   let ( let* ) = Result.bind

@@ -1,7 +1,5 @@
 let main () =
-  let digest =
-    Sha256.to_hex (Sha256.string "sakura")
-  in
+  let digest = Sha256.to_hex (Sha256.string "sakura") in
   print_endline digest
 
 let () =
