@@ -115,69 +115,65 @@ module Make (Storage : Management.Physical.S) = struct
         f a x)
       (Ok init) xs
 
-  (* Constraint evaluation context *)
-
-  let check_membership db rel_name bound_pairs =
-    match Management.Database.get_relation db rel_name with
-    | None -> false
-    | Some rel ->
-       let attributes =
-         List.fold_left
-           (fun acc (k, v) ->
-             Tuple.AttributeMap.add k { Attribute.value = v } acc)
-           Tuple.AttributeMap.empty bound_pairs
-       in
-       let tuple =
-         Tuple.Materialized { Tuple.relation = rel_name; attributes }
-       in
-       rel.membership_criteria (tree_of_db db) tuple
-  
   (** Build an eval_context closed over a specific (storage, db) snapshot. All
       relation lookups resolve against this exact database version. *)
   let build_eval_context (storage : storage) (db : Management.Database.t) :
       Constraint.eval_context =
+    let load_value attr_hash =
+      match Storage.load_raw storage attr_hash with
+      | Error _ | Ok None -> None
+      | Ok (Some vbytes) ->
+          Some (Marshal.from_bytes vbytes 0 : Conventions.AbstractValue.t)
+    in
+    let rec load_attrs acc = function
+      | [] -> Some (List.rev acc)
+      | (name, attr_hash) :: rest -> (
+          match load_value attr_hash with
+          | None -> None
+          | Some value -> load_attrs ((name, value) :: acc) rest)
+    in
+    let load_tuple hash =
+      match Storage.load_raw storage hash with
+      | Error _ | Ok None -> None
+      | Ok (Some bytes) ->
+          load_attrs [] (Storable.Tuple.of_bytes bytes).Storable.Tuple.attributes
+    in
+    let rec load_all acc = function
+      | [] -> Some (List.rev acc)
+      | h :: rest -> (
+          match load_tuple h with
+          | None -> None
+          | Some pairs -> load_all (pairs :: acc) rest)
+    in
+    let check_membership rel_name bound_pairs =
+      match Management.Database.get_relation db rel_name with
+      | None -> false
+      | Some rel ->
+          let attributes =
+            List.fold_left
+              (fun acc (k, v) ->
+                Tuple.AttributeMap.add k { Attribute.value = v } acc)
+              Tuple.AttributeMap.empty bound_pairs
+          in
+          let tuple =
+            Tuple.Materialized { Tuple.relation = rel_name; attributes }
+          in
+          rel.membership_criteria (tree_of_db db) tuple
+    in
     let iterate_finite rel_name =
       match Management.Database.get_relation db rel_name with
       | None -> None
       | Some rel -> (
           match rel.cardinality with
           | Conventions.Cardinality.Finite _
-          | Conventions.Cardinality.ConstrainedFinite -> (
-              match rel.tree with
-              | None -> Some []
-              | Some tree ->
-                  let hashes = Merkle.keys tree in
-                  let rec load_all acc = function
-                    | [] -> Some (List.rev acc)
-                    | h :: rest -> (
-                        match Storage.load_raw storage h with
-                        | Error _ -> None
-                        | Ok None -> None
-                        | Ok (Some bytes) -> (
-                            let stored = Storable.Tuple.of_bytes bytes in
-                            let rec load_attrs attr_acc = function
-                              | [] -> Some (List.rev attr_acc)
-                              | (name, attr_hash) :: attr_rest -> (
-                                  match Storage.load_raw storage attr_hash with
-                                  | Error _ | Ok None -> None
-                                  | Ok (Some vbytes) ->
-                                      let value : Conventions.AbstractValue.t =
-                                        Marshal.from_bytes vbytes 0
-                                      in
-                                      load_attrs
-                                        ((name, value) :: attr_acc)
-                                        attr_rest)
-                            in
-                            match
-                              load_attrs [] stored.Storable.Tuple.attributes
-                            with
-                            | None -> None
-                            | Some pairs -> load_all (pairs :: acc) rest))
-                  in
-                  load_all [] hashes)
+          | Conventions.Cardinality.ConstrainedFinite ->
+              let hashes =
+                match rel.tree with None -> [] | Some tree -> Merkle.keys tree
+              in
+              load_all [] hashes
           | _ -> None)
     in
-    { Constraint.check_membership = check_membership db; iterate_finite }
+    { Constraint.check_membership; iterate_finite }
 
   (* State Persistence - Store relation and database states *)
 
