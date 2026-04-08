@@ -44,7 +44,7 @@ module Make (Storage : Management.Physical.S) = struct
     in
     Relation.make ~hash:None ~name ~schema ~tree:None ~constraints ~cardinality
       ~generator:(Some gen)
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "derived")
 

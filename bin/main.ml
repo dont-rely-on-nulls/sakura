@@ -9,7 +9,8 @@ let () =
         (Relational_engine.Tuple.AttributeMap.of_list
            [ ("left", Obj.magic 0); ("right", Obj.magic 1) ])
   in
+  let db = Relational_engine.Management.Database.empty ~name:"_" in
   print_endline @@ string_of_bool
-  @@ Relational_engine.Prelude.Standard.less_than_natural.membership_criteria
+  @@ Relational_engine.Prelude.Standard.less_than_natural.membership_criteria db
        tuple;
   main ()
