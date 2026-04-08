@@ -43,10 +43,10 @@ module Error = struct
 end
 
 (** Build membership criteria from schema (validates type membership).
-    Returns a function that takes a database snapshot and a tuple, checking
+    Returns a function that takes a tree-lookup function and a tuple, checking
     schema conformance and tree membership at call time. *)
 let build_membership_criteria ~name schema :
-    Management.Database.t -> Tuple.t -> bool =
+    (string -> Merkle.t option) -> Tuple.t -> bool =
   let value_conforms_to_domain domain_name (value : Conventions.AbstractValue.t)
       =
     match domain_name with
@@ -60,21 +60,18 @@ let build_membership_criteria ~name schema :
         true
   in
   let n_expected = List.length schema in
-  fun db tuple ->
+  fun tree_of tuple ->
     match tuple with
     | Tuple.NonMaterialized nm -> (
-        match Management.Database.get_relation db name with
+        match tree_of name with
         | None -> false
-        | Some rel -> (
-            match rel.tree with
-            | None -> false
-            | Some t ->
-                Merkle.member nm.hash t
-                && Tuple.AttributeMap.cardinal nm.attributes = n_expected
-                && List.for_all
-                     (fun (attr_name, _) ->
-                       Tuple.AttributeMap.mem attr_name nm.attributes)
-                     schema))
+        | Some t ->
+            Merkle.member nm.hash t
+            && Tuple.AttributeMap.cardinal nm.attributes = n_expected
+            && List.for_all
+                 (fun (attr_name, _) ->
+                   Tuple.AttributeMap.mem attr_name nm.attributes)
+                 schema)
     | Tuple.Materialized m ->
         Tuple.AttributeMap.cardinal m.attributes = n_expected
         && List.for_all
@@ -84,6 +81,9 @@ let build_membership_criteria ~name schema :
                | Some attr ->
                    value_conforms_to_domain domain_name attr.Attribute.value)
              schema
+
+let tree_of_db (db : Management.Database.t) name =
+  Option.bind (Management.Database.get_relation db name) (fun r -> r.Relation.tree)
 
 module Constraint = struct
   include Constraint
@@ -117,25 +117,25 @@ module Make (Storage : Management.Physical.S) = struct
 
   (* Constraint evaluation context *)
 
+  let check_membership db rel_name bound_pairs =
+    match Management.Database.get_relation db rel_name with
+    | None -> false
+    | Some rel ->
+       let attributes =
+         List.fold_left
+           (fun acc (k, v) ->
+             Tuple.AttributeMap.add k { Attribute.value = v } acc)
+           Tuple.AttributeMap.empty bound_pairs
+       in
+       let tuple =
+         Tuple.Materialized { Tuple.relation = rel_name; attributes }
+       in
+       rel.membership_criteria (tree_of_db db) tuple
+  
   (** Build an eval_context closed over a specific (storage, db) snapshot. All
       relation lookups resolve against this exact database version. *)
   let build_eval_context (storage : storage) (db : Management.Database.t) :
       Constraint.eval_context =
-    let check_membership rel_name bound_pairs =
-      match Management.Database.get_relation db rel_name with
-      | None -> false
-      | Some rel ->
-          let attributes =
-            List.fold_left
-              (fun acc (k, v) ->
-                Tuple.AttributeMap.add k { Attribute.value = v } acc)
-              Tuple.AttributeMap.empty bound_pairs
-          in
-          let tuple =
-            Tuple.Materialized { Tuple.relation = rel_name; attributes }
-          in
-          rel.membership_criteria db tuple
-    in
     let iterate_finite rel_name =
       match Management.Database.get_relation db rel_name with
       | None -> None
@@ -177,7 +177,7 @@ module Make (Storage : Management.Physical.S) = struct
                   load_all [] hashes)
           | _ -> None)
     in
-    { Constraint.check_membership; iterate_finite }
+    { Constraint.check_membership = check_membership db; iterate_finite }
 
   (* State Persistence - Store relation and database states *)
 
@@ -559,7 +559,7 @@ module Make (Storage : Management.Physical.S) = struct
       =
     let name = relation.name in
     let* () = ensure_relation_exists db name in
-    if not (relation.membership_criteria db (Tuple.Materialized tuple)) then
+    if not (relation.membership_criteria (tree_of_db db) (Tuple.Materialized tuple)) then
       Error
         (Error.ConstraintViolation "Tuple does not satisfy membership criteria")
     else
@@ -846,7 +846,7 @@ module Make (Storage : Management.Physical.S) = struct
   (** Create an immutable/generator-based relation *)
   let create_immutable_relation (storage : storage) (db : Management.Database.t)
       ~(name : string) ~(schema : Schema.t) ~(generator : Generator.t)
-      ~(membership_criteria : Management.Database.t -> Tuple.t -> bool)
+      ~(membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool)
       ~(cardinality : Conventions.Cardinality.t) :
       (Management.Database.t * Relation.t, error) Result.t =
     if Management.Database.has_relation db name then

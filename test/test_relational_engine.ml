@@ -145,7 +145,7 @@ let%test_unit "database: add relation" =
     Relation.make ~hash:(Some "rel_hash_1") ~name:"users" ~schema:Schema.empty
       ~tree:(Some Merkle.empty) ~constraints:None
       ~cardinality:(Conventions.Cardinality.Finite 0) ~generator:None
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "users")
   in
@@ -160,7 +160,7 @@ let%test_unit "database: remove relation" =
     Relation.make ~hash:(Some "hash1") ~name:"users" ~schema:Schema.empty
       ~tree:(Some Merkle.empty) ~constraints:None
       ~cardinality:(Conventions.Cardinality.Finite 0) ~generator:None
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "users")
   in
@@ -175,7 +175,7 @@ let%test_unit "database: update relation" =
     Relation.make ~hash:(Some "hash1") ~name:"users" ~schema:Schema.empty
       ~tree:(Some Merkle.empty) ~constraints:None
       ~cardinality:(Conventions.Cardinality.Finite 0) ~generator:None
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "users")
   in
@@ -193,7 +193,7 @@ let%test_unit "database: get relation names" =
     Relation.make ~hash:(Some "h1") ~name:"users" ~schema:Schema.empty
       ~tree:(Some Merkle.empty) ~constraints:None
       ~cardinality:(Conventions.Cardinality.Finite 0) ~generator:None
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "users")
   in
@@ -201,7 +201,7 @@ let%test_unit "database: get relation names" =
     Relation.make ~hash:(Some "h2") ~name:"orders" ~schema:Schema.empty
       ~tree:(Some Merkle.empty) ~constraints:None
       ~cardinality:(Conventions.Cardinality.Finite 0) ~generator:None
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:Relation.Provenance.Undefined
       ~lineage:(Relation.Lineage.Base "orders")
   in
@@ -2326,7 +2326,7 @@ let%test_unit "constraint scenario: self-reference neq" =
               |> Schema.add "left" "natural"
               |> Schema.add "right" "natural")
             ~generator:(fun _ -> Generator.Error "not enumerable")
-            ~membership_criteria:(fun t ->
+            ~membership_criteria:(fun _tree_of t ->
               match t with
               | Tuple.Materialized m -> (
                   match

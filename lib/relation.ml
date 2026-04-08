@@ -36,7 +36,7 @@ type t = {
   constraints : RelationConstraint.t option;
   cardinality : Conventions.Cardinality.t;
   generator : Generator.t option;
-  membership_criteria : Management.Database.t -> Tuple.t -> bool;
+  membership_criteria : (string -> Tree.t option) -> Tuple.t -> bool;
   provenance : Provenance.t;
   lineage : Lineage.t;
 }
