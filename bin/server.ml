@@ -129,6 +129,8 @@ let cursor_to_sexp storage db_name db_hash cursor_id rows has_more =
          List [ Atom "branch"; Atom (get_branch storage) ];
        ]
 
+module Memory = Manipulation.Make (Management.Physical.Memory)
+
 let execute_command storage db_ref cmd =
   let db = !db_ref in
   let h = db.Management.Database.hash in
@@ -154,7 +156,7 @@ let register_prelude_relations storage db =
   List.fold_left
     (fun db (rel : Relation.t) ->
       match
-        Manipulation.Memory.create_immutable_relation storage db ~name:rel.name
+        Memory.create_immutable_relation storage db ~name:rel.name
           ~schema:rel.schema ~generator:(Option.get rel.generator)
           ~membership_criteria:rel.membership_criteria
           ~cardinality:rel.cardinality
@@ -224,7 +226,7 @@ let setup () =
     |> Result.map_error (Fun.const "Failed to create storage")
   in
   let* db =
-    Manipulation.Memory.create_database storage ~name:"sakura"
+    Memory.create_database storage ~name:"sakura"
     |> Result.map_error (Fun.const "Failed to create initial database")
   in
   Ok (storage, db)
@@ -234,7 +236,7 @@ let register_branch_relations storage db =
      the raw branch registry — no stored tuples, no circularity. *)
   let register db rel =
     match
-      Manipulation.Memory.create_immutable_relation storage db
+      Memory.create_immutable_relation storage db
         ~name:rel.Relation.name ~schema:rel.Relation.schema
         ~generator:(Option.get rel.Relation.generator)
         ~membership_criteria:rel.Relation.membership_criteria

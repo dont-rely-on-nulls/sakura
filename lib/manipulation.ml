@@ -1054,6 +1054,3 @@ module Make (Storage : Management.Physical.S) = struct
     let* () = store_database storage db' in
     Ok db'
 end
-
-module Memory = Make (Management.Physical.Memory)
-(** Default instance using in-memory storage for convenience/testing *)
