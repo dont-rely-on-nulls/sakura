@@ -264,7 +264,7 @@ let%test_unit "manipulation: create relation already exists" =
           match
             Memory.create_relation storage db ~name:"users" ~schema
           with
-          | Error (Manipulation.Error.RelationAlreadyExists _) -> ()
+          | Error (Error.RelationAlreadyExists _) -> ()
           | _ -> assert false))
 
 let%test_unit "manipulation: retract relation" =
@@ -547,7 +547,7 @@ let%test_unit "manipulation: duplicate tuple rejected" =
               match
                 Memory.create_tuple storage db relation tuple
               with
-              | Error (Manipulation.Error.DuplicateTuple _) -> ()
+              | Error (Error.DuplicateTuple _) -> ()
               | _ -> assert false)))
 
 let%test_unit "manipulation: tuple_exists check" =
@@ -2101,7 +2101,7 @@ let%test_unit "constraint: create_tuple with failing constraint" =
         }
       in
       match Memory.create_tuple storage db rel tuple with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* ---------- Scenario tests ported from Erlang ---------- *)
@@ -2186,7 +2186,7 @@ let%test_unit "constraint scenario: mutual exclusion subtypes" =
         }
       in
       match Memory.create_tuple storage db manager mgr_tuple with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* Scenario 2: Foreign key constraint *)
@@ -2294,7 +2294,7 @@ let%test_unit "constraint scenario: foreign key" =
         }
       in
       match Memory.create_tuple storage db items invalid_item with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* Scenario 3: Self-reference (emp_id != mgr_id via not_equal comparison) *)
@@ -2393,7 +2393,7 @@ let%test_unit "constraint scenario: self-reference neq" =
         }
       in
       match Memory.create_tuple storage db rel invalid with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* Scenario 4: Mutual exclusion between open_ticket and closed_ticket *)
@@ -2477,7 +2477,7 @@ let%test_unit "constraint scenario: open vs closed ticket" =
         }
       in
       match Memory.create_tuple storage db open_ t1_open with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* Scenario 5: Weak entity dependency *)
@@ -2581,7 +2581,7 @@ let%test_unit "constraint scenario: weak entity dependency" =
         }
       in
       match Memory.create_tuple storage db dep invalid_dep with
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | _ -> assert false)
 
 (* Scenario 6: Algebra propagation, select preserves constraints *)
@@ -3155,7 +3155,7 @@ let%test_unit "dcl: FK constraint enforced on insert" =
       with
       | Error
           (Dml.Executor.Memory.ManipulationError
-             (Manipulation.Error.ConstraintViolation _)) ->
+             (Error.ConstraintViolation _)) ->
           ()
       | _ -> assert false)
 
@@ -4022,7 +4022,7 @@ let%test_unit "cascade: delete referenced row violates FK and is rejected" =
           ~tuple_hash:dept_hash
       with
       | Ok _ -> assert false (* should have been rejected *)
-      | Error (Manipulation.Error.ConstraintViolation msg) ->
+      | Error (Error.ConstraintViolation msg) ->
           assert (String.length msg > 0)
       | Error _ -> assert false)
 
@@ -4286,7 +4286,7 @@ let%test_unit "cascade: deferred constraint not checked during retract_tuple" =
             Memory.check_deferred_constraints storage new_db
           with
           | Ok () -> assert false (* should have caught the violation *)
-          | Error (Manipulation.Error.ConstraintViolation _) -> ()
+          | Error (Error.ConstraintViolation _) -> ()
           | Error _ -> assert false))
 
 (* INSERT cascade tests.
@@ -4544,7 +4544,7 @@ let%test_unit "commit: deferred violation is caught at commit boundary" =
       (* commit must now catch the orphaned Employee *)
       match Memory.commit storage db with
       | Ok _ -> assert false
-      | Error (Manipulation.Error.ConstraintViolation _) -> ()
+      | Error (Error.ConstraintViolation _) -> ()
       | Error _ -> assert false)
 
 let%test_unit "commit: clears deferred list, second commit passes" =

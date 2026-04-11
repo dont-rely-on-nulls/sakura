@@ -7,7 +7,7 @@
  (modes byte exe))
 
 (executable
- (name server)
- (modules server)
+ (name new_server)
+ (modules new_server)
  (libraries relational_engine unix)
  (modes byte exe))

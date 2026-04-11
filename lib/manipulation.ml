@@ -14,34 +14,6 @@
 
 module RelationMap = Management.Database.RelationMap
 
-module Error = struct
-  type t =
-    | RelationNotFound of string
-    | RelationAlreadyExists of string
-    | TupleNotFound of Conventions.Hash.t
-    | DuplicateTuple of Conventions.Hash.t
-    | ConstraintViolation of string
-    | StorageError of string
-
-  let string_of_error = function
-    | RelationNotFound s -> "RelationNotFound: " ^ s
-    | RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-    | TupleNotFound h -> "TupleNotFound: " ^ h
-    | DuplicateTuple h -> "DuplicateTuple: " ^ h
-    | ConstraintViolation s -> "ConstraintViolation: " ^ s
-    | StorageError s -> "StorageError: " ^ s
-
-  let sexp_of_error e =
-    let open Sexplib.Sexp in
-    match e with
-    | RelationNotFound s -> List [ Atom "relation-not-found"; Atom s ]
-    | RelationAlreadyExists s -> List [ Atom "relation-already-exists"; Atom s ]
-    | TupleNotFound h -> List [ Atom "tuple-not-found"; Atom h ]
-    | DuplicateTuple h -> List [ Atom "duplicate-tuple"; Atom h ]
-    | ConstraintViolation s -> List [ Atom "constraint-violation"; Atom s ]
-    | StorageError s -> List [ Atom "storage-error"; Atom s ]
-end
-
 (** Build membership criteria from schema (validates type membership).
     Returns a function that takes a tree-lookup function and a tuple, checking
     schema conformance and tree membership at call time. *)
