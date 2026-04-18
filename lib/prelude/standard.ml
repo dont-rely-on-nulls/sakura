@@ -15,7 +15,8 @@ let make_comparison ~name ~domain_name ~pred ~cardinality ~generator =
     |> Schema.add "left" domain_name
     |> Schema.add "right" domain_name
   in
-  let membership_criteria : Tuple.t -> bool = function
+  let membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool =
+   fun _tree_of -> function
     | Tuple.Materialized m -> (
         match
           ( Tuple.AttributeMap.find_opt "left" m.attributes,
@@ -176,7 +177,8 @@ let plus_natural : Relation.t =
           (Tuple.make_materialized ~relation:"plus" ~attributes, generator)
     | None -> Error "Cannot enumerate plus randomly."
   in
-  let membership_criteria : Tuple.t -> bool = function
+  let membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool =
+   fun _tree_of -> function
     | Tuple.Materialized m -> (
         match
           ( Tuple.AttributeMap.find_opt "a" m.attributes,
@@ -214,7 +216,8 @@ let times_natural : Relation.t =
           (Tuple.make_materialized ~relation:"times" ~attributes, generator)
     | None -> Error "Cannot enumerate times randomly."
   in
-  let membership_criteria : Tuple.t -> bool = function
+  let membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool =
+   fun _tree_of -> function
     | Tuple.Materialized m -> (
         match
           ( Tuple.AttributeMap.find_opt "a" m.attributes,
@@ -253,7 +256,8 @@ let minus_natural : Relation.t =
           (Tuple.make_materialized ~relation:"minus" ~attributes, generator)
     | None -> Error "Cannot enumerate minus randomly."
   in
-  let membership_criteria : Tuple.t -> bool = function
+  let membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool =
+   fun _tree_of -> function
     | Tuple.Materialized m -> (
         match
           ( Tuple.AttributeMap.find_opt "a" m.attributes,
@@ -301,7 +305,8 @@ let divide_natural : Relation.t =
           (Tuple.make_materialized ~relation:"divide" ~attributes, generator)
     | None -> Error "Cannot enumerate divide randomly."
   in
-  let membership_criteria : Tuple.t -> bool = function
+  let membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool =
+   fun _tree_of -> function
     | Tuple.Materialized m -> (
         match
           ( Tuple.AttributeMap.find_opt "a" m.attributes,
