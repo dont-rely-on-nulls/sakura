@@ -12,13 +12,16 @@ module type TRANSPORT = sig
   val output : connection -> out_channel
 end
 
-module TCPTransport : TRANSPORT = struct
+(* TODO: move this into TCP once we have a proper configuration system *)
+type tcp_options = {
+  address_family : Unix.socket_domain;
+  address : Unix.sockaddr
+}
+
+module TCP : (TRANSPORT with type options = tcp_options) = struct
   type t = Unix.file_descr
   type connection = Unix.file_descr
-  type options = {
-      address_family : Unix.socket_domain;
-      address : Unix.sockaddr
-  }
+  type options = tcp_options
 
   let create { address_family; address } =
     let socket = Unix.socket address_family Unix.SOCK_STREAM 0 in

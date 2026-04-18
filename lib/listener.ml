@@ -2,13 +2,6 @@ module type LISTENER = functor (T : Transport.TRANSPORT)(S : Management.Physical
   val run : T.t -> Management.Database.t -> S.t -> unit
 end
 
-module StringKey = struct
-  type t = string
-  let compare = String.compare
-end
-
-module StringMap = BatMap.Make(StringKey)
-
 module Make : LISTENER =
   functor (T : Transport.TRANSPORT)(S : Management.Physical.S with type error = string) -> struct
     module type SubS = Sublanguage.S with type storage = S.t
@@ -18,11 +11,12 @@ module Make : LISTENER =
     let read_command input =
       try
         Ok (Sexplib.Sexp.input_sexp input)
-      with e -> Error (Error.SyntaxError (Printexc.to_string e))
+      with Sexplib.Sexp.Parse_error { err_msg ; _} ->
+        Error (Error.SyntaxError err_msg)
 
     let sublanguages =          (* should this go here? *)
       List.fold_right
-        (fun (module Language : SubS) -> StringMap.add Language.name (module Language : SubS))
+        (fun (module Language : SubS) -> Utilities.StringMap.add Language.name (module Language : SubS))
         [
           (module Drl.Sublanguage.Make(S) : SubS);
           (module Ddl.Sublanguage.Make(S) : SubS);
@@ -31,12 +25,12 @@ module Make : LISTENER =
           (module Dcl.Sublanguage.Make(S) : SubS);
           (module Scl.Sublanguage.Make(S) : SubS);
         ]
-        StringMap.empty
+        Utilities.StringMap.empty
 
     let fmap f m = Result.bind m f
 
     let find_language tag =
-      StringMap.find_opt tag sublanguages
+      Utilities.StringMap.find_opt tag sublanguages
       |> Option.to_result ~none:(Error.UnrecognizedSublanguage tag)
 
     let execute storage db expr (module Language : SubS) =
@@ -98,7 +92,7 @@ module Make : LISTENER =
             |> List.map (fun (k, attr) -> List [ Atom k; Conventions.AbstractValue.sexp_of_t attr.Attribute.value ]))
 
     (* TODO: does our network protocol make sense? *)
-    let serialize storage =
+    let serialize storage (db : Management.Database.t) =
       let open Sexplib.Sexp in
       function
       | Error e -> List [ Atom "error"; (Error.sexp_of_error e) ]
@@ -111,8 +105,8 @@ module Make : LISTENER =
                 List [ Atom "rows"; rows_sexp ];
                 List [ Atom "row_count"; Atom (string_of_int (List.length row_sexps)) ];
                 List [ Atom "has_more"; Atom (string_of_bool has_more) ];
-                (* List [ Atom "db_hash"; Atom (short_hash db_hash) ]; *)
-                (* List [ Atom "db_name"; Atom db_name ]; *)
+                List [ Atom "db_hash"; Atom db.hash ];
+                List [ Atom "db_name"; Atom db.name ];
                 List [ Atom "branch"; Atom (get_branch storage) ] ]
       | Ok (Sublanguage.Query rel) ->
          let tuples, truncated = materialize_relation storage rel current_limit in
@@ -124,8 +118,8 @@ module Make : LISTENER =
                 List [ Atom "rows"; rows_sexp ];
                 List [ Atom "row_count"; Atom (string_of_int (List.length tuples)) ];
                 List [ Atom "truncated"; Atom (string_of_bool truncated) ];
-                (* List [ Atom "db_hash"; Atom db.hash ]; *)
-                (* List [ Atom "db_name"; Atom db.name ]; *)
+                List [ Atom "db_hash"; Atom db.hash ];
+                List [ Atom "db_name"; Atom db.name ];
                 List [ Atom "branch"; Atom (get_branch storage) ] ]
       | Ok (Sublanguage.Transition (new_db, message)) ->
          List [ Atom "ok";
@@ -150,6 +144,13 @@ module Make : LISTENER =
     let output_response output sexp =
       let response = Sexplib.Sexp.to_string sexp in
       output_string output response;
+      (* Some programs, like our current iteration of
+       * relational-explorer, expect server responses to always end
+       * with a newline. Although that is technically incorrect,
+       * acommodating for it doesn't bring us much harm; thus:
+       *)
+      output_string output "\n";
+      flush output;
       print_with_time response
 
     let handle_client connection db_head (storage : S.t) =
@@ -161,12 +162,14 @@ module Make : LISTENER =
           read_command input
           |> fmap (execute_command storage db)
           |> fmap (perform storage db_head db)
-          |> serialize storage
+          |> serialize storage db
           |> output_response output
           |> ignore
         done
-      with End_of_file -> ()
-      (* TODO: log other exceptions *)
+      with
+        End_of_file -> ()
+      (* TODO: use the logger instead *)
+      | e -> Printf.eprintf "Error handling connection: %s" (Printexc.to_string e)
 
     let spawn_handler db_head storage connection =
       Stdlib.Domain.spawn (fun () -> handle_client connection db_head storage)
@@ -183,47 +186,3 @@ module Make : LISTENER =
         |> ignore
       done
   end
-
-(* module Make : LISTENER = *)
-(*   functor (S : Management.Physical.S with type error = string) -> struct *)
-(*     type options = { *)
-(*       address : string; *)
-(*       port : string; *)
-(*     } *)
-
-(*     type server = { *)
-(*       socket : Unix.file_descr *)
-(*     } *)
-
-(*     let create { address; port } = *)
-(*       (\* What about IPv6? *\) *)
-(*       let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in *)
-(*       Unix.setsockopt socket Unix.SO_REUSEADDR true; *)
-(*       Unix.setsockopt socket Unix.SO_REUSEPORT true; *)
-(*       { socket } *)
-
-(*     let read_command input = () *)
-
-(*     let execute_command dispatch storage db_ref = () *)
-
-(*     let handle_client dispatch storage db_ref fd = *)
-(*       let input = Unix.in_channel_of_descr fd in *)
-(*       let output = Unix.out_channel_of_descr fd in *)
-(*       try *)
-(*         while true do *)
-(*           Result.bind *)
-(*             (read_command input) *)
-(*             (execute_command dispatch storage db_ref) *)
-(*           |> output_response output *)
-(*         done *)
-(*       with End_of_file -> ()    (\* TODO, also handle  *\) *)
-
-(*     let spawn_handler = handle_client (\* TODO *\) *)
-
-(*     let run { socket } db storage = *)
-(*       let db_ref = ref db in *)
-(*       while true do *)
-(*         let (fd, _) = Unix.accept socket in *)
-(*         spawn_handler dispatch storage db_ref db *)
-(*       done *)
-(*   end *)
