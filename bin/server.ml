@@ -1,10 +1,5 @@
 open Relational_engine
-
-module B = Management.Physical.Memory
-module T = Transport.TCP
-module Listener = Listener.Make(T)(B)
-
-module Memory = Manipulation.Make (B)
+module Memory = Manipulation.Make (Management.Physical.Memory)
 
 (* TODO: registration failures are silently ignored; a broken prelude
    relation leaves the catalog in a partially-seeded state with no
@@ -40,56 +35,49 @@ let register_prelude_relations storage db =
       divide_natural;
     ]
 
-(* let register_branch_relations storage db = *)
-(*   (\* Register ephemeral sakura:branch and sakura:head relations backed by *)
-(*      the raw branch registry — no stored tuples, no circularity. *\) *)
-(*   let register db rel = *)
-(*     match *)
-(*       Memory.create_immutable_relation storage db *)
-(*         ~name:rel.Relation.name ~schema:rel.Relation.schema *)
-(*         ~generator:(Option.get rel.Relation.generator) *)
-(*         ~membership_criteria:rel.Relation.membership_criteria *)
-(*         ~cardinality:rel.Relation.cardinality *)
-(*     with *)
-(*     | Ok (db, _) -> db *)
-(*     | Error e -> *)
-(*         Printf.eprintf "Warning: failed to register %s: %s\n%!" *)
-(*           rel.Relation.name *)
-(*           (Manipulation.Error.string_of_error e); *)
-(*         db *)
-(*   in *)
-(*   db *)
-(*   |> Fun.flip register (BranchOps.branch_relation storage) *)
-(*   |> Fun.flip register (BranchOps.head_relation storage) *)
-
-let setup () =
-  let ( let* ) = Result.bind in
-  let* storage =
-    Management.Physical.Memory.create ()
-    |> Result.map_error (Fun.const "Failed to create storage")
-  in
-  let* db =
-    Memory.create_database storage ~name:"sakura"
-    |> Result.map_error (Fun.const "Failed to create initial database")
-  in
-  Ok (storage, db)
-
-let address = "127.0.0.1"
-let port = 7777
+let expected_keys = [ "storage"; "transport" ]
 
 let () =
-  match setup () with
-  | Error msg -> Printf.eprintf "Couldn't initialize: %s" msg
-  | Ok (storage, db) ->
-     let db =
-       db
-       |> register_prelude_relations storage
-       (* |> register_branch_relations storage *)
-     in
-     let transport =
-       T.create
-         { address_family = Unix.PF_INET;
-           address = Unix.ADDR_INET (Unix.inet_addr_of_string address, port) }
-     in
-     Printf.printf "Listening on %s:%d" address port; print_newline ();
-     Listener.run transport db storage
+  let ( let* ) = Result.bind in
+  if Array.length Sys.argv < 2 then (
+    Printf.eprintf "Usage: %s <config-file>\n%!" Sys.argv.(0);
+    exit 1);
+  let config_path = Sys.argv.(1) in
+  match
+    let* config = Configuration.load ~expected_keys config_path in
+    (* -- Storage --------------------------------------------------------- *)
+    let* _storage_tag, storage_body =
+      Configuration.require_section ~name:"storage" ~valid_tags:[ "memory" ]
+        config
+    in
+    let* storage_config =
+      Management.Physical.MemoryBackend.parse storage_body
+    in
+    let* storage =
+      Management.Physical.Memory.create storage_config
+      |> Result.map_error (fun e ->
+          Printf.sprintf "Failed to create storage: %s" e)
+    in
+    (* -- Database -------------------------------------------------------- *)
+    let* db =
+      Memory.create_database storage ~name:"sakura"
+      |> Result.map_error (fun _ -> "Failed to create initial database")
+    in
+    let db = register_prelude_relations storage db in
+    (* -- Transport ------------------------------------------------------- *)
+    let* _transport_tag, transport_body =
+      Configuration.require_section ~name:"transport" ~valid_tags:[ "tcp" ]
+        config
+    in
+    let* transport_config = Transport.TCP.parse transport_body in
+    let transport = Transport.TCP.create transport_config in
+    Ok (transport, db, storage)
+  with
+  | Error msg ->
+      Printf.eprintf "Couldn't initialize: %s\n%!" msg;
+      exit 1
+  | Ok (transport, db, storage) ->
+      let module Listener =
+        Listener.Make (Transport.TCP) (Management.Physical.Memory)
+      in
+      Listener.run transport db storage

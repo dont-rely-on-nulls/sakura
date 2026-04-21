@@ -9,10 +9,12 @@
 
 (** Backend module signature that any storage driver must implement *)
 module type BACKEND = sig
+  include Configuration.CONFIGURABLE
+
   type connection
   type error
 
-  val connect : unit -> (connection, error) result
+  val connect : configuration -> (connection, error) result
   (** Connect to the storage backend *)
 
   val disconnect : connection -> unit
@@ -47,10 +49,12 @@ end
 
 (** Storage operations built on top of a backend *)
 module type S = sig
+  include Configuration.CONFIGURABLE
+
   type t
   type error
 
-  val create : unit -> (t, error) result
+  val create : configuration -> (t, error) result
   (** Create a storage instance from a backend connection *)
 
   val close : t -> unit
@@ -80,11 +84,14 @@ module type S = sig
 end
 
 (** Functor to create storage operations from a backend *)
-module Make (B : BACKEND) : S with type error = B.error = struct
+module Make (B : BACKEND) :
+  S with type error = B.error and type configuration = B.configuration = struct
+  type configuration = B.configuration
   type t = B.connection
   type error = B.error
 
-  let create () = B.connect ()
+  let parse = B.parse
+  let create config = B.connect config
   let close = B.disconnect
 
   let store_attribute conn value =
@@ -115,7 +122,10 @@ module Make (B : BACKEND) : S with type error = B.error = struct
 end
 
 (** In-memory backend for testing and development *)
-module MemoryBackend : BACKEND with type error = string = struct
+module MemoryBackend :
+  BACKEND with type error = string and type configuration = unit = struct
+  type configuration = unit
+
   type connection = {
     data : (string, bytes) Hashtbl.t;
     mutable in_transaction : bool;
@@ -123,6 +133,11 @@ module MemoryBackend : BACKEND with type error = string = struct
   }
 
   type error = string
+
+  let parse sexp =
+    match sexp with
+    | Sexplib.Sexp.List [] -> Ok ()
+    | _ -> Error "memory backend takes no configuration"
 
   let connect () =
     Ok
