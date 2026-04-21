@@ -1,6 +1,6 @@
 (** Database manipulation operations.
 
-    This module implements the core CRUD operations for the relational engine:
+    This module implements the core operations for the relational engine:
     - Database creation
     - Relation creation and deletion
     - Tuple insertion and deletion
@@ -14,68 +14,69 @@
 
 module RelationMap = Management.Database.RelationMap
 
-(** Error types for manipulation operations *)
-type error =
-  | RelationNotFound of string
-  | RelationAlreadyExists of string
-  | TupleNotFound of Conventions.Hash.t
-  | DuplicateTuple of Conventions.Hash.t
-  | ConstraintViolation of string
-  | StorageError of string
+(** Build membership criteria from schema (validates type membership).
+    Returns a function that takes a tree-lookup function and a tuple, checking
+    schema conformance and tree membership at call time. *)
+let build_membership_criteria ~name schema :
+    (string -> Merkle.t option) -> Tuple.t -> bool =
+  let value_conforms_to_domain domain_name (value : Conventions.AbstractValue.t)
+      =
+    match domain_name with
+    | "integer" -> Obj.is_int value
+    | "natural" -> Obj.is_int value && (Obj.obj value : int) >= 0
+    | "string" -> Obj.tag value = Obj.string_tag
+    | _ ->
+        (* Unknown domain: could be a relation-typed attribute (nested tuple)
+           or a user-defined domain. Accept for now; full validation would
+           require looking up the target relation's schema. *)
+        true
+  in
+  let n_expected = List.length schema in
+  fun tree_of tuple ->
+    match tuple with
+    | Tuple.NonMaterialized nm -> (
+        match tree_of name with
+        | None -> false
+        | Some t ->
+            Merkle.member nm.hash t
+            && Tuple.AttributeMap.cardinal nm.attributes = n_expected
+            && List.for_all
+                 (fun (attr_name, _) ->
+                   Tuple.AttributeMap.mem attr_name nm.attributes)
+                 schema)
+    | Tuple.Materialized m ->
+        Tuple.AttributeMap.cardinal m.attributes = n_expected
+        && List.for_all
+             (fun (attr_name, domain_name) ->
+               match Tuple.AttributeMap.find_opt attr_name m.attributes with
+               | None -> false
+               | Some attr ->
+                   value_conforms_to_domain domain_name attr.Attribute.value)
+             schema
 
-let string_of_error = function
-  | RelationNotFound s -> "RelationNotFound: " ^ s
-  | RelationAlreadyExists s -> "RelationAlreadyExists: " ^ s
-  | TupleNotFound h -> "TupleNotFound: " ^ h
-  | DuplicateTuple h -> "DuplicateTuple: " ^ h
-  | ConstraintViolation s -> "ConstraintViolation: " ^ s
-  | StorageError s -> "StorageError: " ^ s
+let tree_of_db (db : Management.Database.t) name =
+  Option.bind (Management.Database.get_relation db name) (fun r -> r.Relation.tree)
 
-let sexp_of_error e =
-  let open Sexplib.Sexp in
-  match e with
-  | RelationNotFound s -> List [ Atom "relation-not-found"; Atom s ]
-  | RelationAlreadyExists s -> List [ Atom "relation-already-exists"; Atom s ]
-  | TupleNotFound h -> List [ Atom "tuple-not-found"; Atom h ]
-  | DuplicateTuple h -> List [ Atom "duplicate-tuple"; Atom h ]
-  | ConstraintViolation s -> List [ Atom "constraint-violation"; Atom s ]
-  | StorageError s -> List [ Atom "storage-error"; Atom s ]
+module Constraint = struct
+  include Constraint
 
-type 'a result = ('a, error) Result.t
-(** Result type for operations *)
+  (** Mutation direction for cascade constraint checking *)
+  type mutation = Insert | Delete
 
-module Schema = Schema
-(** Re-export Schema for convenience *)
-
-(** Re-export hashing functions for convenience *)
-let hash_tuple = Hashing.hash_tuple
-
-(** Build base provenance for a schema *)
-let build_base_provenance _schema relation_name =
-  Relation.Provenance.Base relation_name
-
-(** Build membership criteria from schema (validates type membership) *)
-let build_membership_criteria _schema : Tuple.t -> bool =
- (* For now, accept all tuples. Full implementation would check domain membership. *)
- fun _ ->
-  true
-
-(** Mutation direction for cascade constraint checking *)
-type mutation_kind = Insert | Delete
-
-type mutation_context = {
-  dep_rel : string;
-  transition : (string * Conventions.AbstractValue.t) list;
-  kind : mutation_kind;
-}
-(** Context for a single tuple mutation, used by cascade checking *)
+  type mutation_context = {
+    target_relation : string;
+    transition : (string * Conventions.AbstractValue.t) list;
+    kind : mutation;
+  }
+  (** Context for a single tuple mutation, used by cascade checking *)
+end
 
 (** Functor to create manipulation operations with a storage backend *)
 module Make (Storage : Management.Physical.S) = struct
   type storage = Storage.t
-  type nonrec error = error
+  type error = Error.t
 
-  let of_string_error s = StorageError s
+  let of_string_error s = Error.StorageError s
   let ( let* ) = Result.bind
 
   let fold_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a)
@@ -86,16 +87,40 @@ module Make (Storage : Management.Physical.S) = struct
         f a x)
       (Ok init) xs
 
-  (* Constraint evaluation context *)
-
   (** Build an eval_context closed over a specific (storage, db) snapshot. All
       relation lookups resolve against this exact database version. *)
   let build_eval_context (storage : storage) (db : Management.Database.t) :
       Constraint.eval_context =
+    let load_value attr_hash =
+      match Storage.load_raw storage attr_hash with
+      | Error _ | Ok None -> None
+      | Ok (Some vbytes) ->
+          Some (Marshal.from_bytes vbytes 0 : Conventions.AbstractValue.t)
+    in
+    let rec load_attrs acc = function
+      | [] -> Some (List.rev acc)
+      | (name, attr_hash) :: rest -> (
+          match load_value attr_hash with
+          | None -> None
+          | Some value -> load_attrs ((name, value) :: acc) rest)
+    in
+    let load_tuple hash =
+      match Storage.load_raw storage hash with
+      | Error _ | Ok None -> None
+      | Ok (Some bytes) ->
+          load_attrs [] (Storable.Tuple.of_bytes bytes).Storable.Tuple.attributes
+    in
+    let rec load_all acc = function
+      | [] -> Some (List.rev acc)
+      | h :: rest -> (
+          match load_tuple h with
+          | None -> None
+          | Some pairs -> load_all (pairs :: acc) rest)
+    in
     let check_membership rel_name bound_pairs =
       match Management.Database.get_relation db rel_name with
       | None -> false
-      | Some rel -> (
+      | Some rel ->
           let attributes =
             List.fold_left
               (fun acc (k, v) ->
@@ -105,38 +130,7 @@ module Make (Storage : Management.Physical.S) = struct
           let tuple =
             Tuple.Materialized { Tuple.relation = rel_name; attributes }
           in
-          if not (rel.membership_criteria tuple) then false
-          else
-            (* For stored relations, check if a matching tuple actually exists *)
-            match rel.tree with
-            | None ->
-                (* No tree = ephemeral/generator relation, membership_criteria suffices *)
-                true
-            | Some tree ->
-                let hashes = Merkle.keys tree in
-                List.exists
-                  (fun h ->
-                    match Storage.load_raw storage h with
-                    | Error _ | Ok None -> false
-                    | Ok (Some bytes) ->
-                        let stored = Storable.Tuple.of_bytes bytes in
-                        (* Check if all bound pairs match the stored tuple's attributes *)
-                        List.for_all
-                          (fun (bk, bv) ->
-                            List.exists
-                              (fun (sk, sh) ->
-                                sk = bk
-                                &&
-                                match Storage.load_raw storage sh with
-                                | Error _ | Ok None -> false
-                                | Ok (Some vbytes) ->
-                                    let sv : Conventions.AbstractValue.t =
-                                      Marshal.from_bytes vbytes 0
-                                    in
-                                    Stdlib.( = ) sv bv)
-                              stored.Storable.Tuple.attributes)
-                          bound_pairs)
-                  hashes)
+          rel.membership_criteria (tree_of_db db) tuple
     in
     let iterate_finite rel_name =
       match Management.Database.get_relation db rel_name with
@@ -144,39 +138,11 @@ module Make (Storage : Management.Physical.S) = struct
       | Some rel -> (
           match rel.cardinality with
           | Conventions.Cardinality.Finite _
-          | Conventions.Cardinality.ConstrainedFinite -> (
-              match rel.tree with
-              | None -> Some []
-              | Some tree ->
-                  let hashes = Merkle.keys tree in
-                  let rec load_all acc = function
-                    | [] -> Some (List.rev acc)
-                    | h :: rest -> (
-                        match Storage.load_raw storage h with
-                        | Error _ -> None
-                        | Ok None -> None
-                        | Ok (Some bytes) -> (
-                            let stored = Storable.Tuple.of_bytes bytes in
-                            let rec load_attrs attr_acc = function
-                              | [] -> Some (List.rev attr_acc)
-                              | (name, attr_hash) :: attr_rest -> (
-                                  match Storage.load_raw storage attr_hash with
-                                  | Error _ | Ok None -> None
-                                  | Ok (Some vbytes) ->
-                                      let value : Conventions.AbstractValue.t =
-                                        Marshal.from_bytes vbytes 0
-                                      in
-                                      load_attrs
-                                        ((name, value) :: attr_acc)
-                                        attr_rest)
-                            in
-                            match
-                              load_attrs [] stored.Storable.Tuple.attributes
-                            with
-                            | None -> None
-                            | Some pairs -> load_all (pairs :: acc) rest))
-                  in
-                  load_all [] hashes)
+          | Conventions.Cardinality.ConstrainedFinite ->
+              let hashes =
+                match rel.tree with None -> [] | Some tree -> Merkle.keys tree
+              in
+              load_all [] hashes
           | _ -> None)
     in
     { Constraint.check_membership; iterate_finite }
@@ -187,7 +153,7 @@ module Make (Storage : Management.Physical.S) = struct
   let store_relation (storage : storage) (relation : Relation.t) :
       (unit, error) Result.t =
     match relation.hash with
-    | None -> Error (StorageError "Relation has no hash")
+    | None -> Error (Error.StorageError "Relation has no hash")
     | Some rel_hash -> (
         let tree_keys =
           match relation.tree with None -> [] | Some tree -> Merkle.keys tree
@@ -203,7 +169,7 @@ module Make (Storage : Management.Physical.S) = struct
         match
           Storage.store_raw storage rel_hash (Storable.Relation.to_bytes stored)
         with
-        | Error _ -> Error (StorageError "Failed to store relation")
+        | Error _ -> Error (Error.StorageError "Failed to store relation")
         | Ok () -> Ok ())
 
   (** Store a database state to storage *)
@@ -232,14 +198,14 @@ module Make (Storage : Management.Physical.S) = struct
       match
         Storage.store_raw storage db.hash (Storable.Database.to_bytes stored)
       with
-      | Error _ -> Error (StorageError "Failed to store database")
+      | Error _ -> Error (Error.StorageError "Failed to store database")
       | Ok () -> Ok ()
 
   (** Load a relation state from storage by hash *)
   let load_relation (storage : storage) (rel_hash : Conventions.Hash.t) :
       (Relation.t option, error) Result.t =
     match Storage.load_raw storage rel_hash with
-    | Error _ -> Error (StorageError "Failed to load relation")
+    | Error _ -> Error (Error.StorageError "Failed to load relation")
     | Ok None -> Ok None
     | Ok (Some bytes) ->
         let stored = Storable.Relation.of_bytes bytes in
@@ -252,8 +218,8 @@ module Make (Storage : Management.Physical.S) = struct
           Relation.make ~hash:(Some rel_hash) ~name:stored.name
             ~schema:stored.schema ~tree:(Some tree) ~constraints:None
             ~cardinality:stored.cardinality ~generator:None
-            ~membership_criteria:(build_membership_criteria stored.schema)
-            ~provenance:(build_base_provenance stored.schema stored.name)
+            ~membership_criteria:(build_membership_criteria ~name:stored.name stored.schema)
+            ~provenance:(Relation.Provenance.Base stored.name)
             ~lineage:(Relation.Lineage.Base stored.name)
         in
         Ok (Some relation)
@@ -264,7 +230,7 @@ module Make (Storage : Management.Physical.S) = struct
   let load_database (storage : storage) (db_hash : Conventions.Hash.t) :
       (Management.Database.t option, error) Result.t =
     match Storage.load_raw storage db_hash with
-    | Error _ -> Error (StorageError "Failed to load database")
+    | Error _ -> Error (Error.StorageError "Failed to load database")
     | Ok None -> Ok None
     | Ok (Some bytes) ->
         let stored = Storable.Database.of_bytes bytes in
@@ -278,7 +244,8 @@ module Make (Storage : Management.Physical.S) = struct
           | (name, rel_hash) :: rest -> (
               let* rel_opt = load_relation storage rel_hash in
               match rel_opt with
-              | None -> Error (StorageError ("Relation not found: " ^ name))
+              | None ->
+                  Error (Error.StorageError ("Relation not found: " ^ name))
               | Some rel -> load_relations ((name, rel) :: acc) rest)
         in
         let* relation_list = load_relations [] stored.relations in
@@ -307,9 +274,9 @@ module Make (Storage : Management.Physical.S) = struct
   (** Create a new empty relation with the given schema *)
   let create_relation_raw (storage : storage) (db : Management.Database.t)
       ~(name : string) ~(schema : Schema.t) :
-      (Management.Database.t * Relation.t) result =
+      (Management.Database.t * Relation.t, Error.t) Result.t =
     if Management.Database.has_relation db name then
-      Error (RelationAlreadyExists name)
+      Error (Error.RelationAlreadyExists name)
     else
       let tree = Merkle.empty in
       let relation_hash = Hashing.hash_relation ~name ~schema ~tree in
@@ -317,8 +284,8 @@ module Make (Storage : Management.Physical.S) = struct
         Relation.make ~hash:(Some relation_hash) ~name ~schema ~tree:(Some tree)
           ~constraints:None ~cardinality:(Conventions.Cardinality.Finite 0)
           ~generator:None
-          ~membership_criteria:(build_membership_criteria schema)
-          ~provenance:(build_base_provenance schema name)
+          ~membership_criteria:(build_membership_criteria ~name schema)
+          ~provenance:(Relation.Provenance.Base name)
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
@@ -342,7 +309,7 @@ module Make (Storage : Management.Physical.S) = struct
           in
           match Storage.store_raw storage value_hash value_bytes with
           | Error _ ->
-              Error (StorageError ("Failed to store attribute: " ^ name))
+              Error (Error.StorageError ("Failed to store attribute: " ^ name))
           | Ok () -> store_all ((name, value_hash) :: acc) rest)
     in
     store_all [] attrs
@@ -351,7 +318,7 @@ module Make (Storage : Management.Physical.S) = struct
   let load_tuple (storage : storage) (tuple_hash : Conventions.Hash.t) :
       (Tuple.materialized option, error) Result.t =
     match Storage.load_raw storage tuple_hash with
-    | Error _ -> Error (StorageError "Failed to load tuple")
+    | Error _ -> Error (Error.StorageError "Failed to load tuple")
     | Ok None -> Ok None
     | Ok (Some tuple_bytes) ->
         let stored = Storable.Tuple.of_bytes tuple_bytes in
@@ -360,8 +327,10 @@ module Make (Storage : Management.Physical.S) = struct
           | (name, attr_hash) :: rest -> (
               match Storage.load_raw storage attr_hash with
               | Error _ ->
-                  Error (StorageError ("Failed to load attribute: " ^ name))
-              | Ok None -> Error (StorageError ("Attribute not found: " ^ name))
+                  Error
+                    (Error.StorageError ("Failed to load attribute: " ^ name))
+              | Ok None ->
+                  Error (Error.StorageError ("Attribute not found: " ^ name))
               | Ok (Some value_bytes) ->
                   let value : Conventions.AbstractValue.t =
                     Marshal.from_bytes value_bytes 0
@@ -385,7 +354,7 @@ module Make (Storage : Management.Physical.S) = struct
       | hash :: rest -> (
           let* tup_opt = load_tuple storage hash in
           match tup_opt with
-          | None -> Error (TupleNotFound hash)
+          | None -> Error (Error.TupleNotFound hash)
           | Some tuple -> load_all (tuple :: acc) rest)
     in
     load_all [] hashes
@@ -396,7 +365,8 @@ module Make (Storage : Management.Physical.S) = struct
     | Some tup -> on_some tup
     | None ->
         Error
-          (StorageError ("Tuple missing for referenced hash: " ^ tuple_hash))
+          (Error.StorageError
+             ("Tuple missing for referenced hash: " ^ tuple_hash))
 
   let transition_attrs (tuple : Tuple.materialized) =
     Tuple.AttributeMap.bindings tuple.attributes
@@ -404,7 +374,7 @@ module Make (Storage : Management.Physical.S) = struct
 
   let ensure_relation_exists (db : Management.Database.t) name =
     if Management.Database.has_relation db name then Ok ()
-    else Error (RelationNotFound name)
+    else Error (Error.RelationNotFound name)
 
   let bump_cardinality delta = function
     | Conventions.Cardinality.Finite n ->
@@ -414,7 +384,13 @@ module Make (Storage : Management.Physical.S) = struct
   let rehashed_relation_with_tree ~name ~schema (relation : Relation.t) tree
       cardinality =
     let hash = Hashing.hash_relation ~name ~schema ~tree in
-    { relation with hash = Some hash; tree = Some tree; cardinality }
+    {
+      relation with
+      hash = Some hash;
+      tree = Some tree;
+      cardinality;
+      membership_criteria = build_membership_criteria ~name schema;
+    }
 
   let validate_tuple_constraints (storage : storage)
       (db : Management.Database.t) (relation : Relation.t)
@@ -428,14 +404,15 @@ module Make (Storage : Management.Physical.S) = struct
     in
     match eval_result with
     | Ok true -> Ok ()
-    | Ok false -> Error (ConstraintViolation "Constraint not satisfied")
+    | Ok false -> Error (Error.ConstraintViolation "Constraint not satisfied")
     | Error (Constraint.ConstraintFailures failures) ->
         let msg =
           String.concat "; "
             (List.map (fun (n, _) -> "constraint " ^ n ^ " violated") failures)
         in
-        Error (ConstraintViolation msg)
-    | Error _ -> Error (ConstraintViolation "Constraint evaluation failed")
+        Error (Error.ConstraintViolation msg)
+    | Error _ ->
+        Error (Error.ConstraintViolation "Constraint evaluation failed")
 
   let store_tuple_payload storage tuple_hash (tuple : Tuple.materialized) =
     let* attr_hashes = store_attributes storage tuple in
@@ -444,23 +421,25 @@ module Make (Storage : Management.Physical.S) = struct
     in
     let tuple_bytes = Storable.Tuple.to_bytes stored_tuple in
     match Storage.store_raw storage tuple_hash tuple_bytes with
-    | Error _ -> Error (StorageError "Failed to store tuple")
+    | Error _ -> Error (Error.StorageError "Failed to store tuple")
     | Ok () -> Ok ()
 
   (* Cascade constraint helpers *)
 
   let polarity_triggered_by kind pol =
     match (kind, pol) with
-    | Insert, (Constraint.Negative | Constraint.Both) -> true
-    | Delete, (Constraint.Positive | Constraint.Both) -> true
+    | Constraint.Insert, (Constraint.Negative | Constraint.Both) -> true
+    | Constraint.Delete, (Constraint.Positive | Constraint.Both) -> true
     | _ -> false
 
-  let cascade_violation_msg kind dep_rel cname constrained_name =
+  let cascade_violation_msg kind target_relation cname constrained_name =
     let verb =
-      match kind with Insert -> "inserting into" | Delete -> "deleting from"
+      match kind with
+      | Constraint.Insert -> "inserting into"
+      | Constraint.Delete -> "deleting from"
     in
-    Printf.sprintf "cascade: %s %s violates constraint %s on %s" verb dep_rel
-      cname constrained_name
+    Printf.sprintf "cascade: %s %s violates constraint %s on %s" verb
+      target_relation cname constrained_name
 
   let is_deferred (db : Management.Database.t) rel_name cname =
     List.exists
@@ -477,13 +456,15 @@ module Make (Storage : Management.Physical.S) = struct
            | None -> false)
          filter
 
-  let recheck_one storage ctx mctx cname cbody constrained_name filter
-      (h : Conventions.Hash.t) : unit result =
+  let recheck_one storage ctx (mctx : Constraint.mutation_context) cname cbody
+      constrained_name filter (h : Conventions.Hash.t) : (unit, error) Result.t
+      =
     with_loaded_tuple storage h ~on_some:(fun tup ->
         if not (needs_recheck filter tup) then Ok ()
         else
           let cbody' =
-            Constraint.substitute_transition cbody mctx.dep_rel mctx.transition
+            Constraint.substitute_transition cbody mctx.target_relation
+              mctx.transition
           in
           match
             Constraint.evaluate_first_failure ctx tup [ (cname, cbody') ]
@@ -491,21 +472,21 @@ module Make (Storage : Management.Physical.S) = struct
           | Ok true -> Ok ()
           | Ok false | Error _ ->
               Error
-                (ConstraintViolation
-                   (cascade_violation_msg mctx.kind mctx.dep_rel cname
+                (Error.ConstraintViolation
+                   (cascade_violation_msg mctx.kind mctx.target_relation cname
                       constrained_name)))
 
-  let check_one_constraint storage ctx db mctx constrained_name constrained_rel
-      (cname, cbody) : unit result =
+  let check_one_constraint storage ctx db (mctx : Constraint.mutation_context)
+      constrained_name constrained_rel (cname, cbody) : (unit, error) Result.t =
     if is_deferred db constrained_name cname then Ok ()
     else
       let pols = Constraint.polarity_of cbody in
-      match Constraint.polarity_find mctx.dep_rel pols with
+      match Constraint.polarity_find mctx.target_relation pols with
       | None -> Ok ()
       | Some pol when not (polarity_triggered_by mctx.kind pol) -> Ok ()
       | Some _ ->
           let filter =
-            Constraint.focused_filter cbody mctx.dep_rel mctx.transition
+            Constraint.focused_filter cbody mctx.target_relation mctx.transition
           in
           let hashes =
             match constrained_rel.Relation.tree with
@@ -517,13 +498,14 @@ module Make (Storage : Management.Physical.S) = struct
               recheck_one storage ctx mctx cname cbody constrained_name filter h)
             () hashes
 
-  (** Scan every relation in [db] for constraints that reference [mctx.dep_rel]
-      with a polarity matched by the mutation kind, then re-evaluate those
-      constraints against the affected tuples in each constrained relation.
+  (** Scan every relation in [db] for constraints that reference
+      [mctx.target_relation] with a polarity matched by the mutation kind, then
+      re-evaluate those constraints against the affected tuples in each
+      constrained relation.
 
       Returns [Ok ()] when all cascade checks pass. *)
   let check_cascade_constraints (storage : storage) (db : Management.Database.t)
-      (mctx : mutation_context) : unit result =
+      (mctx : Constraint.mutation_context) =
     let ctx = build_eval_context storage db in
     Management.Database.RelationMap.fold
       (fun constrained_name constrained_rel acc ->
@@ -541,11 +523,13 @@ module Make (Storage : Management.Physical.S) = struct
   (** Insert a tuple into a relation, storing it in the backend *)
   let create_tuple (storage : storage) (db : Management.Database.t)
       (relation : Relation.t) (tuple : Tuple.materialized) :
-      (Management.Database.t * Relation.t * Conventions.Hash.t) result =
+      (Management.Database.t * Relation.t * Conventions.Hash.t, error) Result.t
+      =
     let name = relation.name in
     let* () = ensure_relation_exists db name in
-    if not (relation.membership_criteria (Tuple.Materialized tuple)) then
-      Error (ConstraintViolation "Tuple does not satisfy membership criteria")
+    if not (relation.membership_criteria (tree_of_db db) (Tuple.Materialized tuple)) then
+      Error
+        (Error.ConstraintViolation "Tuple does not satisfy membership criteria")
     else
       let* () = validate_tuple_constraints storage db relation tuple in
       let tuple_hash = Hashing.hash_tuple tuple in
@@ -553,7 +537,7 @@ module Make (Storage : Management.Physical.S) = struct
         match relation.tree with Some t -> t | None -> Merkle.empty
       in
       if Merkle.member tuple_hash current_tree then
-        Error (DuplicateTuple tuple_hash)
+        Error (Error.DuplicateTuple tuple_hash)
       else
         let* () = store_tuple_payload storage tuple_hash tuple in
         let new_tree = Merkle.insert tuple_hash current_tree in
@@ -568,9 +552,9 @@ module Make (Storage : Management.Physical.S) = struct
         let* () =
           check_cascade_constraints storage new_db
             {
-              dep_rel = name;
+              target_relation = name;
               transition = transition_attrs tuple;
-              kind = Insert;
+              kind = Constraint.Insert;
             }
         in
         let* () = store_relation storage new_relation in
@@ -580,7 +564,9 @@ module Make (Storage : Management.Physical.S) = struct
   (** Insert multiple tuples into a relation *)
   let create_tuples (storage : storage) (db : Management.Database.t)
       (relation : Relation.t) (tuples : Tuple.materialized list) :
-      (Management.Database.t * Relation.t * Conventions.Hash.t list) result =
+      ( Management.Database.t * Relation.t * Conventions.Hash.t list,
+        error )
+      Result.t =
     let rec insert_all db rel hashes = function
       | [] -> Ok (db, rel, List.rev hashes)
       | tuple :: rest ->
@@ -592,16 +578,16 @@ module Make (Storage : Management.Physical.S) = struct
   (** Remove a tuple from a relation by its hash *)
   let retract_tuple (storage : storage) (db : Management.Database.t)
       (relation : Relation.t) ~(tuple_hash : Conventions.Hash.t) :
-      (Management.Database.t * Relation.t) result =
+      (Management.Database.t * Relation.t, error) Result.t =
     let name = relation.name in
     let* () = ensure_relation_exists db name in
     let* current_tree =
       match relation.tree with
-      | None -> Error (TupleNotFound tuple_hash)
+      | None -> Error (Error.TupleNotFound tuple_hash)
       | Some tree -> Ok tree
     in
     if not (Merkle.member tuple_hash current_tree) then
-      Error (TupleNotFound tuple_hash)
+      Error (Error.TupleNotFound tuple_hash)
     else
       (* Note: We don't delete from storage - content-addressed storage is append-only.
          The tuple data remains for historical queries / garbage collection later. *)
@@ -618,9 +604,9 @@ module Make (Storage : Management.Physical.S) = struct
         with_loaded_tuple storage tuple_hash ~on_some:(fun deleted_tuple ->
             check_cascade_constraints storage new_db
               {
-                dep_rel = name;
+                target_relation = name;
                 transition = transition_attrs deleted_tuple;
-                kind = Delete;
+                kind = Constraint.Delete;
               })
       in
       let* () = store_relation storage new_relation in
@@ -724,7 +710,8 @@ module Make (Storage : Management.Physical.S) = struct
     let get_required (db : Management.Database.t) rel_name =
       match Management.Database.get_relation db rel_name with
       | Some rel -> Ok rel
-      | None -> Error (StorageError ("Catalog relation missing: " ^ rel_name))
+      | None ->
+          Error (Error.StorageError ("Catalog relation missing: " ^ rel_name))
     in
     let* relation_rel = get_required db Prelude.Catalog.relation_rel_name in
     let* db, _, _ =
@@ -804,9 +791,9 @@ module Make (Storage : Management.Physical.S) = struct
       [sakura:relation] and [sakura:attribute] in the system catalog. *)
   let create_relation (storage : storage) (db : Management.Database.t)
       ~(name : string) ~(schema : Schema.t) :
-      (Management.Database.t * Relation.t) result =
+      (Management.Database.t * Relation.t, error) Result.t =
     if Management.Database.has_relation db name then
-      Error (RelationAlreadyExists name)
+      Error (Error.RelationAlreadyExists name)
     else
       let tree = Merkle.empty in
       let relation_hash = Hashing.hash_relation ~name ~schema ~tree in
@@ -814,8 +801,8 @@ module Make (Storage : Management.Physical.S) = struct
         Relation.make ~hash:(Some relation_hash) ~name ~schema ~tree:(Some tree)
           ~constraints:None ~cardinality:(Conventions.Cardinality.Finite 0)
           ~generator:None
-          ~membership_criteria:(build_membership_criteria schema)
-          ~provenance:(build_base_provenance schema name)
+          ~membership_criteria:(build_membership_criteria ~name schema)
+          ~provenance:(Relation.Provenance.Base name)
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
@@ -827,11 +814,11 @@ module Make (Storage : Management.Physical.S) = struct
   (** Create an immutable/generator-based relation *)
   let create_immutable_relation (storage : storage) (db : Management.Database.t)
       ~(name : string) ~(schema : Schema.t) ~(generator : Generator.t)
-      ~(membership_criteria : Tuple.t -> bool)
+      ~(membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool)
       ~(cardinality : Conventions.Cardinality.t) :
-      (Management.Database.t * Relation.t) result =
+      (Management.Database.t * Relation.t, error) Result.t =
     if Management.Database.has_relation db name then
-      Error (RelationAlreadyExists name)
+      Error (Error.RelationAlreadyExists name)
     else
       let relation_hash =
         Hashing.hash_relation ~name ~schema ~tree:Merkle.empty
@@ -840,8 +827,7 @@ module Make (Storage : Management.Physical.S) = struct
         Relation.make ~hash:(Some relation_hash) ~name ~schema
           ~tree:None (* No tree for generator-based relations *)
           ~constraints:None ~cardinality ~generator:(Some generator)
-          ~membership_criteria
-          ~provenance:(build_base_provenance schema name)
+          ~membership_criteria ~provenance:(Relation.Provenance.Base name)
           ~lineage:(Relation.Lineage.Base name)
       in
       let new_db = Management.Database.add_relation db ~relation in
@@ -853,9 +839,9 @@ module Make (Storage : Management.Physical.S) = struct
   (** Remove a relation from the database. Also removes its entries from
       [sakura:relation] and [sakura:attribute]. *)
   let retract_relation (storage : storage) (db : Management.Database.t)
-      ~(name : string) : Management.Database.t result =
+      ~(name : string) : (Management.Database.t, error) Result.t =
     match Management.Database.get_relation db name with
-    | None -> Error (RelationNotFound name)
+    | None -> Error (Error.RelationNotFound name)
     | Some relation ->
         let new_db = Management.Database.remove_relation db ~name in
         (* Update catalog on the db state that no longer contains the retracted relation *)
@@ -865,10 +851,11 @@ module Make (Storage : Management.Physical.S) = struct
 
   (** Clear all tuples from a relation (truncate) *)
   let clear_relation (storage : storage) (db : Management.Database.t)
-      (relation : Relation.t) : (Management.Database.t * Relation.t) result =
+      (relation : Relation.t) :
+      (Management.Database.t * Relation.t, error) Result.t =
     let name = relation.name in
     match Management.Database.get_relation db name with
-    | None -> Error (RelationNotFound name)
+    | None -> Error (Error.RelationNotFound name)
     | Some _ ->
         let new_tree = Merkle.empty in
         let new_hash =
@@ -880,6 +867,8 @@ module Make (Storage : Management.Physical.S) = struct
             hash = Some new_hash;
             tree = Some new_tree;
             cardinality = Conventions.Cardinality.Finite 0;
+            membership_criteria =
+              build_membership_criteria ~name relation.schema;
           }
         in
         let new_db =
@@ -894,9 +883,9 @@ module Make (Storage : Management.Physical.S) = struct
   let update_relation_constraints (storage : storage)
       (db : Management.Database.t) ~(relation_name : string)
       ~(constraints : Relation.RelationConstraint.t) :
-      (Management.Database.t * Relation.t) result =
+      (Management.Database.t * Relation.t, error) Result.t =
     match Management.Database.get_relation db relation_name with
-    | None -> Error (RelationNotFound relation_name)
+    | None -> Error (Error.RelationNotFound relation_name)
     | Some relation ->
         let merged_constraints =
           match relation.constraints with
@@ -1012,7 +1001,7 @@ module Make (Storage : Management.Physical.S) = struct
                     | Ok true -> Ok ()
                     | Ok false | Error _ ->
                         Error
-                          (ConstraintViolation
+                          (Error.ConstraintViolation
                              (Printf.sprintf
                                 "deferred constraint %s on %s violated"
                                 entry.constraint_name entry.relation_name))))
@@ -1037,6 +1026,3 @@ module Make (Storage : Management.Physical.S) = struct
     let* () = store_database storage db' in
     Ok db'
 end
-
-module Memory = Make (Management.Physical.Memory)
-(** Default instance using in-memory storage for convenience/testing *)

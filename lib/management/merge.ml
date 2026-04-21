@@ -10,6 +10,7 @@ type conflict =
 type strategy = PreferLeft | PreferRight | RevertToAncestor
 type merge_result = Clean of Database.t | Failed of conflict list
 
+(* TODO: Remove this later. We already should have the interface on the manipulation *)
 (** Module type for the subset of Manipulation.Make we need. *)
 module type MANIPULATION = sig
   type storage

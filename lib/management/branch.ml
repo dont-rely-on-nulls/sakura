@@ -100,7 +100,7 @@ module Make (Storage : Physical.S with type error = string) = struct
       ~tree:None ~constraints:None
       ~cardinality:Conventions.Cardinality.ConstrainedFinite
       ~generator:(Some generator)
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:(Relation.Provenance.Base Prelude.Catalog.branch_rel_name)
       ~lineage:(Relation.Lineage.Base Prelude.Catalog.branch_rel_name)
 
@@ -127,7 +127,7 @@ module Make (Storage : Physical.S with type error = string) = struct
       ~tree:None ~constraints:None
       ~cardinality:Conventions.Cardinality.ConstrainedFinite
       ~generator:(Some generator)
-      ~membership_criteria:(fun _ -> true)
+      ~membership_criteria:(fun _ _ -> true)
       ~provenance:(Relation.Provenance.Base Prelude.Catalog.head_rel_name)
       ~lineage:(Relation.Lineage.Base Prelude.Catalog.head_rel_name)
 end

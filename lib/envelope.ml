@@ -6,12 +6,12 @@
 
 type tagged = { tag : string; payload : Sexplib.Sexp.t }
 
-let parse (input : string) : (tagged, string) Result.t =
-  match Sexplib.Sexp.of_string input with
+let parse (input : Sexplib.Sexp.t) : (tagged, Error.t) Result.t =
+  match input with
   | Sexplib.Sexp.List (Sexplib.Sexp.Atom tag :: rest) ->
-      let payload =
-        match rest with [ single ] -> single | many -> Sexplib.Sexp.List many
-      in
-      Ok { tag; payload }
-  | _ -> Error "expected (tag payload...)"
-  | exception exn -> Error (Printexc.to_string exn)
+    let payload = match rest with
+      | [single] -> single
+      | many -> Sexplib.Sexp.List many
+    in
+    Ok { tag; payload }
+  | s -> Error (Error.MalformedExpression s)

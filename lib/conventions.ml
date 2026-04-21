@@ -25,7 +25,8 @@ end
 module AbstractValue = struct
   type t = Obj.t
 
-  let hash (elem : t) = Sha256.to_hex (Sha256.string (Bytes.to_string (Marshal.to_bytes elem [])))
+  let hash (elem : t) =
+    Sha256.to_hex (Sha256.string (Bytes.to_string (Marshal.to_bytes elem [])))
 
   let sexp_of_t (v : t) =
     let open Sexplib.Sexp in
