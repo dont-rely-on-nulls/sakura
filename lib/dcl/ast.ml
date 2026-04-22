@@ -10,4 +10,5 @@ type statement =
   | GetBranchTip of string
   | UpdateBranchTip of { name : string; hash : string }
   | Merge of { left : string; right : string; strategy : merge_strategy }
+  | Use of string
 [@@deriving sexp]
