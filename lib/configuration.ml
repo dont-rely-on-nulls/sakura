@@ -26,8 +26,9 @@ let insert_section ~expected acc key body =
   in
   match body with
   | [ subtree ] -> Ok (Utilities.StringMap.add key subtree acc)
+  | [] -> errorf "Configuration section %s is empty (expected a tagged value)" key
   | _ ->
-      errorf "Configuration section %s must contain exactly one tagged value"
+      errorf "Configuration section %s has multiple values (expected exactly one)"
         key
 
 (** [(server ...)] sexp -> section map. Rejects unknown/duplicate keys. *)
@@ -54,9 +55,10 @@ let parse_server ~expected_keys (sexp : Sexplib.Sexp.t) : (t, string) result =
 let load ~expected_keys (path : string) : (t, string) result =
   match Sexplib.Sexp.load_sexp path with
   | sexp -> parse_server ~expected_keys sexp
-  | exception exn ->
-      errorf "Failed to load configuration file %s: %s" path
-        (Printexc.to_string exn)
+  | exception Sys_error msg ->
+      errorf "Failed to load configuration file %s: %s" path msg
+  | exception Failure msg ->
+      errorf "Failed to parse configuration file %s: %s" path msg
 
 (** [(tag field1 ...)] -> [(tag, List [field1; ...])]. *)
 let extract_tagged_section (sexp : Sexplib.Sexp.t) :

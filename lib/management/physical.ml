@@ -137,7 +137,10 @@ module MemoryBackend :
   let parse sexp =
     match sexp with
     | Sexplib.Sexp.List [] -> Ok ()
-    | _ -> Error "memory backend takes no configuration"
+    | _ ->
+        Error
+          (Printf.sprintf "memory backend takes no configuration, got: %s"
+             (Sexplib.Sexp.to_string sexp))
 
   let connect () =
     Ok

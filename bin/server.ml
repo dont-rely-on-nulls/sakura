@@ -35,8 +35,6 @@ let register_prelude_relations storage db =
       divide_natural;
     ]
 
-let expected_keys = [ "storage"; "transport" ]
-
 let () =
   let ( let* ) = Result.bind in
   if Array.length Sys.argv < 2 then (
@@ -44,7 +42,9 @@ let () =
     exit 1);
   let config_path = Sys.argv.(1) in
   match
-    let* config = Configuration.load ~expected_keys config_path in
+    let* config =
+      Configuration.load ~expected_keys:[ "storage"; "transport" ] config_path
+    in
     (* -- Storage --------------------------------------------------------- *)
     let* _storage_tag, storage_body =
       Configuration.require_section ~name:"storage" ~valid_tags:[ "memory" ]

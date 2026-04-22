@@ -1,3 +1,6 @@
+;; Sakura server configuration
+;; storage: memory
+;; transport: tcp (address, port)
 (server
  (storage (memory))
  (transport (tcp
