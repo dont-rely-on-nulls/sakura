@@ -1,8 +1,4 @@
-type cursor_result = {
-  cursor_id : string;
-  rows : Tuple.materialized list;
-  has_more : bool;
-}
+include Sublanguage_types
 (** Effect classification for sublanguage operations.
 
     Categorically:
@@ -19,11 +15,6 @@ type cursor_result = {
       (Turing-complete; breaks the termination guarantee of DRL)
     - ACL -> a functor restriction: narrows the admissible natural
       transformations based on authorization context *)
-
-type result =
-  | Query of Relation.t
-  | Transition of Management.Database.t * string
-  | Cursor of cursor_result
 
 module type S = sig
   include Configuration.CONFIGURABLE

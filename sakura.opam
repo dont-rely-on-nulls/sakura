@@ -12,6 +12,18 @@ bug-reports: "https://github.com/username/reponame/issues"
 depends: [
   "ocaml"
   "dune" {>= "3.16"}
+  "ppx_protocol_conv"
+  "ppx_protocol_conv_xml_light"
+  "sha"
+  "data-encoding"
+  "ppx_inline_test" {with-test}
+  "ppx_deriving"
+  "ppx_sexp_conv"
+  "sexplib"
+  "lwt"
+  "lwt-exit"
+  "batteries"
+  "num"
   "odoc" {with-doc}
 ]
 build: [
