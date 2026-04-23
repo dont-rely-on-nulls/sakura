@@ -39,7 +39,6 @@ let registry : registry =
              Ok (TransportParcel ((module Transport.TCP), transport))) }
 
 let initialize_multigroup create_immutable_relation storage multigroup =
-  let open Prelude.Standard in
   List.fold_left
     (fun multigroup (rel : Relation.t) ->
       match
@@ -55,16 +54,19 @@ let initialize_multigroup create_immutable_relation storage multigroup =
             (Sexplib.Sexp.to_string (Error.sexp_of_error e));
           multigroup)
     multigroup
-    [ less_than_natural;
-      less_than_or_equal_natural;
-      greater_than_natural;
-      greater_than_or_equal_natural;
-      equal_natural;
-      not_equal_natural;
-      plus_natural;
-      times_natural;
-      minus_natural;
-      divide_natural ]
+    Prelude.Standard.prelude_relations
+
+(* multigroups - "sakura" is always present as the meta-multigroup *)
+let multigroup_names config =
+  let extra_multigroups =
+    match Configuration.find_section "multigroups" config with
+    | Some sexp -> (
+      match Configuration.parse_name_list sexp with
+      | Ok names -> List.filter (fun n -> n <> "sakura") names
+      | Error _ -> [])
+    | None -> []
+  in
+  "sakura" :: extra_multigroups
 
 let assemble (config : Configuration.t) : (unit -> unit, string) result =
   let open Utilities.Result in
@@ -93,15 +95,17 @@ let assemble (config : Configuration.t) : (unit -> unit, string) result =
   let* packed_transport = transport_provider transport_body in
   let (StorageParcel ((module S), storage)) = packed_storage in
   let (TransportParcel ((module T), transport)) = packed_transport in
+  let module C = Catalog.Make (S) in
   let module Manip = Manipulation.Make (S) in
-  let* multigroup =
-    Manip.create_database storage ~name:"sakura"
-    |> Result.map (initialize_multigroup Manip.create_immutable_relation storage)
-    |> Result.map_error (fun _ -> "Failed to create initial database")
+  let* catalog =
+    C.create
+      storage
+      ~prelude_relations:Prelude.Standard.prelude_relations
+      (multigroup_names config)
   in
   let module L = Listener.Make (T) (S) in
   Ok (fun () -> Scl.Executor.set_sessions (Session.create ());
-                L.run transport multigroup storage)
+                L.run transport catalog storage)
 
 let run_from_config (path : string) : (unit -> unit, string) result =
   let ( let* ) = Result.bind in

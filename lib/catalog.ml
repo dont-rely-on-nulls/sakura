@@ -13,11 +13,11 @@ type t = {
 let sakura_name = "sakura"
 
 module Make (S : Management.Physical.S with type error = string) = struct
+  open Utilities.Result
   module Manip = Manipulation.Make (S)
 
   type nonrec t = t
 
-  let ( let* ) = Result.bind
   let map_error r = Result.map_error
     (fun e -> Sexplib.Sexp.to_string (Error.sexp_of_error e)) r
 
