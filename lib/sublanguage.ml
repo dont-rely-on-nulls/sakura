@@ -26,6 +26,8 @@ type result =
   | Cursor of cursor_result
 
 module type S = sig
+  include Configuration.CONFIGURABLE
+
   type storage
   type ast
   type error

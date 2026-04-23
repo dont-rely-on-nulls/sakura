@@ -1,13 +1,6 @@
 (executable
- (public_name sakura)
- (name main)
- (modules main)
- (libraries relational_engine)
- (package sakura)
- (modes byte exe))
-
-(executable
  (name server)
+ (public_name sakura-server)
  (modules server)
  (libraries relational_engine unix)
  (modes byte exe))
