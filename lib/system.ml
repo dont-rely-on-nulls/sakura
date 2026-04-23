@@ -23,25 +23,51 @@ type registry = {
 
 let registry : registry =
   let open Utilities.StringMap in
-  {
-    storage =
+  { storage =
       empty
       |> add "memory" (fun sexp ->
-          let ( let* ) = Result.bind in
-          let* config = Management.Physical.MemoryBackend.parse sexp in
-          let* storage = Management.Physical.Memory.create config in
-          Ok (StorageParcel ((module Management.Physical.Memory), storage)));
-    transport =
+             let ( let* ) = Result.bind in
+             let* config = Management.Physical.MemoryBackend.parse sexp in
+             let* storage = Management.Physical.Memory.create config in
+             Ok (StorageParcel ((module Management.Physical.Memory), storage)))
+  ; transport =
       empty
       |> add "tcp" (fun sexp ->
-          let ( let* ) = Result.bind in
-          let* config = Transport.TCP.parse sexp in
-          let transport = Transport.TCP.create config in
-          Ok (TransportParcel ((module Transport.TCP), transport)));
-  }
+             let ( let* ) = Result.bind in
+             let* config = Transport.TCP.parse sexp in
+             let transport = Transport.TCP.create config in
+             Ok (TransportParcel ((module Transport.TCP), transport))) }
+
+let initialize_multigroup create_immutable_relation storage multigroup =
+  let open Prelude.Standard in
+  List.fold_left
+    (fun multigroup (rel : Relation.t) ->
+      match
+        create_immutable_relation storage multigroup ~name:rel.name
+          ~schema:rel.schema ~generator:(Option.get rel.generator)
+          ~membership_criteria:rel.membership_criteria
+          ~cardinality:rel.cardinality
+      with
+      | Ok (new_multigroup, _) -> new_multigroup
+      | Error e ->
+          Printf.eprintf
+            "Warning: failed to register prelude relation %s: %s\n%!" rel.name
+            (Sexplib.Sexp.to_string (Error.sexp_of_error e));
+          multigroup)
+    multigroup
+    [ less_than_natural;
+      less_than_or_equal_natural;
+      greater_than_natural;
+      greater_than_or_equal_natural;
+      equal_natural;
+      not_equal_natural;
+      plus_natural;
+      times_natural;
+      minus_natural;
+      divide_natural ]
 
 let assemble (config : Configuration.t) : (unit -> unit, string) result =
-  let ( let* ) = Result.bind in
+  let open Utilities.Result in
   let* storage_tag, storage_body =
     Configuration.require_section ~name:"storage"
       ~valid_tags:(Utilities.StringMap.bindings registry.storage |> List.map fst)
@@ -70,43 +96,12 @@ let assemble (config : Configuration.t) : (unit -> unit, string) result =
   let module Manip = Manipulation.Make (S) in
   let* multigroup =
     Manip.create_database storage ~name:"sakura"
+    |> Result.map (initialize_multigroup Manip.create_immutable_relation storage)
     |> Result.map_error (fun _ -> "Failed to create initial database")
   in
-  let multigroup =
-    let open Prelude.Standard in
-    List.fold_left
-      (fun multigroup (rel : Relation.t) ->
-        match
-          Manip.create_immutable_relation storage multigroup ~name:rel.name
-            ~schema:rel.schema ~generator:(Option.get rel.generator)
-            ~membership_criteria:rel.membership_criteria
-            ~cardinality:rel.cardinality
-        with
-        | Ok (new_multigroup, _) -> new_multigroup
-        | Error e ->
-            Printf.eprintf
-              "Warning: failed to register prelude relation %s: %s\n%!" rel.name
-              (Sexplib.Sexp.to_string (Error.sexp_of_error e));
-            multigroup)
-      multigroup
-      [
-        less_than_natural;
-        less_than_or_equal_natural;
-        greater_than_natural;
-        greater_than_or_equal_natural;
-        equal_natural;
-        not_equal_natural;
-        plus_natural;
-        times_natural;
-        minus_natural;
-        divide_natural;
-      ]
-  in
   let module L = Listener.Make (T) (S) in
-  Ok
-    (fun () ->
-      Scl.Executor.set_sessions (Session.create ());
-      L.run transport multigroup storage)
+  Ok (fun () -> Scl.Executor.set_sessions (Session.create ());
+                L.run transport multigroup storage)
 
 let run_from_config (path : string) : (unit -> unit, string) result =
   let ( let* ) = Result.bind in
