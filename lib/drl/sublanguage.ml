@@ -19,7 +19,7 @@ module Make (Storage : Management.Physical.S) = struct
     | Error msg -> Error (Exec.ParseError msg)
     | Ok () -> (
         match Exec.execute storage db ast with
-        | Ok rel -> Ok (Sublanguage.Query rel)
+        | Ok rel -> Ok (Sublanguage_types.Query rel)
         | Error e -> Error e)
 
   let sexp_of_error = Exec.sexp_of_error
