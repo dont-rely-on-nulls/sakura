@@ -2,6 +2,7 @@
 
 (library
  (name relational_engine)
+ (public_name sakura.relational_engine)
  (libraries
   sha
   data-encoding
