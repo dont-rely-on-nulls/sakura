@@ -80,6 +80,35 @@ module Make (Storage : Management.Physical.S) = struct
   let of_string_error s = Error.StorageError s
   let ( let* ) = Result.bind
 
+  let normalize_name n = Qualified_name.(parse n |> to_key)
+
+  let rec normalize_constraint_body c =
+    match c with
+    | Constraint.MemberOf { target; binding } ->
+        Constraint.MemberOf { target = normalize_name target; binding }
+    | Constraint.Not { body; universe } ->
+        Constraint.Not
+          {
+            body = normalize_constraint_body body;
+            universe = normalize_name universe;
+          }
+    | Constraint.And cs -> Constraint.And (List.map normalize_constraint_body cs)
+    | Constraint.Or cs -> Constraint.Or (List.map normalize_constraint_body cs)
+    | Constraint.Exists { variable; quantifier; body } ->
+        Constraint.Exists
+          {
+            variable;
+            quantifier = normalize_name quantifier;
+            body = normalize_constraint_body body;
+          }
+    | Constraint.Forall { variable; quantifier; body } ->
+        Constraint.Forall
+          {
+            variable;
+            quantifier = normalize_name quantifier;
+            body = normalize_constraint_body body;
+          }
+
   let fold_result (f : 'a -> 'b -> ('a, error) Result.t) (init : 'a)
       (xs : 'b list) : ('a, error) Result.t =
     List.fold_left
@@ -754,7 +783,7 @@ module Make (Storage : Management.Physical.S) = struct
     let* schema_rel = get_required db Prelude.Catalog.schema_rel_name in
     let* db, _, _ =
       create_tuples storage db schema_rel
-        [ Prelude.Catalog.build_schema_tuple "public" ]
+        [ Prelude.Catalog.build_schema_tuple Qualified_name.default_schema ]
     in
     Ok db
 
@@ -803,6 +832,7 @@ module Make (Storage : Management.Physical.S) = struct
   let create_relation (storage : storage) (db : Management.Database.t)
       ~(name : string) ~(schema : Schema.t) :
       (Management.Database.t * Relation.t, error) Result.t =
+    let name = normalize_name name in
     if Management.Database.has_relation db name then
       Error (Error.RelationAlreadyExists name)
     else
@@ -828,6 +858,7 @@ module Make (Storage : Management.Physical.S) = struct
       ~(membership_criteria : (string -> Merkle.t option) -> Tuple.t -> bool)
       ~(cardinality : Conventions.Cardinality.t) :
       (Management.Database.t * Relation.t, error) Result.t =
+    let name = normalize_name name in
     if Management.Database.has_relation db name then
       Error (Error.RelationAlreadyExists name)
     else
@@ -851,6 +882,7 @@ module Make (Storage : Management.Physical.S) = struct
       [public:relation] and [public:attribute]. *)
   let retract_relation (storage : storage) (db : Management.Database.t)
       ~(name : string) : (Management.Database.t, error) Result.t =
+    let name = normalize_name name in
     match Management.Database.get_relation db name with
     | None -> Error (Error.RelationNotFound name)
     | Some relation ->
@@ -895,6 +927,7 @@ module Make (Storage : Management.Physical.S) = struct
       (db : Management.Database.t) ~(relation_name : string)
       ~(constraints : Relation.RelationConstraint.t) :
       (Management.Database.t * Relation.t, error) Result.t =
+    let relation_name = normalize_name relation_name in
     match Management.Database.get_relation db relation_name with
     | None -> Error (Error.RelationNotFound relation_name)
     | Some relation ->
@@ -932,6 +965,8 @@ module Make (Storage : Management.Physical.S) = struct
   let register_constraint (storage : storage) (db : Management.Database.t)
       ~(constraint_name : string) ~(relation_name : string)
       ~(body : Constraint.t) : (Management.Database.t, error) Result.t =
+    let relation_name = normalize_name relation_name in
+    let body = normalize_constraint_body body in
     let* db, _ =
       update_relation_constraints storage db ~relation_name
         ~constraints:[ (constraint_name, body) ]
@@ -956,7 +991,7 @@ module Make (Storage : Management.Physical.S) = struct
   (** Get relation by name from database *)
   let get_relation (db : Management.Database.t) ~(name : string) :
       Relation.t option =
-    Management.Database.get_relation db name
+    Management.Database.get_relation db (normalize_name name)
 
   (** Count tuples in a relation *)
   let tuple_count (relation : Relation.t) : int =
@@ -977,6 +1012,8 @@ module Make (Storage : Management.Physical.S) = struct
       ~(constraint_name : string) ~(relation_name : string)
       ~(body : Constraint.t) ~(timing : Constraint.timing) :
       (Management.Database.t, error) Result.t =
+    let relation_name = normalize_name relation_name in
+    let body = normalize_constraint_body body in
     let* db, _ =
       update_relation_constraints storage db ~relation_name
         ~constraints:[ (constraint_name, body) ]
