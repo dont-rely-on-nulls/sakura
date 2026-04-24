@@ -77,6 +77,13 @@ functor
           | Some _ ->
               ctx.current_multigroup <- multigroup;
               Ok result)
+      | Sublanguage.CreateMultigroup name -> (
+          match
+            CatalogOps.add catalog storage
+              ~prelude_relations:Prelude.Standard.prelude_relations name
+          with
+          | Error e -> Error (Error.SyntaxError e)
+          | Ok _ -> Ok result)
       | _ -> Ok result
 
     let get_branch storage =
@@ -178,10 +185,13 @@ functor
           List
             [
               Atom "ok";
-              List
-                [
-                  Atom "message"; Atom ("Switched to multigroup " ^ multigroup);
-                ];
+              List [ Atom "message"; Atom ("Switched to multigroup " ^ multigroup) ];
+            ]
+      | Ok (Sublanguage.CreateMultigroup name) ->
+          List
+            [
+              Atom "ok";
+              List [ Atom "message"; Atom ("Multigroup " ^ name ^ " created") ];
             ]
 
     let print_with_time str =

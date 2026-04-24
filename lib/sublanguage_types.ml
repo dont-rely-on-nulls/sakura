@@ -9,3 +9,4 @@ type result =
   | Transition of Management.Database.t * string
   | Cursor of cursor_result
   | SessionSwitch of string
+  | CreateMultigroup of string

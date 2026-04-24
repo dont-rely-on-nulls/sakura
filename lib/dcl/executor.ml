@@ -32,6 +32,7 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
   type exec_result =
     | DbResult of Management.Database.t * string
     | Switch of string
+    | NewMultigroup of string
 
   let execute (storage : Storage.t) (db : Management.Database.t)
       (stmt : Ast.statement) : (exec_result, error) result =
@@ -101,6 +102,7 @@ module Make (Storage : Management.Physical.S with type error = string) = struct
                 in
                 Ok (DbResult (merged_db, "Merged:" ^ right ^ "→" ^ left))))
     | Ast.Use multigroup -> Ok (Switch multigroup)
+    | Ast.CreateMultigroup name -> Ok (NewMultigroup name)
 end
 
 module Memory = Make (Management.Physical.Memory)

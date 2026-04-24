@@ -75,34 +75,18 @@ module Make (S : Management.Physical.S with type error = string) = struct
         Atomic.set sakura_ref db;
         Ok ()
 
-  let create storage ~prelude_relations (multigroup_names : string list) =
-    let bootstrap = bootstrap_multigroup storage ~prelude_relations in
-    let* sakura_db = bootstrap ~name:sakura_name in
+  let create storage ~prelude_relations =
+    let* sakura_db =
+      bootstrap_multigroup storage ~prelude_relations ~name:sakura_name
+    in
     let* sakura_db =
       seed_extra_catalog storage
         ~definitions:Prelude.Catalog.sakura_only_definitions sakura_db
     in
     let sakura_ref = Atomic.make sakura_db in
     let* () = register_in_sakura storage sakura_ref sakura_name in
-    let* map =
-      List.fold_left
-        (fun acc mg_name ->
-          let* m = acc in
-          if mg_name = sakura_name then Ok m
-          else
-            let* db = bootstrap ~name:mg_name in
-            let db_ref = Atomic.make db in
-            let* () = register_in_sakura storage sakura_ref mg_name in
-            Ok (Utilities.StringMap.add mg_name db_ref m))
-        (Ok (Utilities.StringMap.singleton sakura_name sakura_ref))
-        multigroup_names
-    in
-    let default =
-      match multigroup_names with
-      | first :: _ when first <> sakura_name -> first
-      | _ -> sakura_name
-    in
-    Ok { multigroups = Atomic.make map; default_multigroup = default }
+    let map = Utilities.StringMap.singleton sakura_name sakura_ref in
+    Ok { multigroups = Atomic.make map; default_multigroup = sakura_name }
 
   let add catalog storage ~prelude_relations name =
     let map = Atomic.get catalog.multigroups in
