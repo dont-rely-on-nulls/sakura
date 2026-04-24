@@ -29,6 +29,10 @@ module Make (S : Management.Physical.S with type error = string) = struct
     Utilities.StringMap.bindings (Atomic.get catalog.multigroups)
     |> List.map fst
 
+  let publish_multigroups catalog ~expected ~updated =
+    if Atomic.compare_and_set catalog.multigroups expected updated then Ok ()
+    else Error "Concurrent multigroup map update detected"
+
   (** Swallow errors: a missing prelude relation is non-fatal. *)
   let register_prelude_relation storage db (rel : Relation.t) =
     match
@@ -63,18 +67,21 @@ module Make (S : Management.Physical.S with type error = string) = struct
   (** Write a tuple into sakura's [public:multigroup] and update the ref.
       No-op if the relation doesn't exist yet (bootstrap ordering). *)
   let register_in_sakura storage sakura_ref mg_name =
-    let sakura = Atomic.get sakura_ref in
-    match Management.Database.get_relation sakura Prelude.Catalog.multigroup_rel_name with
-    | None -> Ok ()
-    | Some mg_rel ->
-        let tuple = Prelude.Catalog.build_multigroup_tuple mg_name in
-        (* NOTE: Atomic.set (not CAS) is acceptable here because
-           bootstrap runs single-threaded before the listener starts. *)
-        let* db, _, _ =
-          Manip.create_tuple storage sakura mg_rel tuple |> map_error
-        in
-        Atomic.set sakura_ref db;
-        Ok ()
+    let rec go () =
+      let sakura = Atomic.get sakura_ref in
+      match
+        Management.Database.get_relation sakura Prelude.Catalog.multigroup_rel_name
+      with
+      | None -> Ok ()
+      | Some mg_rel ->
+          let tuple = Prelude.Catalog.build_multigroup_tuple mg_name in
+          let* new_sakura, _, _ =
+            Manip.create_tuple storage sakura mg_rel tuple |> map_error
+          in
+          if Atomic.compare_and_set sakura_ref sakura new_sakura then Ok ()
+          else go ()
+    in
+    go ()
 
   let create storage ~prelude_relations =
     let* sakura_db =
@@ -97,13 +104,13 @@ module Make (S : Management.Physical.S with type error = string) = struct
       else
         let* db = bootstrap_multigroup storage ~prelude_relations ~name in
         let db_ref = Atomic.make db in
-        let new_map = Utilities.StringMap.add name db_ref map in
-        Atomic.set catalog.multigroups new_map;
         let* () =
           match Utilities.StringMap.find_opt sakura_name map with
           | Some sakura_ref -> register_in_sakura storage sakura_ref name
           | None -> Ok ()
         in
+        let new_map = Utilities.StringMap.add name db_ref map in
+        let* () = publish_multigroups catalog ~expected:map ~updated:new_map in
         Ok db_ref)
 
   let unregister_from_sakura storage sakura_ref mg_name =
@@ -132,9 +139,14 @@ module Make (S : Management.Physical.S with type error = string) = struct
         if not (Utilities.StringMap.mem name map) then
           Error (Printf.sprintf "Multigroup %s does not exist" name)
         else
+          let* () =
+            match Utilities.StringMap.find_opt sakura_name map with
+            | None -> Ok ()
+            | Some sakura_ref -> unregister_from_sakura storage sakura_ref name
+          in
           let new_map = Utilities.StringMap.remove name map in
-          Atomic.set catalog.multigroups new_map;
-          match Utilities.StringMap.find_opt sakura_name map with
-          | None -> Ok ()
-          | Some sakura_ref -> unregister_from_sakura storage sakura_ref name)
+          let* () =
+            publish_multigroups catalog ~expected:map ~updated:new_map
+          in
+          Ok ())
 end
