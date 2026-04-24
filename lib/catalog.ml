@@ -121,16 +121,34 @@ module Make (S : Management.Physical.S with type error = string) = struct
       in
       Ok db_ref
 
-  let remove catalog name =
+  let unregister_from_sakura storage sakura_ref mg_name =
+    let rec go () =
+      let sakura = Atomic.get sakura_ref in
+      match Management.Database.get_relation sakura Prelude.Catalog.multigroup_rel_name with
+      | None -> Ok ()
+      | Some mg_rel ->
+          let tuple_hash =
+            Hashing.hash_tuple (Prelude.Catalog.build_multigroup_tuple mg_name)
+          in
+          let* new_sakura, _ =
+            Manip.retract_tuple storage sakura mg_rel ~tuple_hash |> map_error
+          in
+          if Atomic.compare_and_set sakura_ref sakura new_sakura then Ok ()
+          else go ()
+    in
+    go ()
+
+  let remove catalog storage name =
     if name = sakura_name then
       Error "Cannot remove the sakura system catalog"
     else
       let map = Atomic.get catalog.multigroups in
       if not (Utilities.StringMap.mem name map) then
         Error (Printf.sprintf "Multigroup %s does not exist" name)
-      else begin
+      else
         let new_map = Utilities.StringMap.remove name map in
         Atomic.set catalog.multigroups new_map;
-        Ok ()
-      end
+        match Utilities.StringMap.find_opt sakura_name map with
+        | None -> Ok ()
+        | Some sakura_ref -> unregister_from_sakura storage sakura_ref name
 end
