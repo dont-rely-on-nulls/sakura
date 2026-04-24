@@ -70,10 +70,7 @@ functor
           else Error (Error.Conflict { old_db; new_db })
       | Sublanguage.SessionSwitch multigroup -> (
           match CatalogOps.get catalog multigroup with
-          | None ->
-              Error
-                (Error.SyntaxError
-                   (Printf.sprintf "Unknown multigroup: %s" multigroup))
+          | None -> Error (Error.MultigroupNotFound multigroup)
           | Some _ ->
               ctx.current_multigroup <- multigroup;
               Ok result)
@@ -218,10 +215,7 @@ functor
     let resolve_db_ref catalog ctx =
       match CatalogOps.get catalog ctx.current_multigroup with
       | Some db_ref -> Ok db_ref
-      | None ->
-          Error
-            (Error.SyntaxError
-               (Printf.sprintf "Unknown multigroup: %s" ctx.current_multigroup))
+      | None -> Error (Error.MultigroupNotFound ctx.current_multigroup)
 
     let fallback_db ctx = Management.Database.empty ~name:ctx.current_multigroup
 

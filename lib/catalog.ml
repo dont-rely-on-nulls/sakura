@@ -8,6 +8,7 @@
 type t = {
   multigroups : Management.Database.t Atomic.t Utilities.StringMap.t Atomic.t;
   default_multigroup : string;
+  mutex : Mutex.t;
 }
 
 let sakura_name = "sakura"
@@ -86,24 +87,24 @@ module Make (S : Management.Physical.S with type error = string) = struct
     let sakura_ref = Atomic.make sakura_db in
     let* () = register_in_sakura storage sakura_ref sakura_name in
     let map = Utilities.StringMap.singleton sakura_name sakura_ref in
-    Ok { multigroups = Atomic.make map; default_multigroup = sakura_name }
+    Ok { multigroups = Atomic.make map; default_multigroup = sakura_name; mutex = Mutex.create () }
 
   let add catalog storage ~prelude_relations name =
-    let map = Atomic.get catalog.multigroups in
-    if Utilities.StringMap.mem name map then
-      Error (Printf.sprintf "Multigroup %s already exists" name)
-    else
-      let* db = bootstrap_multigroup storage ~prelude_relations ~name in
-      let db_ref = Atomic.make db in
-      (* Non-atomic update: caller must serialise concurrent [add]/[remove]. *)
-      let new_map = Utilities.StringMap.add name db_ref map in
-      Atomic.set catalog.multigroups new_map;
-      let* () =
-        match Utilities.StringMap.find_opt sakura_name map with
-        | Some sakura_ref -> register_in_sakura storage sakura_ref name
-        | None -> Ok ()
-      in
-      Ok db_ref
+    Mutex.protect catalog.mutex (fun () ->
+      let map = Atomic.get catalog.multigroups in
+      if Utilities.StringMap.mem name map then
+        Error (Printf.sprintf "Multigroup %s already exists" name)
+      else
+        let* db = bootstrap_multigroup storage ~prelude_relations ~name in
+        let db_ref = Atomic.make db in
+        let new_map = Utilities.StringMap.add name db_ref map in
+        Atomic.set catalog.multigroups new_map;
+        let* () =
+          match Utilities.StringMap.find_opt sakura_name map with
+          | Some sakura_ref -> register_in_sakura storage sakura_ref name
+          | None -> Ok ()
+        in
+        Ok db_ref)
 
   let unregister_from_sakura storage sakura_ref mg_name =
     let rec go () =
@@ -126,13 +127,14 @@ module Make (S : Management.Physical.S with type error = string) = struct
     if name = sakura_name then
       Error "Cannot remove the sakura system catalog"
     else
-      let map = Atomic.get catalog.multigroups in
-      if not (Utilities.StringMap.mem name map) then
-        Error (Printf.sprintf "Multigroup %s does not exist" name)
-      else
-        let new_map = Utilities.StringMap.remove name map in
-        Atomic.set catalog.multigroups new_map;
-        match Utilities.StringMap.find_opt sakura_name map with
-        | None -> Ok ()
-        | Some sakura_ref -> unregister_from_sakura storage sakura_ref name
+      Mutex.protect catalog.mutex (fun () ->
+        let map = Atomic.get catalog.multigroups in
+        if not (Utilities.StringMap.mem name map) then
+          Error (Printf.sprintf "Multigroup %s does not exist" name)
+        else
+          let new_map = Utilities.StringMap.remove name map in
+          Atomic.set catalog.multigroups new_map;
+          match Utilities.StringMap.find_opt sakura_name map with
+          | None -> Ok ()
+          | Some sakura_ref -> unregister_from_sakura storage sakura_ref name)
 end
